@@ -52,9 +52,9 @@ export async function renderUsers(host, { setStatus = () => {}, rerender = () =>
         if (!password) return;
         run("Wachtwoord gewijzigd.", () => api("/api/admin/users/" + encodeURIComponent(user.id) + "/password", { method: "POST", body: { password } }));
       }, user.role === "admin" && !me),
-      button("♻️", "Voortgang resetten (tas, geld, quests, level, plek)", () => {
-        if (!window.confirm("Alle voortgang van " + user.username + " wissen? De speler begint dan opnieuw. Dit kun je niet terugdraaien.")) return;
-        run("Voortgang van " + user.username + " gewist.", () => api("/api/admin/users/" + encodeURIComponent(user.id) + "/reset", { method: "POST", body: {} }));
+      button("♻️", "Spel volledig resetten (characters, tas, geld, quests, level, plek)", () => {
+        if (!window.confirm("Alle spelgegevens en characters van " + user.username + " wissen? Editorwerk en editorinstellingen blijven staan. De speler moet daarna opnieuw een character kiezen. Dit kun je niet terugdraaien.")) return;
+        run("Spel van " + user.username + " volledig gereset.", () => api("/api/admin/users/" + encodeURIComponent(user.id) + "/reset", { method: "POST", body: {} }));
       }, !user.playerId),
       button("🗑️", "Account verwijderen", () => {
         if (!window.confirm("Account " + user.username + " helemaal verwijderen? Dit kun je niet terugdraaien.")) return;

@@ -21,6 +21,7 @@
   --gk-portrait: calc(clamp(50px, 10vmin, 76px) * var(--gk-scale));
   --gk-bar-w: calc(clamp(132px, 30vmin, 236px) * var(--gk-scale));
   --gk-map: calc(clamp(92px, 21vmin, 168px) * var(--gk-scale));
+  --gk-map-reserve: calc(var(--gk-map) + 100px);
   --gk-btn: calc(clamp(58px, 12.5vmin, 88px) * var(--gk-scale));
   --gk-btn2: calc(clamp(48px, 10vmin, 70px) * var(--gk-scale));
   --gk-rail: calc(clamp(38px, 6.5vmin, 48px) * var(--gk-scale));
@@ -71,8 +72,9 @@
 .gkGame > * { position: absolute; }
 .gkHud .gkText { text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 6px rgba(0, 0, 0, 0.5); }
 
-/* portret + levens + XP + quest-regel */
-.gkUnit { top: var(--gk-edge); left: var(--gk-edge); display: grid; grid-template-columns: var(--gk-portrait) minmax(0, var(--gk-bar-w)); column-gap: 8px; align-items: start; max-width: calc(100% - var(--gk-map) - 3 * var(--gk-edge) - 92px); pointer-events: none; }
+/* Speler, doelwit en groep staan in de normale flow, met ruimte ertussen. */
+.gkPlayerStatus { top: var(--gk-edge); left: var(--gk-edge); width: min(calc(var(--gk-portrait) + var(--gk-bar-w) + 8px), calc(100% - var(--gk-map-reserve) - 3 * var(--gk-edge))); display: grid; gap: 12px; pointer-events: none; }
+.gkUnit { display: grid; grid-template-columns: var(--gk-portrait) minmax(0, 1fr); column-gap: 8px; align-items: start; padding-bottom: 9px; min-width: 0; pointer-events: none; }
 .gkPortrait { position: relative; width: var(--gk-portrait); height: var(--gk-portrait); border-radius: 50%; padding: 0; border: 2px solid #c9a24a;
   background: radial-gradient(circle at 50% 35%, #3b2b63, #121a2c 70%); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6), inset 0 0 0 2px rgba(0, 0, 0, 0.5); pointer-events: auto; }
 .gkPortrait img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
@@ -89,12 +91,27 @@
 .gkHp.gkHit { animation: gkShake 0.32s linear; }
 .gkXp { height: 4px; border-radius: 2px; background: rgba(8, 12, 20, 0.75); overflow: hidden; }
 .gkXp i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #f3b72c, #ffe27a); transition: width 0.4s ease-out; }
-.gkQuestLine { grid-column: 1 / -1; margin-top: 12px; display: flex; align-items: center; gap: 6px; max-width: min(360px, 100%); padding: 5px 9px 5px 6px; border-radius: 10px;
+.gkQuestLine { flex: none; box-sizing: border-box; display: flex; align-items: center; gap: 6px; width: fit-content; max-width: 100%; min-width: 0; padding: 5px 9px 5px 6px; border-radius: 10px;
   background: rgba(11, 17, 30, 0.62); border: 1px solid var(--gk-line); pointer-events: auto; text-align: left; font-size: 12px; }
 .gkQuestLine .gkIco { width: 18px; height: 18px; flex: none; }
-.gkQuestLine span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gkQuestLine span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gkQuestLine em { font-style: normal; color: var(--gk-gold); flex: none; }
 .gkQuestLine.gkDone { border-color: rgba(63, 208, 106, 0.7); }
+/* Kevin 8-11: wereld-event (🌍): één kleine melding linksonder met de tijd, en het bolletje in de questregel. */
+.gkGlobe { flex: none; font-size: 15px; line-height: 1; }
+.gkEventLine { flex: none; box-sizing: border-box; display: flex; align-items: center; gap: 6px; width: fit-content; max-width: 100%; min-width: 0; padding: 4px 6px 4px 6px; border-radius: 10px;
+  background: rgba(11, 17, 30, 0.62); border: 1px solid var(--gk-line); pointer-events: auto; cursor: pointer; font-size: 12px; }
+.gkEventLine .gkEventName { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gkEventLine em { font-style: normal; color: var(--gk-muted, #9fb0c8); flex: none; }
+.gkEventLine.gkEventActive { border-color: rgba(90, 170, 255, 0.75); }
+.gkEventLine.gkEventActive em { color: var(--gk-gold); }
+.gkEventLine.gkEventFocus { box-shadow: 0 0 0 1px rgba(90, 170, 255, 0.55) inset; }
+.gkEventLine .gkFeedClose { position: static; flex: none; }
+.gkQuestClock { flex: none; color: #ffd27a; font-variant-numeric: tabular-nums; }
+.gkQuestClock.gkPaused, .gkCardClock.gkPaused { color: var(--gk-muted, #9aa7b4); }
+.gkQuestTimer { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.gkCardClock { color: #ffd27a; font-variant-numeric: tabular-nums; }
+.gkFailed { color: #ff9b8a; }
 .gkFloat { position: absolute; left: 50%; top: -4px; font-weight: 900; font-size: 15px; pointer-events: none; animation: gkFloatUp 1.1s ease-out forwards; text-shadow: 0 1px 2px #000, 0 0 6px rgba(0, 0, 0, 0.7); }
 .gkFloat.bad { color: #ff6b6b; }
 .gkFloat.good { color: #6dff9a; }
@@ -102,19 +119,20 @@
 
 /* minimap */
 .gkMapWrap { top: var(--gk-edge); right: var(--gk-edge); width: var(--gk-map); display: grid; justify-items: center; gap: 4px; pointer-events: none; }
-.gkMap { position: relative; width: var(--gk-map); height: var(--gk-map); border-radius: 50%; padding: 0; border: 3px solid #b99446; background: #0b1220;
+.gkMap { position: relative; box-sizing: border-box; width: var(--gk-map); height: var(--gk-map); border-radius: 50%; padding: 0; border: var(--gk-map-border-width, 3px) solid var(--gk-map-border, #b99446); background: var(--gk-map-background, #0b1220);
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.6), inset 0 0 0 1px rgba(0, 0, 0, 0.6); pointer-events: auto; overflow: visible; }
 .gkMap canvas { width: 100%; height: 100%; display: block; border-radius: 50%; }
+.gkHud[data-mapshape="square"] .gkMap, .gkHud[data-mapshape="square"] .gkMap canvas { border-radius: 12px; }
 .gkMapNorth { position: absolute; inset: -3px; pointer-events: none; }
 .gkMapNorth b { position: absolute; left: 50%; top: -8px; transform: translateX(-50%); width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center;
   font-size: 9px; font-weight: 900; background: #7a1f1f; border: 1px solid #f0c060; color: #fff; }
 .gkMapZoom { position: absolute; right: -4px; bottom: -4px; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 900;
-  background: var(--gk-bg); border: 1px solid var(--gk-line2); color: #fff; }
-.gkMapLabel { max-width: calc(var(--gk-map) + 40px); font-size: 11px; text-align: center; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  padding: 0; background: var(--gk-bg); border: 1px solid var(--gk-line2); color: #fff; cursor: pointer; pointer-events: auto; z-index: 2; }
+.gkMapLabel { max-width: 100%; font-size: 11px; text-align: center; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gkHud[data-minimap="off"] .gkMap, .gkHud[data-minimap="off"] .gkMapLabel { display: none; }
 
 /* doelwit (vijand waar je mee vecht) */
-.gkTarget { top: calc(var(--gk-edge) + var(--gk-portrait) + 54px); left: var(--gk-edge); width: min(260px, 48%); padding: 5px 8px 6px; border-radius: 10px; background: rgba(40, 10, 14, 0.78);
+.gkTarget { box-sizing: border-box; min-width: 0; width: min(260px, 100%); padding: 5px 8px 6px; border-radius: 10px; background: rgba(40, 10, 14, 0.78);
   border: 1px solid rgba(255, 90, 90, 0.45); display: grid; gap: 4px; pointer-events: none; }
 .gkTarget[hidden] { display: none; }
 .gkTarget strong { font-size: 12px; display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -133,9 +151,32 @@
 .gkToast button { flex: none; width: 26px; height: 26px; margin: -4px -4px -4px 0; border-radius: 8px; border: 0; background: rgba(255, 255, 255, 0.08); padding: 5px; }
 
 /* level omhoog */
-.gkLevelUp { top: 26%; left: 50%; transform: translateX(-50%); display: grid; justify-items: center; gap: 2px; pointer-events: none; animation: gkLevelUp 2.6s ease-out forwards; }
+.gkLevelUp { z-index: 70; top: 26%; left: 50%; transform: translateX(-50%); display: grid; justify-items: center; gap: 2px; pointer-events: none; animation: gkLevelUp 2.6s ease-out forwards; }
 .gkLevelUp .gkIco { width: 64px; height: 64px; }
 .gkLevelUp b { font-size: 26px; font-weight: 900; color: var(--gk-gold); text-shadow: 0 2px 4px #000, 0 0 18px rgba(246, 197, 68, 0.6); }
+/* Kevin 6-11: quest gehaald (zoals level omhoog, maar met naam, einde en beloning) */
+.gkQuestDone { z-index: 70; top: 12%; left: 50%; transform: translateX(-50%); display: grid; justify-items: center; gap: 3px; max-width: min(560px, calc(100vw - 32px)); text-align: center;
+  pointer-events: none; animation: gkQuestDone 4.2s ease-out forwards; }
+.gkQuestDone .gkIco { width: 72px; height: 72px; filter: drop-shadow(0 0 14px rgba(246, 197, 68, 0.8)); animation: gkQuestDoneSpin 0.9s ease-out; }
+.gkQuestDone b { font-size: 30px; font-weight: 900; letter-spacing: 1px; text-transform: uppercase; color: var(--gk-gold); text-shadow: 0 2px 4px #000, 0 0 22px rgba(246, 197, 68, 0.7); }
+.gkQuestDone strong { font-size: 19px; font-weight: 800; color: #fff3d6; text-shadow: 0 1px 3px #000; overflow-wrap: anywhere; }
+.gkQuestDone small { font-size: 13px; color: var(--gk-gold); text-shadow: 0 1px 2px #000; }
+.gkQuestDoneRewards { margin-top: 4px; padding: 4px 12px; border-radius: 999px; background: rgba(20, 14, 4, 0.75); border: 1px solid rgba(246, 197, 68, 0.6);
+  font-size: 14px; font-weight: 700; color: #ffe7a3; }
+.gkQuestDoneRays { position: absolute; left: 50%; top: 36px; width: 220px; height: 220px; margin: -110px 0 0 -110px; border-radius: 50%; z-index: -1;
+  background: radial-gradient(circle, rgba(246, 197, 68, 0.45) 0%, rgba(246, 197, 68, 0.12) 45%, transparent 70%); animation: gkQuestDoneRays 4.2s ease-out forwards; }
+@keyframes gkQuestDone { 0% { opacity: 0; transform: translate(-50%, 14px) scale(0.7); } 10% { opacity: 1; transform: translate(-50%, 0) scale(1.1); } 18% { transform: translate(-50%, 0) scale(1); } 85% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%, -18px); } }
+@keyframes gkQuestDoneSpin { 0% { transform: rotate(-30deg) scale(0.4); } 70% { transform: rotate(8deg) scale(1.15); } 100% { transform: rotate(0) scale(1); } }
+@keyframes gkQuestDoneRays { 0% { transform: scale(0.3); opacity: 0; } 15% { transform: scale(1.15); opacity: 1; } 100% { transform: scale(1.4); opacity: 0; } }
+/* Quest Builder stap 5: Bericht in beeld */
+.gkQuestBanner { top: 18%; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; max-width: min(560px, calc(100vw - 32px)); padding: 10px 16px;
+  border: 2px solid rgba(246, 197, 68, 0.75); border-radius: 12px; background: linear-gradient(180deg, rgba(40, 26, 12, 0.94), rgba(18, 12, 6, 0.94));
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6); pointer-events: none; animation: gkQuestBanner 5s ease-out forwards; }
+.gkQuestBanner .gkIco { width: 34px; height: 34px; flex: none; }
+.gkQuestBannerText { display: grid; gap: 2px; min-width: 0; }
+.gkQuestBannerText small { font-size: 12px; color: var(--gk-gold); opacity: 0.9; }
+.gkQuestBannerText b { font-size: 17px; font-weight: 800; color: #fff3d6; text-shadow: 0 1px 3px #000; overflow-wrap: anywhere; }
+@keyframes gkQuestBanner { 0% { opacity: 0; transform: translate(-50%, 10px); } 8% { opacity: 1; transform: translate(-50%, 0); } 85% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%, -10px); } }
 
 /* knoppen onderin */
 .gkActions { right: var(--gk-edge); bottom: var(--gk-edge); display: flex; align-items: flex-end; gap: 10px; pointer-events: none; }
@@ -161,17 +202,21 @@
 
 /* tas-knop als het paneel dicht is (liggend en vierkant: rechts in het midden, zoals in het ontwerp) */
 .gkBagBtn { right: var(--gk-edge); top: 50%; transform: translateY(-50%); display: none; pointer-events: auto; align-items: center; gap: 2px; padding: 0; border: 0; background: none; }
-.gkBagBtn i { width: var(--gk-btn2); height: var(--gk-btn2); border-radius: 50%; border: 3px solid #c9a24a; background: radial-gradient(circle at 50% 35%, #33415e, #121a2c 72%);
+.gkBagBtn i { position: relative; width: var(--gk-btn2); height: var(--gk-btn2); border-radius: 50%; border: 3px solid #c9a24a; background: radial-gradient(circle at 50% 35%, #33415e, #121a2c 72%);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6); display: block; padding: 18%; box-sizing: border-box; }
 .gkBagBtn em { font-style: normal; font-size: 18px; color: #fff; text-shadow: 0 1px 2px #000; }
 .gkHud[data-panel="closed"]:not([data-orient="port"]) .gkBagBtn { display: flex; }
 
-/* namen boven NPC's, vijanden en items (2D, scherp) */
+/* Namen blijven bestaan bij HUD-overlap, maar liggen visueel achter de panelen. */
 .gkLabels { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 0; }
 .gkLabel { position: absolute; left: 0; top: 0; padding: 0 2px 4px; white-space: nowrap; font-size: 13px; font-weight: 700; letter-spacing: 0.01em; color: #e6edf5;
-  text-shadow: 0 0 2px #000, 0 1px 2px #000, 0 0 4px rgba(0, 0, 0, 0.8); will-change: transform; }
+  text-shadow: 0 0 2px #000, 0 1px 2px #000, 0 0 4px rgba(0, 0, 0, 0.8); transform: translate(-50%, -100%); }
 .gkLabel--npc { color: #ffd34d; }
 .gkLabel--enemy { color: #ff7a7a; }
+/* Stap 8: een NPC die je begeleidt: groene naam met een levensbalk eronder. */
+.gkLabel--escort { color: #b9f6c5; }
+.gkLabel--escort::after { content: ""; display: block; width: 46px; height: 5px; margin: 2px auto 0; border-radius: 3px; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7);
+  background: linear-gradient(90deg, #4ade80 var(--gk-hp, 100%), rgba(20, 20, 20, 0.75) var(--gk-hp, 100%)); }
 .gkLabel--resource { color: #a7e98a; }
 .gkLabel--pickup { color: #9fe8ff; }
 .gkLabel--portal { color: #d6a4ff; }
@@ -189,6 +234,11 @@
 .gkTalkIntro .gkTalkHead { grid-column: 2; align-self: center; }
 .gkTalkIntro .gkTalkText, .gkTalkIntro .gkChoices { grid-column: 1 / -1; }
 .gkTalk.gkTalk--service { flex: 1 1 auto; display: flex; flex-direction: column; overflow: hidden; }
+.gkTalk.gkTalk--service .gkTalkIntro { gap: 6px; }
+.gkTalk.gkTalk--service .gkTalkFace { width: calc(36px * var(--gk-scale)); height: calc(36px * var(--gk-scale)); }
+.gkTalk.gkTalk--service .gkTalkText { font-size: 12px; line-height: 1.25; }
+.gkTalk.gkTalk--service .gkChoices { display: flex; flex-wrap: nowrap; gap: 4px; overflow-x: auto; scrollbar-width: thin; }
+.gkTalk.gkTalk--service .gkChoice { flex: 1 0 auto; min-height: calc(27px * var(--gk-scale)); padding-block: 2px; }
 .gkTalkService { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-radius: 10px;
   border: 1px solid var(--gk-line); background: rgba(6, 10, 18, 0.38); }
 .gkTalkService .gkSheetHead { background: rgba(6, 10, 18, 0.42); }
@@ -218,6 +268,28 @@
 .gkDeathCard .gkIco { width: 64px; height: 64px; }
 .gkDeathCard strong { font-size: 18px; }
 
+/* Kevin 5-11: verhaal van een quest (brief, gebied, vanzelf) in het gespreksvenster */
+.gkStoryCard { grid-column: 1 / -1; width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px 12px; align-items: center; animation: gkPop 0.16s ease-out; }
+.gkStoryArt { width: calc(72px * var(--gk-scale)); height: calc(72px * var(--gk-scale)); border-radius: 12px; overflow: hidden; display: grid; place-items: center;
+  background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(246, 197, 68, 0.45); }
+.gkStoryArt img { width: 100%; height: 100%; object-fit: cover; }
+.gkStoryArt .gkIco { width: 60%; height: 60%; }
+.gkStoryCard > .gkClose { align-self: start; }
+.gkStoryHead { display: grid; gap: 3px; min-width: 0; }
+.gkStoryHead small { color: var(--gk-gold); text-transform: uppercase; letter-spacing: 0.08em; font-size: 11px; }
+.gkStoryHead strong { font-size: 18px; line-height: 1.2; overflow-wrap: anywhere; }
+.gkStoryHead em { display: flex; align-items: center; gap: 5px; font-style: normal; font-size: 12px; color: var(--gk-good); }
+.gkStoryHead em .gkIco { width: 14px; height: 14px; }
+.gkStoryText { grid-column: 1 / -1; white-space: pre-line; line-height: 1.5; font-size: 14px; }
+.gkStory--item .gkStoryText { padding: 12px 14px; border-radius: 6px; background: #efe2bf; color: #3b2a12; font-family: Georgia, "Times New Roman", serif; font-size: 15px;
+  box-shadow: inset 0 0 24px rgba(120, 80, 20, 0.25); }
+.gkStoryGoals { grid-column: 1 / -1; display: grid; gap: 3px; font-size: 13px; }
+.gkStoryGoals b { color: var(--gk-gold); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+.gkStoryGoals span::before { content: "• "; color: var(--gk-gold); }
+.gkStoryBtns { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; }
+.gkCard.gkFlash { animation: gkFlash 1.6s ease-out; }
+@keyframes gkFlash { 0%, 40% { box-shadow: 0 0 0 2px var(--gk-gold), 0 0 18px rgba(246, 197, 68, 0.55); } 100% { box-shadow: none; } }
+
 /* rode rand bij weinig levens of een klap */
 .gkVignette { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.3s; z-index: 0;
   background: radial-gradient(ellipse at center, transparent 55%, rgba(200, 0, 20, 0.45) 100%); }
@@ -225,7 +297,7 @@
 .gkVignette.gkHitFlash { animation: gkHitFlash 0.45s ease-out; }
 
 /* debug-info (alleen admin) */
-.gkDebugSlot { left: var(--gk-edge); bottom: calc(var(--gk-edge) + 26px); max-width: min(360px, 60%); pointer-events: auto; }
+.gkDebugSlot { max-width: fit-content; left: var(--gk-edge); bottom: calc(var(--gk-edge) + 26px); pointer-events: auto; }
 .gkDebugSlot:empty { display: none; }
 .gkDebugSlot .perf-hud { position: relative; inset: auto; width: 210px; max-width: 100%; }
 
@@ -371,6 +443,8 @@
 /* lijsten (quests, geld, characters, instellingen) */
 .gkList { display: grid; gap: 8px; width: 100%; min-width: 0; }
 .gkCard { padding: 10px; border-radius: 12px; background: var(--gk-cell); border: 1px solid var(--gk-line); display: grid; gap: 6px; }
+.gkCard.gkGrey { filter: grayscale(0.9); opacity: 0.72; }
+.gkCard.gkGrey.gkArchive { filter: grayscale(1); opacity: 0.5; }
 .gkCard.gkOn { border-color: rgba(70, 163, 255, 0.85); box-shadow: inset 0 0 0 1px rgba(70, 163, 255, 0.4); }
 .gkCard h3 { margin: 0; font-size: 14px; display: flex; align-items: center; gap: 8px; }
 .gkCard h3 .gkIco { width: 20px; height: 20px; flex: none; }
@@ -421,18 +495,37 @@
 .gkBar .gkCell { width: 44px; height: 44px; flex: none; box-sizing: border-box; padding: 4px; }
 .gkBar span { flex: 1 1 auto; min-width: 0; font-size: 12px; }
 .gkBar .gkBtn { flex: 0 0 auto; }
-.gkRecipe { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px; padding: 6px 0; }
-.gkRecipe .gkCell { width: var(--gk-cellsize); height: var(--gk-cellsize); box-sizing: border-box; }
-.gkRecipe .gkNeed { position: absolute; left: 0; right: 0; bottom: -18px; text-align: center; font-size: 11px; font-weight: 800; }
-.gkRecipe .gkNeed.gkOk { color: #6dff9a; }
-.gkRecipe .gkNeed.gkMiss { color: #ff7b7b; }
-.gkRecipe .gkSign { font-size: 20px; color: var(--gk-muted); font-weight: 900; }
-.gkRecipeItem { position: relative; margin-bottom: 18px; }
-.gkRecipeTabs { padding: 2px; display: flex; gap: 6px; overflow: auto; padding-bottom: 6px; scrollbar-width: none; }
-.gkRecipeTabs .gkCell { width: 46px; height: 46px; flex: none; box-sizing: border-box; padding: 4px; }
-.gkJob { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; }
+.gkCraft { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.gkCraftTools { flex: none; display: flex; align-items: center; gap: 6px; padding: 5px 6px; border-bottom: 1px solid var(--gk-line); background: rgba(6, 10, 18, 0.32); }
+.gkCraftTools > .gkIco { flex: none; width: 18px; height: 18px; }
+.gkCraftSearch { flex: 1 1 auto; min-width: 0; height: 28px; padding: 3px 8px; border: 1px solid var(--gk-line2); border-radius: 7px; outline: 0;
+  color: var(--gk-text); background: rgba(22, 32, 52, 0.96); font: inherit; }
+.gkCraftSearch:focus { border-color: var(--gk-accent); box-shadow: 0 0 0 1px var(--gk-accent); }
+.gkCraftList { --gk-craft-thumb: clamp(44px, 13vw, 54px); flex: 1 1 auto; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
+.gkCraftRow { width: 100%; min-width: 0; min-height: calc(var(--gk-craft-thumb) + 8px); box-sizing: border-box; overflow-x: auto; overflow-y: hidden; padding: 4px 6px;
+  border-bottom: 1px solid rgba(118, 158, 220, 0.14); scrollbar-width: thin; overscroll-behavior-x: contain; touch-action: pan-x pan-y; }
+.gkCraftRow:hover { background: rgba(70, 163, 255, 0.07); }
+.gkCraftStrip { width: max-content; min-width: 100%; display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; }
+.gkCraftThumb, .gkCraftThumb.gkCell { position: relative; flex: 0 0 var(--gk-craft-thumb); width: var(--gk-craft-thumb); height: var(--gk-craft-thumb); min-width: 0; min-height: 0;
+  box-sizing: border-box; border-radius: 8px; overflow: hidden; }
+.gkCraftThumb.gkCell { padding: 4px 4px 15px; }
+.gkCraftThumbLabel { position: absolute; z-index: 1; left: 2px; right: 2px; bottom: 2px; padding: 1px 2px; overflow: hidden; border-radius: 4px;
+  color: #fff; background: rgba(4, 8, 16, 0.82); font-size: 9px; font-weight: 900; line-height: 1.15; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+.gkCraftThumb.gkOk .gkCraftThumbLabel { color: #6dff9a; }
+.gkCraftThumb.gkMiss .gkCraftThumbLabel { color: #ff7b7b; }
+.gkCraftResult .gkCraftThumbLabel { color: var(--gk-gold); }
+.gkCraftMake { display: grid; place-items: center; padding: 4px 3px 15px; border: 1px solid rgba(120, 255, 160, 0.5); color: #fff;
+  background: linear-gradient(180deg, #3fbf5f, #1f7d3a); }
+.gkCraftMake:disabled { opacity: 0.45; cursor: default; }
+.gkCraftMake .gkIco { width: 24px; height: 24px; }
+.gkCraftMake > span { position: absolute; left: 2px; right: 2px; bottom: 2px; font-size: 9px; font-weight: 900; line-height: 1.15; }
+.gkCraftMake > small { position: absolute; top: 2px; right: 2px; padding: 0 2px; border-radius: 4px; background: rgba(4, 8, 16, 0.75); font-size: 8px; }
+.gkCraftEmpty { padding: 14px 8px; color: var(--gk-muted); text-align: center; font-size: 12px; }
+.gkCraftJobs { flex: none; max-height: 92px; overflow: auto; padding: 0 6px 5px; border-top: 1px solid var(--gk-line); }
+.gkJob { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; white-space: nowrap; }
 .gkJob .gkIco { width: 18px; height: 18px; }
 .gkJob .gkProgress { flex: 1 1 auto; }
+.gkCraftJobs .gkBtn { min-height: 30px; height: 30px; padding: 3px 8px; }
 
 @keyframes gkPop { from { transform: scale(0.94); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes gkSlide { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: none; } }
@@ -477,7 +570,7 @@
 .gkBigCard { width: min(980px, 100%); max-height: 100%; display: flex; flex-direction: column; border-radius: 16px; overflow: hidden; background: var(--gk-bg); border: 1px solid var(--gk-line2);
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.7); animation: gkPop 0.16s ease-out; }
 .gkBigBody { display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: 10px; padding: 10px; min-height: 0; overflow: auto; }
-.gkBigCanvas { position: relative; aspect-ratio: 1 / 1; width: min(100%, calc(100vh - 110px)); width: min(100%, calc(100dvh - 110px)); justify-self: center; border-radius: 12px; overflow: hidden; border: 2px solid #b99446; background: #0b1220; }
+.gkBigCanvas { position: relative; aspect-ratio: 1 / 1; width: min(100%, calc(100vh - 110px)); width: min(100%, calc(100dvh - 110px)); justify-self: center; border-radius: 12px; overflow: hidden; border: var(--gk-map-border-width, 2px) solid var(--gk-map-border, #b99446); background: var(--gk-map-background, #0b1220); }
 .gkBigCanvas canvas { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
 .gkBigCanvas canvas:active { cursor: grabbing; }
 .gkBigTools { position: absolute; top: 10px; right: 10px; display: grid; gap: 8px; }
@@ -514,12 +607,29 @@
 .gkMark--pickup { background: #8fe3ff; width: 11px; height: 11px; }
 .gkMark--player { background: #4da3ff; }
 .gkMark--quest { border: 0; background: #ffb020; clip-path: polygon(50% 0, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%); width: 16px; height: 16px; border-radius: 0; }
+.gkMark--questgiver, .gkMark--questgiver_available { border: 0; border-radius: 0; background: none; width: 18px; height: 18px; color: #d4a84a; }
+.gkMark--questgiver::before, .gkMark--questgiver_available::before { content: "★"; display: block; font: 18px/18px system-ui, sans-serif; text-align: center; }
+.gkMark--questgiver_available { width: 23px; height: 23px; color: #ffe08a; filter: drop-shadow(0 0 4px #ffc53d); }
+.gkMark--questgiver_available::before { font-size: 23px; line-height: 23px; }
 .gkMark--portal { background: radial-gradient(circle, #2a0b45 35%, #c77dff 40%); width: 16px; height: 16px; }
 .gkMark--area { border: 0; border-radius: 0; background: none; width: 18px; height: 14px; line-height: 14px; text-align: center; font: italic 700 11px Georgia, serif; color: #f3e2b3; text-shadow: 0 0 2px #000; }
 .gkMark--area::before { content: "Aa"; }
 .gkLabel--self { color: #ffffff; }
 .gkLabel--player { color: #8cc4ff; }
 .gkMark--pin { background: #ff4fd8; border-radius: 50% 50% 50% 0; transform: rotate(-45deg) scale(0.9); }
+.gkMark--configured { background: var(--gk-mark-color, #fff); }
+.gkMark--configured[data-shape="dot"] { border-radius: 50%; }
+.gkMark--configured[data-shape="diamond"] { border-radius: 2px; transform: rotate(45deg) scale(0.82); }
+.gkMark--configured[data-shape="square"] { border-radius: 2px; }
+.gkMark--configured[data-shape="triangle"] { border: 0; border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.gkMark--configured[data-shape="star"] { border: 0; border-radius: 0; width: 16px; height: 16px; clip-path: polygon(50% 0, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%); }
+.gkMark--configured[data-shape="pin"] { border-radius: 50% 50% 50% 0; transform: rotate(-45deg) scale(0.9); }
+.gkMark--configured[data-shape="portal"] { width: 16px; height: 16px; background: radial-gradient(circle, #2a0b45 35%, var(--gk-mark-color, #c77dff) 40%); }
+.gkMark--configured[data-shape="cross"] { border: 0; border-radius: 0; clip-path: polygon(38% 0, 62% 0, 62% 38%, 100% 38%, 100% 62%, 62% 62%, 62% 100%, 38% 100%, 38% 62%, 0 62%, 0 38%, 38% 38%); }
+.gkMark--configured[data-shape="ring"] { border: 3px solid var(--gk-mark-color, #fff); background: transparent; }
+.gkMark--configured[data-shape="arrow"] { border: 0; border-radius: 0; width: 16px; clip-path: polygon(0 0, 100% 50%, 0 100%, 30% 50%); }
+.gkMark--configured[data-shape="text"] { border: 0; border-radius: 0; background: none; width: 18px; height: 14px; line-height: 14px; text-align: center; font: italic 700 11px Georgia, serif; color: var(--gk-mark-color, #f3e2b3); text-shadow: 0 0 2px #000; }
+.gkMark--configured[data-shape="text"]::before { content: "Aa"; }
 .gkHud[data-orient="port"] .gkBigBody, .gkHud[data-orient="square"] .gkBigBody { display: flex; flex-direction: column; align-items: center; }
 .gkHud[data-orient="port"] .gkBigBody > *, .gkHud[data-orient="square"] .gkBigBody > * { flex: none; }
 .gkHud[data-orient="port"] .gkLegend, .gkHud[data-orient="square"] .gkLegend { width: 100%; max-width: 520px; justify-self: center; }
@@ -593,13 +703,13 @@
 
 /* Op mobiel onder elkaar: smal genoeg om de actieknoppen onderin vrij te laten. */
 @media (max-width: 760px), (max-height: 500px) {
-  .gkConnection { display: grid; grid-template-columns: 9px auto; grid-template-rows: repeat(5, auto); align-items: center; gap: 2px 3px; padding: 3px; }
-  .gkConnection .gkConn { grid-column: 1; grid-row: 1 / 6; align-self: center; justify-self: center; }
+  .gkConnection { display: grid; grid-template-columns: 9px auto; grid-template-rows: repeat(6, auto); align-items: center; gap: 2px 3px; padding: 3px; }
+  .gkConnection .gkConn { grid-column: 1; grid-row: 1 / 7; align-self: center; justify-self: center; }
   .gkConnection .gkConnMetric { grid-column: 2; text-align: left; }
 }
 
 /* ---- MMO (3-11): teamleden linksboven, uitnodiging en spelermenu ---- */
-.gkParty { grid-column: 1 / -1; margin-top: 12px; display: grid; gap: 4px; width: min(calc(var(--gk-portrait) + var(--gk-bar-w) + 8px), 100%); pointer-events: none; }
+.gkParty { display: grid; gap: 4px; min-width: 0; max-height: 28vh; overflow-y: auto; width: 100%; pointer-events: auto; }
 .gkPartyHead { justify-self: start; display: flex; align-items: center; gap: 6px; min-height: 26px; padding: 3px 10px 3px 6px; border-radius: 13px;
   background: rgba(11, 17, 30, 0.62); border: 1px solid var(--gk-line); font-size: 11px; color: var(--gk-muted); pointer-events: auto; }
 .gkPartyHead .gkIco { width: 16px; height: 16px; flex: none; }
@@ -649,6 +759,10 @@
 .gkInviteBtns button:disabled { opacity: 0.55; }
 .gkInviteBar { height: 3px; border-radius: 2px; background: rgba(118, 158, 220, 0.18); overflow: hidden; }
 .gkInviteTime { display: block; height: 100%; background: var(--gk-accent); transform-origin: left center; }
+/* Portals (8-11): "Reizen naar ...?" staat boven de grote kaart. */
+.gkPortalAsk { position: absolute; z-index: 45; top: 30%; border-color: rgba(199, 125, 255, 0.7); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55), 0 0 18px rgba(199, 125, 255, 0.3); }
+.gkPortalAsk .gkInviteText small { display: block; margin-top: 2px; font-size: 12px; opacity: 0.8; }
+.gkPortalAsk .gkInviteYes { background: linear-gradient(180deg, #8a4fd0, #5c2f99); border-color: rgba(199, 125, 255, 0.85); }
 
 .gkMenuShade { inset: 0; z-index: 39; pointer-events: auto; background: transparent; }
 .gkMenu { z-index: 40; min-width: calc(220px * var(--gk-scale)); max-width: min(290px, calc(100% - 16px)); display: grid; gap: 5px; padding: 8px; border-radius: 14px;
@@ -682,7 +796,15 @@
 .gkChatUnread { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; background: var(--gk-bad);
   color: #fff; font-size: 11px; font-weight: 800; font-style: normal; line-height: 18px; text-align: center; }
 .gkChatUnread[hidden] { display: none; }
-.gkChatFeed { box-sizing: border-box; left: var(--gk-edge); bottom: calc(var(--gk-edge) + 50px); z-index: 2; display: grid; gap: 3px; justify-items: start; max-width: min(380px, 72vw); pointer-events: none; }
+.gkFeedStack { box-sizing: border-box; left: var(--gk-edge); bottom: calc(var(--gk-edge) + 50px); z-index: 2; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; width: min(380px, calc(100% - 2 * var(--gk-edge))); pointer-events: none; }
+/* Kevin 7-11: in de stapel ook ▴ Alles (uitklappen) en onderaan de korte meldingen. */
+.gkFeedStack .gkToasts { flex: none; width: auto; max-width: 100%; justify-items: start; }
+.gkStackMore { flex: none; pointer-events: auto; padding: 2px 9px; border-radius: 8px; border: 1px solid var(--gk-line); background: rgba(11, 17, 30, 0.72); color: #fff3d6;
+  font-size: 11px; font-weight: 700; cursor: pointer; }
+.gkStackMore[hidden] { display: none; }
+.gkStackMore:hover { border-color: rgba(246, 197, 68, 0.6); }
+.gkChatFeed.gkFeedOpen { padding-right: 4px; }
+.gkChatFeed { box-sizing: border-box; min-height: 0; max-width: 100%; overflow-y: auto; display: grid; gap: 3px; justify-items: start; pointer-events: auto; }
 .gkChatFeed[hidden] { display: none; }
 .gkChatFeed .gkChatLine { padding: 3px 8px; border-radius: 8px; background: rgba(6, 10, 18, 0.62); transition: opacity 1.5s ease; }
 .gkChatFeed .gkChatLine.gkOld { opacity: 0; }
@@ -693,6 +815,12 @@
 .gkCh--whisper, .gkCh--whisper .gkChatWho { color: #f3a6ff; }
 .gkCh--system { color: var(--gk-gold); font-style: italic; }
 .gkCh--error { color: #ff9a9a; }
+.gkCh--quest { font-style: normal; font-weight: 700; }
+.gkChatFeed .gkFeedQuest { pointer-events: auto; cursor: pointer; border: 1px solid rgba(246, 197, 68, 0.35); }
+.gkChatFeed .gkFeedQuest:hover { background: rgba(40, 30, 8, 0.85); }
+.gkChatFeed .gkFeedQuest { display: flex; align-items: center; gap: 6px; }
+.gkFeedClose { flex: none; width: 20px; height: 20px; margin-right: -4px; padding: 0; border: 0; border-radius: 6px; background: rgba(255, 255, 255, 0.1); color: #fff3d6; font-size: 11px; line-height: 20px; cursor: pointer; }
+.gkFeedClose:hover { background: rgba(255, 90, 90, 0.45); }
 .gkChatBox { box-sizing: border-box; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 6px 8px 8px; animation: gkPop 0.14s ease-out; }
 .gkChatBox[hidden] { display: none; }
 /* Typen met de vinger: de chat zweeft net boven het toetsenbord (top en hoogte zet gk-hud.js). */
@@ -742,3 +870,5 @@
 .gkMapTools .gkConnection { grid-column: 1 / -1; position: relative; left: auto; bottom: auto; z-index: 2; justify-self: end; display: flex; flex-direction: column;
   align-items: stretch; gap: 1px; min-width: 84px; min-height: 0; max-width: none; padding: 3px 4px; border-radius: 8px; font-size: 9px; pointer-events: auto; }
 .gkMapTools .gkConnection .gkConnMetric { padding: 1px 2px; background: none; }
+/* Op een smal spelbeeld staan de knoppen en meetwaarden onder de kaart. */
+.gkHud[data-mapcompact="1"] .gkMapTools { position: static; justify-self: end; margin-top: 6px; }

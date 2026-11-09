@@ -6,17 +6,23 @@
 // refList: een lijst regels { ref, ...getallen } (bijv. startitems: item of valuta + aantal). Velden: refKinds, columns.
 // ui.soorten: alleen tonen bij deze Area-soorten (Ombouw stap 2).
 // ui.place:   werkbank (paneel links) | instellingen (kaart) | terrein (tab Terrein) | viewport (slepen/tekenen in 3D) | relaties
+//             | questbuilder (alleen in de Quest Builder: start, wie geeft hem, doelen; het paneel toont een samenvatting)
 // ui.unit + ui.scale: wat Kevin ziet (bijv. 1500 mm met scale 1000 = "1.5 m").
 // ui.range: het bereik van de slider als het echte min/max te groot is om te schuiven (het getalvak mag wel tot min/max).
 // ui.more: true = staat onder de ⚙️-knop "meer" (per rol maximaal ±6 velden in beeld, plan §10.4).
+// ui.hideWhen: verberg dit veld zodra dat andere veld gevuld is (bijv. de snelle questvelden zodra de quest eigen stappen heeft).
+// questSteps: de stappen van een quest (Quest Builder); het paneel toont een samenvatting + knop naar de Quest Builder.
+// questStart: hoe een quest start + voorwaarden (EN/OF); in te stellen in de Quest Builder (tab 🚪 Start).
+// questSpawns: wat de quest laat verschijnen (vijanden met naam, voor wie, wanneer weg); in de Quest Builder (tab 👾 Verschijnen).
+// ui.when.key mag een pad zijn (bijv. "start.mode"); ui.when.fallback = de waarde als dat leeg is.
 // ui.optionsFrom: keuzes komen uit de werkruimte (zones, respawnPolicies, equipmentSlots, clips:<veld>).
 
 export const help = (waarvoor, goed, probleem) => Object.freeze({ waarvoor, goed, probleem });
 
 export const ui = (icon, control, place, extra = {}) => Object.freeze(Object.assign({ icon, control, place }, extra));
 
-export const FIELD_CONTROLS = Object.freeze(["text", "id", "slider", "toggle", "select", "asset", "assetList", "ref", "refList", "tags", "loot", "points", "areaSettings", "color", "terrain", "terrainPaint"]);
-export const FIELD_PLACES = Object.freeze(["werkbank", "instellingen", "terrein", "viewport", "relaties"]);
+export const FIELD_CONTROLS = Object.freeze(["text", "id", "slider", "toggle", "select", "asset", "assetList", "ref", "refList", "tags", "loot", "points", "areaSettings", "color", "terrain", "terrainPaint", "questSteps", "questStart", "questSpawns"]);
+export const FIELD_PLACES = Object.freeze(["werkbank", "instellingen", "terrein", "viewport", "relaties", "questbuilder"]);
 export const KIND_PLACES = Object.freeze(["werkbank", "instellingen", "terrein"]);
 
 // Welke bediening bij welk veldtype hoort (de schema-test controleert dit).
@@ -34,10 +40,14 @@ export const CONTROL_FOR_TYPE = Object.freeze({
   tagList: ["tags"],
   lootEntries: ["loot"],
   pointList: ["points"],
+  linkList: ["points"],
   areaSettings: ["areaSettings"],
   color: ["color"],
   terrainChunks: ["terrain"],
-  terrainPaint: ["terrainPaint"]
+  terrainPaint: ["terrainPaint"],
+  questSteps: ["questSteps"],
+  questStart: ["questStart"],
+  questSpawns: ["questSpawns"]
 });
 
 // Veelgebruikte hulpteksten.

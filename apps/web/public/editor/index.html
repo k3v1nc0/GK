@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>GK Game Editor</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-    <link rel="stylesheet" href="./styles.css?v=20261103-net2">
-    <link rel="stylesheet" href="./werkbank-docs.css?v=20261102-heal1">
+    <link rel="stylesheet" href="./styles.css?v=20261108-save-errors1">
+    <link rel="stylesheet" href="./werkbank-docs.css?v=20261108-save-errors1">
     <link rel="stylesheet" href="./mini-asset-picker.css?v=20261028-picker1">
     <script type="importmap">
       {
@@ -97,8 +97,6 @@
         </div>
       </aside>
 
-      <div class="layoutResizer vertical" data-resizer="tools" role="separator" aria-label="Resize tools panel" tabindex="0"></div>
-
       <section class="graphColumn">
         <div class="graphToolbar">
           <nav id="breadcrumb" class="breadcrumb"></nav>
@@ -113,8 +111,6 @@
           </div>
         </div>
       </section>
-
-      <div class="layoutResizer vertical" data-resizer="graph" role="separator" aria-label="Resize node graph" tabindex="0"></div>
 
       <section class="viewportColumn">
         <div class="viewportWrap">
@@ -225,12 +221,9 @@
           <div class="viewportErrors" id="viewportErrors"></div>
         </div>
         <section id="workbenchOverviewPanel" class="workbenchOverview" aria-label="Contentoverzicht"></section>
-        <div id="workbenchRelationResizer" class="layoutResizer horizontal workbenchRelationResizer" role="separator" aria-label="Resize relation strip" tabindex="0"></div>
         <section id="workbenchRelationStrip" class="workbenchRelationStrip" aria-label="Relaties en flow"></section>
-        <div class="statusLine" id="statusText">Laden...</div>
+        <div class="statusLine" id="statusText" hidden></div>
       </section>
-
-      <div class="layoutResizer vertical" data-resizer="viewport" role="separator" aria-label="Resize 3D viewport" tabindex="0"></div>
 
       <aside class="assetColumn">
         <section id="workbenchLibraryPanel" class="workbenchPanel workbenchLibraryPanel" aria-label="Visual Game Library"></section>
@@ -286,6 +279,6 @@
       <div id="allLayoutRoot" class="allLayoutRoot"></div>
       <div id="allLayoutOverflow" hidden></div>
     </main>
-    <script type="module" src="./editor.js?v=20261103-model1"></script>
+    <script type="module" src="./editor.js?v=20261108-portals3"></script>
   </body>
 </html>

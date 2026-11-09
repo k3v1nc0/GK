@@ -107,8 +107,9 @@ function normalizeQuantity(value, fallback = 1) {
   return Math.max(1, safeInteger(value, fallback));
 }
 
+// Questitems (Quest Builder stap 4) zijn nooit te verhandelen of te verkopen.
 function itemIsTradable(item) {
-  return item && item.tradable !== false && item.bindPolicy !== "quest_bound";
+  return item && item.tradable !== false && item.bindPolicy !== "quest_bound" && item.questItem !== true && item.category !== "quest";
 }
 
 function operationIdFromPayload(payload) {
@@ -335,10 +336,20 @@ export class Node05EconomyRuntimeService {
     });
   }
 
+  // Quest Builder stap 9: een winkel of werkplek bij een NPC die er voor deze speler (door een vlag) niet is, telt niet.
+  flagVisible(ctx, component) {
+    const flags = this.mmoService?.worldFlags;
+    const gates = ctx.project?.campaigns?.flags?.gates;
+    if (!flags || !Array.isArray(gates) || !gates.length) return true;
+    const entityId = safeString(component?.linkedEntityId || component?.entityRef || "", "");
+    const gate = gates.find((entry) => entry?.entityId === entityId);
+    return !gate || flags.passes(ctx.profile.id, gate);
+  }
+
   craftingStations(ctx) {
     return connectedComponents(ctx.zonePackage).filter(function (component) {
       return component.nodeType === "crafting_station_component";
-    }).map(function (component) {
+    }).filter((component) => this.flagVisible(ctx, component)).map(function (component) {
       return positionedComponent(ctx, component);
     });
   }
@@ -346,7 +357,7 @@ export class Node05EconomyRuntimeService {
   vendors(ctx) {
     return connectedComponents(ctx.zonePackage).filter(function (component) {
       return component.nodeType === "vendor_component";
-    }).map(function (component) {
+    }).filter((component) => this.flagVisible(ctx, component)).map(function (component) {
       return positionedComponent(ctx, component);
     });
   }
@@ -354,7 +365,7 @@ export class Node05EconomyRuntimeService {
   marketAccesses(ctx) {
     return connectedComponents(ctx.zonePackage).filter(function (component) {
       return component.nodeType === "marketplace_access_component";
-    }).map(function (component) {
+    }).filter((component) => this.flagVisible(ctx, component)).map(function (component) {
       return positionedComponent(ctx, component);
     });
   }
@@ -854,6 +865,13 @@ export class Node05EconomyRuntimeService {
       throw error;
     }
     const quantity = normalizeQuantity(payload.quantity, 1);
+    // Quest Builder stap 4: een uniek item koop je niet als je het al hebt (en nooit meer dan 1).
+    const bought = catalogSection(ctx.catalogs, "items")[offer.itemRef] || null;
+    if (bought?.unique === true && (quantity > 1 || this.node03RuntimeService.ownedItemCount(ctx.profile.id, offer.itemRef) >= 1)) {
+      const error = new Error("Je kunt maar 1 " + displayForItem(ctx.catalogs, offer.itemRef) + " hebben.");
+      error.status = 409;
+      throw error;
+    }
     const summary = this.vendorOfferSummary(ctx, vendor, offer);
     const total = summary.sellPriceMinor * quantity;
     this.spendCurrency(ctx, summary.sellCurrencyRef, total, "vendor_buy", offer.offerId, operationId);
@@ -881,6 +899,12 @@ export class Node05EconomyRuntimeService {
       throw error;
     }
     const quantity = normalizeQuantity(payload.quantity, 1);
+    const sold = catalogSection(ctx.catalogs, "items")[offer.itemRef] || null;
+    if (sold && (sold.questItem === true || sold.category === "quest")) {
+      const error = new Error("Een questitem kun je niet verkopen.");
+      error.status = 409;
+      throw error;
+    }
     const summary = this.vendorOfferSummary(ctx, vendor, offer);
     this.removeItem(ctx, offer.itemRef, quantity, "vendor_sell", vendor.vendorId, operationId);
     const grant = this.node03RuntimeService.grantCurrency(ctx, summary.buyCurrencyRef, summary.buyPriceMinor * quantity, "vendor_sell", offer.offerId, operationId);
@@ -967,6 +991,8 @@ export class Node05EconomyRuntimeService {
     if (!party) return { action: "party_leave", message: "Je zit niet in een groep." };
     const stamp = now();
     const me = this.playerName(ctx.profile.id);
+    // Quest Builder stap 2: regel per quest bij groep verlaten (vóór het verlaten, dan is het team nog bekend).
+    this.node03RuntimeService.questPartyLeaving?.(ctx, ctx.profile.id);
     this.db.prepare("UPDATE party_members SET left_at = ? WHERE party_id = ? AND player_id = ? AND left_at IS NULL")
       .run(stamp, party.partyId, ctx.profile.id);
     const remaining = this.partyMemberIds(party.partyId);
@@ -1010,6 +1036,7 @@ export class Node05EconomyRuntimeService {
     const name = this.playerName(targetPlayerId, "Die speler");
     if (!party.members.some((member) => member.playerId === targetPlayerId)) throw httpError(404, name + " zit niet in jouw groep.");
     const stamp = now();
+    this.node03RuntimeService.questPartyLeaving?.(ctx, targetPlayerId);
     this.db.prepare("UPDATE party_members SET left_at = ? WHERE party_id = ? AND player_id = ? AND left_at IS NULL").run(stamp, party.partyId, targetPlayerId);
     const remaining = this.partyMemberIds(party.partyId);
     const runtime = this.partyRuntime();

@@ -21,6 +21,7 @@ const ITEM_FIELD_TO_RUNTIME = {
   bindPolicy: "bindPolicy",
   tradable: "tradable",
   questItem: "questItem",
+  unique: "unique",
   iconAssetId: "iconAssetId",
   worldModelAssetId: "worldModelAssetId",
   tags: "tags",
@@ -94,6 +95,9 @@ export function runtimeSpawnFromCanonical(pickup, legacySpawn = null, options = 
   if (!legacySpawn || !legacySpawn.zoneRef) delete spawn.zoneRef;
   if (pickup.respawnPolicyRef) spawn.respawnPolicyRef = pickup.respawnPolicyRef;
   else delete spawn.respawnPolicyRef;
+  // Quest Builder stap 4: per speler oppakken (Ieder zijn eigen / Ieder 1×).
+  if (pickup.claimMode === "personal" || pickup.claimMode === "once") spawn.claimMode = pickup.claimMode;
+  else delete spawn.claimMode;
   if (options.editor) spawn.nodeId = EDITOR_DOC_PREFIX + "pickup:" + pickup.pickupId;
   return spawn;
 }
@@ -189,8 +193,12 @@ function withAreaShapes(next, data, options) {
   if (!shapes.length && !removed.length) return;
   const drop = new Set(removed.concat(shapes.map((shape) => shape.legacy).filter(Boolean)).map((ref) => ref.nodeType + "|" + ref.runtimeId));
   const gone = (nodeType, id) => drop.has(nodeType + "|" + String(id || ""));
-  const records = shapes.map((shape) => {
-    const id = options.editor ? AREA_EDITOR_PREFIX + shape.areaId : shape.runtimeId;
+  const idOf = (shape) => (options.editor ? AREA_EDITOR_PREFIX + shape.areaId : shape.runtimeId);
+  // 🛣️ Weg: alleen lijnen voor de routezoeker (terrain.roads, één stukje per lijn). Niets te zien in de game;
+  // de editor tekent de punten en lijnen zelf (road-editor.js).
+  const roads = shapes.filter((shape) => shape.soort === "pad");
+  const records = shapes.filter((shape) => shape.soort !== "pad").map((shape) => {
+    const id = idOf(shape);
     return { id, nodeType: shape.nodeType, values: Object.assign({}, shape.values, { [AREA_RUNTIME_ID_FIELD[shape.soort]]: id }) };
   });
   const models = areaShapeReadModels(records, { assetService: options.assetService || null, groundY: Number(next.ground?.y) || 0 });
@@ -198,7 +206,13 @@ function withAreaShapes(next, data, options) {
   const collision = next.collision || {};
   const scatterOf = (id) => String(id || "").split("::")[0];
   next.terrain = Object.assign({}, terrain, {
-    surfaces: uniqueById(models.surfaces.concat((terrain.surfaces || []).filter((surface) => !gone("surface_layer", surface.id))))
+    surfaces: uniqueById(models.surfaces.concat((terrain.surfaces || []).filter((surface) => !gone("surface_layer", surface.id)))),
+    roads: roads.flatMap((shape) => {
+      const points = shape.values.points || [];
+      const links = Array.isArray(shape.values.links) ? shape.values.links : points.slice(1).map((_, i) => [i, i + 1]);
+      return links.filter((link) => points[link[0]] && points[link[1]])
+        .map((link, k) => ({ id: idOf(shape) + "#" + k, points: link.map((i) => ({ x: points[i].x, z: points[i].z })) }));
+    })
   });
   next.collision = Object.assign({}, collision, {
     blockers: uniqueById(models.blockers.concat((collision.blockers || []).filter((blocker) => !gone("blocker_area", blocker.id)

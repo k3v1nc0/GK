@@ -46,6 +46,7 @@ const assetService = new AssetService(db, rootDir, {
   assetsDir: assetsRoot,
   skipModelThumbnails: process.env.GK_TEST_ISOLATED === "1" && process.env.GK_SKIP_MODEL_THUMBNAILS === "1"
 });
+await assetService.migrateLegacyImageThumbnails();
 assetService.resumePendingThumbnailJobs();
 const symbolIndexService = new SymbolIndexService();
 const tokenResolver = new TokenResolver({ symbolIndexService });
@@ -55,6 +56,7 @@ const gameProjectCompiler = new GameProjectCompiler({ symbolIndexService, tokenR
 const publishService = new PublishService(repository, { assetService, symbolIndexService, tokenResolver, gameProjectCompiler });
 const graphMigrationService = new GraphMigrationService(repository, { symbolIndexService });
 const mmoService = new MmoService(db, authService, repository);
+assetService.setThumbnailUpdateListener(() => mmoService.invalidateWorldCache());
 const userAdminService = new UserAdminService(db, { closeSessionConnections: (sessionId, code, reason) => mmoService.closeSessionConnections(sessionId, code, reason) });
 const node03RuntimeService = new Node03RuntimeService(db, repository, mmoService);
 const node04QuestRuntimeService = new Node04QuestRuntimeService(db, repository, mmoService, node03RuntimeService);
@@ -148,11 +150,11 @@ async function readJson(req) {
 
 const editorLayoutViews = {
   nodes: new Set(["tools", "graph", "viewport", "assets"]),
-  workbench: new Set(["workbench", "viewport", "relations", "library"]),
+  workbench: new Set(["workbench", "viewport", "relations", "library", "game"]),
   // Werkbank Fase 1: tab Instellingen (menu, kaart, 3D-preview).
-  settings: new Set(["settingsMenu", "settingsCard", "viewport"]),
+  settings: new Set(["settingsMenu", "settingsCard", "viewport", "game"]),
   // Wereld tekenen ronde 2: tab Terrein (gereedschap, 3D, terrein-bibliotheek).
-  terrain: new Set(["terrainTools", "viewport", "terrainLibrary"])
+  terrain: new Set(["terrainTools", "viewport", "terrainLibrary", "game"])
 };
 
 function normalizeEditorLayoutNode(node, allowedViews, depth = 0) {
@@ -165,10 +167,50 @@ function normalizeEditorLayoutNode(node, allowedViews, depth = 0) {
   for (const child of node.children) {
     const normalizedNode = normalizeEditorLayoutNode(child?.node, allowedViews, depth + 1);
     const size = Number(child?.size);
-    if (!normalizedNode || !Number.isFinite(size) || size <= 0) return null;
-    children.push({ size: Math.min(1000, Math.max(0.02, size)), node: normalizedNode });
+    if (!normalizedNode || !Number.isFinite(size) || size < 0) return null;
+    children.push({ size, node: normalizedNode });
   }
   return { dir: node.dir, children };
+}
+
+// De editor bewaart naast de vensterindeling ook een kleine, per gebruiker gebonden
+// hervatstatus. Dit is bewust geen projectinhoud: camera, selectie en half ingevulde
+// formulieren mogen een andere editorgebruiker niet verplaatsen of naar de live game gaan.
+function normalizeEditorResumeJson(value, depth = 0, budget = { entries: 0 }) {
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "string") return value.slice(0, 100000);
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (depth > 12 || budget.entries > 12000) return null;
+  if (Array.isArray(value)) {
+    const result = [];
+    for (const entry of value.slice(0, 2000)) {
+      budget.entries += 1;
+      result.push(normalizeEditorResumeJson(entry, depth + 1, budget));
+    }
+    return result;
+  }
+  if (!value || typeof value !== "object") return null;
+  const result = {};
+  for (const [key, entry] of Object.entries(value).slice(0, 500)) {
+    if (["__proto__", "prototype", "constructor"].includes(key)) continue;
+    budget.entries += 1;
+    result[key.slice(0, 120)] = normalizeEditorResumeJson(entry, depth + 1, budget);
+  }
+  return result;
+}
+
+function normalizeEditorResume(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const source = {
+    version: 1,
+    savedAt: typeof value.savedAt === "string" ? value.savedAt.slice(0, 40) : null,
+    cameraView: value.cameraView,
+    ui: value.ui,
+    drafts: value.drafts,
+    floatingPanels: value.floatingPanels
+  };
+  const normalized = normalizeEditorResumeJson(source);
+  return Buffer.byteLength(JSON.stringify(normalized), "utf8") <= 600000 ? normalized : null;
 }
 
 function normalizeEditorUserLayout(value) {
@@ -183,9 +225,10 @@ function normalizeEditorUserLayout(value) {
   if (settings) layouts.settings = settings;
   if (terrain) layouts.terrain = terrain;
   return {
-    version: 1,
+    version: 2,
     editorMode: ["workbench", "settings", "terrain", "nodes"].includes(value.editorMode) ? value.editorMode : "workbench",
-    layouts
+    layouts,
+    resume: normalizeEditorResume(value.resume)
   };
 }
 
@@ -318,8 +361,15 @@ function serveStatic(req, res, url) {
   if (pathname === "/favicon.ico") return serveFile(res, path.join(rootDir, "favicon.ico"), "public, max-age=86400", req);
   if (pathname.endsWith("/")) pathname += "index.html";
   const ext = path.extname(pathname);
-  // Code altijd verversen na een update ("no-cache" = eerst vragen), maar ongewijzigd = 304 zonder download.
-  const cache = ext === ".html" || ext === ".js" || ext === ".css" ? "no-cache" : "public, max-age=300";
+  // HTML en niet-geversioneerde modules moeten na een deploy altijd valideren.
+  // Een ?v= URL is een nieuwe resource-identiteit en mag daarom zonder extra
+  // roundtrip uit de browsercache komen; de HTML-entrypoints dragen de deployversie.
+  const versionedCode = (ext === ".js" || ext === ".css") && url.searchParams.has("v");
+  const cache = versionedCode
+    ? "public, max-age=31536000, immutable"
+    : ext === ".html" || ext === ".js" || ext === ".css"
+      ? "no-cache"
+      : "public, max-age=300";
   return serveFile(res, safePath(publicRoot, pathname.slice(1)), cache, req);
 }
 
@@ -558,6 +608,13 @@ async function handleApi(req, res, url) {
         }
       }
       return sendJson(res, 404, { ok: false, message: "Onbekende gebruikersactie." });
+    }
+    // Quest Builder (5-11): per quest wie hem nog niet heeft, bezig is (welke stap) of klaar is; Opnieuw en Naar stap per speler (alleen admin).
+    if (url.pathname === "/api/admin/quest-players") {
+      const admin = authService.requireEditor(req);
+      if (admin.role !== "admin") return sendJson(res, 403, { ok: false, message: "Alleen de admin kan de stand van spelers zien." });
+      if (req.method === "GET") return sendJson(res, 200, { ok: true, me: admin.id, players: node04QuestRuntimeService.questPlayersForAdmin(url.searchParams.get("questId")) });
+      if (req.method === "POST") return sendJson(res, 200, Object.assign({ ok: true }, node04QuestRuntimeService.adminQuestAction(await readJson(req))));
     }
     // Klassen: per account een character per klasse; wisselen en uiterlijk kiezen in het Characters-venster.
     if (req.method === "GET" && url.pathname === "/api/game/characters") {

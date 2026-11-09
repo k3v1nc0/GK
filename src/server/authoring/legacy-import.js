@@ -270,7 +270,8 @@ function areaDiffs(legacy, canonical) {
 function areaWorldEntries(world) {
   const entries = new Map();
   const add = (group, list) => { for (const entry of list || []) if (entry?.id) entries.set(group + ":" + entry.id, roundedForParity(entry)); };
-  add("surface", world?.terrain?.surfaces);
+  // Een oud pad is nu een 🛣️ Weg (8-11): alleen de lijn telt nog.
+  add("road", (world?.terrain?.surfaces || []).map((surface) => ({ id: surface.id })).concat((world?.terrain?.roads || []).map((road) => ({ id: String(road.id).split("#")[0] }))));
   add("blocker", (world?.collision?.blockers || []).filter((blocker) => blocker?.reason !== "canonical_collider"));
   add("walkable", world?.collision?.walkableSurfaces);
   add("scatter", world?.scatterAreas);

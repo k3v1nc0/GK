@@ -64,3 +64,18 @@ test("commands: revision/If-Match, idempotency, refs en archiveren; graph blijft
 
   assert.equal(graphHash(db), before, "editor_nodes/edges onveranderd");
 });
+
+test("commands: een Weg kan ook via de API geen ander vlaktype worden", function () {
+  const db = authoringDb();
+  const service = new CommandService(db);
+  const road = { areaId: "road.main", displayName: "Weg", soort: "pad", shape: "polygon", pointsMm: [[0, 0], [10000, 0], [10000, 10000]] };
+  service.execute({ requestId: "req-road-lock-01", command: "create", kind: "area", body: road }, "kevin");
+  assert.throws(() => service.execute({
+    requestId: "req-road-lock-02",
+    command: "update",
+    docKey: "area:road.main",
+    expectedRevision: 1,
+    body: Object.assign({}, road, { soort: "begroeiing" })
+  }, "kevin"), { code: "ROAD_KIND_IMMUTABLE", status: 422 });
+  assert.equal(service.documents.get("area:road.main").body.soort, "pad");
+});

@@ -5,6 +5,13 @@ import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { Node03RuntimeService } from "../src/server/node03-runtime-service.js";
 import { runtimeItemFromCanonical } from "../src/server/authoring/runtime-overlay.js";
+import { minimapScreenToWorld } from "../apps/web/public/game/hud/gk-minimap.js";
+
+test("minimapklik wordt naar de wereldplek omgerekend voor lopen", () => {
+  const projection = { a: 1, b: 0, d: 0, e: 1, half: 60, cx: 100, cz: 200, round: true };
+  assert.deepEqual(minimapScreenToWorld(90, 40, projection), { x: 130, z: 180 });
+  assert.equal(minimapScreenToWorld(0, 0, projection), null, "buiten de ronde kaart is geen loopklik");
+});
 
 test("Geneest gaat mee naar de runtime; 0 = geen knop Gebruiken", () => {
   assert.equal(runtimeItemFromCanonical({ itemId: "item.brood", displayName: "Brood", healAmount: 20 }).healAmount, 20);
@@ -144,30 +151,90 @@ test("Kaarttegels: bewaard op vingerafdruk, actief na commit, oude tegels en fot
   }
 });
 
-test("Mist op de kaart: standaard aan met vakjes van 8 m; uit te zetten, zicht, donkerte en zachte rand instelbaar", async () => {
+test("Kaartinstellingen: mist en afstand van questpijlen volgen de editor, ook bij 0", async () => {
   const { compileCanonical } = await import("../src/server/authoring/build-service.js");
   const { buildRuntimeWorld } = await import("../src/server/authoring/world-builder.js");
-  const docs = (hud) => [{ docKey: "project_settings", kind: "project_settings", body: { gameName: "GK", xpPerLevel: 300, maxLevel: 30 }, archived: false, revision: 1 }]
-    .concat(hud ? [{ docKey: "hud_settings", kind: "hud_settings", body: hud, archived: false, revision: 1 }] : []);
-  const world = (hud) => {
-    const compiled = compileCanonical(docs(hud), {});
+  const docs = (hud, minimap) => [{ docKey: "project_settings", kind: "project_settings", body: { gameName: "GK", xpPerLevel: 300, maxLevel: 30 }, archived: false, revision: 1 }]
+    .concat(hud ? [{ docKey: "hud_settings", kind: "hud_settings", body: hud, archived: false, revision: 1 }] : [])
+    .concat(minimap ? [{ docKey: "minimap_settings", kind: "minimap_settings", body: minimap, archived: false, revision: 1 }] : []);
+  const world = (hud, minimap) => {
+    const compiled = compileCanonical(docs(hud, minimap), {});
     assert.deepEqual(compiled.errors, []);
     return buildRuntimeWorld(JSON.parse(compiled.files["server.json"].text));
   };
-  const fog = world(null).minimap.game.fogOfWar;
+  const defaults = world(null).minimap.game;
+  assert.equal(defaults.presentation.miniViewportPercent, 22);
+  assert.equal(defaults.clickToMove, true);
+  assert.equal(defaults.questArrowDistanceMeters, 200);
+  const fog = defaults.fogOfWar;
   assert.equal(fog.enabled, true);
   assert.equal(fog.cellSize, 8);
   assert.equal(fog.revealRadius, 5);
   assert.equal(fog.fogOpacity, 1, "standaard helemaal dicht");
   assert.equal(fog.fogFeatherRadius, 1, "standaard 8 m zachte rand = 1 vakje");
-  const custom = world({ fogOfWar: false, fogRevealMeters: 80, fogDarkness: 80, fogFadeMeters: 16 }).minimap.game.fogOfWar;
+  const customMap = world({ fogOfWar: false, fogRevealMeters: 80, fogDarkness: 80, fogFadeMeters: 16, questArrowDistanceMeters: 350 }).minimap.game;
+  assert.equal(customMap.questArrowDistanceMeters, 350);
+  const custom = customMap.fogOfWar;
   assert.equal(custom.enabled, false);
   assert.equal(custom.revealRadius, 10);
   assert.equal(custom.fogOpacity, 0.8);
   assert.equal(custom.fogFeatherRadius, 2);
-  const hard = world({ fogDarkness: 0, fogFadeMeters: 0 }).minimap.game.fogOfWar;
+  const disabledArrows = world({ fogDarkness: 0, fogFadeMeters: 0, questArrowDistanceMeters: 0 }).minimap.game;
+  assert.equal(disabledArrows.questArrowDistanceMeters, 0, "0 schakelt alleen de questpijlen uit");
+  const hard = disabledArrows.fogOfWar;
   assert.equal(hard.fogOpacity, 0, "0 blijft 0");
   assert.equal(hard.fogFeatherRadius, 0);
+
+  const authoredMap = world(null, {
+    mapShape: "square",
+    mapRotate: true,
+    mapMiniClickToMove: false,
+    mapMiniSizePx: 180,
+    mapMiniViewportPercent: 26,
+    mapMiniDefaultZoom: "far",
+    mapMiniZoomFarMeters: 300,
+    mapMiniFixedIconSize: false,
+    mapBigFixedIconSize: true,
+    mapBigSpanMeters: 500,
+    mapBigShowMarkerNames: true,
+    mapNpcLabel: "Bewoners",
+    mapNpcColor: "#123456",
+    mapNpcIcon: "triangle",
+    mapNpcShowMini: false,
+    mapNpcSizePct: 150,
+    mapFogColor: "#112233"
+  }).minimap.game;
+  assert.equal(authoredMap.presentation.shape, "square");
+  assert.equal(authoredMap.presentation.rotate, true);
+  assert.equal(authoredMap.clickToMove, false);
+  assert.equal(authoredMap.presentation.clickToMove, false);
+  assert.equal(authoredMap.presentation.miniSizePx, 180);
+  assert.equal(authoredMap.presentation.miniViewportPercent, 26);
+  assert.deepEqual(authoredMap.presentation.zoomLevels, [30, 60, 300]);
+  assert.equal(authoredMap.presentation.defaultZoomIndex, 2);
+  assert.equal(authoredMap.presentation.miniFixedIconSize, false);
+  assert.equal(authoredMap.presentation.bigFixedIconSize, true);
+  assert.equal(authoredMap.presentation.bigSpanMeters, 500);
+  assert.equal(authoredMap.presentation.bigShowMarkerNames, true);
+  assert.deepEqual(authoredMap.presentation.styles.npc, {
+    label: "Bewoners", color: "#123456", shape: "triangle", showMini: false, showBig: true, size: 1.5, namesMini: false, namesBig: false
+  });
+  assert.equal(authoredMap.fogOfWar.fogColor, "#112233");
+
+  const presentation = world({
+    clickAreaExtraPercent: 25,
+    clickAreaExtraMeters: 0.4,
+    showWorldRings: false,
+    worldNameOffsetMeters: 0.65,
+    worldNameFontSizePx: 19
+  }).gameProject.ui.targetPresentation;
+  assert.deepEqual(presentation, {
+    hitboxMarginPercent: 25,
+    hitboxMarginMeters: 0.4,
+    ringsVisible: false,
+    labelOffsetMeters: 0.65,
+    labelFontSizePx: 19
+  });
 });
 
 test("Ronde 10: deelgebied-namen op de kaart en grootte van items op de grond", async () => {

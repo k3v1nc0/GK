@@ -125,6 +125,8 @@ export function createActorPresentation(options = {}) {
   }
 
   function animationOf(record, now) {
+    // Stap 8: een begeleide NPC loopt of staat stil (hij vecht niet en valt zonder animatie weg).
+    if (record.k === "e") return record.s === "w" ? "walk" : "idle";
     if (record.k !== "a") return "idle";
     if (record.s === "d") return "death";
     if (record.s === "a" || now < (record.attackUntil || 0)) return "attack";
@@ -144,6 +146,19 @@ export function createActorPresentation(options = {}) {
         range: def.gatherRangeMm / 1000, radius: def.radiusMm / 1000,
         available: record.s !== "d", status,
         modelAssetId: def.modelAssetId || "", modelScale: def.modelScaleBp ? def.modelScaleBp / 10000 : 1,
+        actorTarget: true
+      };
+    }
+    // Stap 8: een NPC die je begeleidt: naam, model en levens, maar geen aanvallen of praten (klikken = er heen lopen).
+    if (record.k === "e") {
+      const npc = defs.npcs?.[record.d];
+      if (!npc || status !== "alive") return null;
+      return {
+        instanceId: record.id, entityKind: "escort", targetKind: "escort", action: "", prompt: "", escort: true, npcId: record.d,
+        displayName: npc.displayName, x: pose.x, y: pose.y, z: pose.z, range: 0, radius: 0.45,
+        available: true, alive: true, status, healthCurrent: record.hp, healthMax: record.hm,
+        modelAssetId: npc.modelAssetId || "", modelScale: npc.modelScaleBp ? npc.modelScaleBp / 10000 : 1,
+        actorClips: { idle: npc.idleClip || "", walk: npc.walkClip || "", attack: "", death: "" },
         actorTarget: true
       };
     }
@@ -201,5 +216,18 @@ export function createActorPresentation(options = {}) {
     records.clear();
   }
 
-  return { applySnapshot, applyEvent, targets, targetById, frame, clear, debug: () => ({ buildId, records: records.size, hasDefinitions: Boolean(defs) }) };
+  // Stap 8: welke NPC's nu met je meelopen (die staan dan niet ook op hun vaste plek), en de naam bij een id.
+  function escortNpcIds() {
+    const ids = new Set();
+    for (const record of records.values()) if (record.k === "e" && record.s !== "d") ids.add(String(record.d));
+    return ids;
+  }
+
+  function nameOf(id) {
+    const record = records.get(String(id || ""));
+    if (!record || !defs) return "";
+    return (record.k === "e" ? defs.npcs?.[record.d] : record.k === "r" ? defs.resources?.[record.d] : defs.archetypes?.[record.d])?.displayName || "";
+  }
+
+  return { applySnapshot, applyEvent, targets, targetById, frame, clear, escortNpcIds, nameOf, debug: () => ({ buildId, records: records.size, hasDefinitions: Boolean(defs) }) };
 }

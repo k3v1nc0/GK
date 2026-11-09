@@ -7,7 +7,7 @@ import {
   isSafeTokenPathSegment,
   normalizeTokenPathSegments,
   tokenRootScope
-} from "./node-contract.js";
+} from "./node-contract.js?v=20261106-perf1";
 
 function safeString(value) {
   return String(value === null || value === undefined ? "" : value);
@@ -458,4 +458,3 @@ export function evaluateFormulaExpression(expression, context = {}, options = {}
 }
 
 export { STATIC_TOKEN_ROOTS, FUTURE_TOKEN_ROOTS, ALLOWED_FORMULA_OPERATORS };
-

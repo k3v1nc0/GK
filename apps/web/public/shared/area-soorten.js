@@ -2,12 +2,12 @@
 // Per soort leest de game hem met hetzelfde tekenwerk als de oude node (zelfde read-model), zodat een
 // verhuisd pad, bos of blokkade er precies hetzelfde uitziet. De instellingen per soort staan in "settings";
 // hun regels (type, min, max, keuzes) komen uit de oude nodedefinitie, de naam/icoon/hulp staat hier.
-import { NODE_TYPES } from "./node-types.js";
+import { NODE_TYPES } from "./node-types.js?v=20261106-perf1";
 
 // Zelfde vorm als help() in src/shared/authoring/kinds/ui.js (dit bestand draait ook in de browser).
 const help = (waarvoor, goed, probleem) => Object.freeze({ waarvoor, goed, probleem });
 
-export const AREA_SOORT_ORDER = Object.freeze(["begroeiing", "pad", "blokkade", "loopvlak", "deelgebied"]);
+export const AREA_SOORT_ORDER = Object.freeze(["begroeiing", "pad", "blokkade", "loopvlak", "deelgebied", "questgebied"]);
 
 // geometry: velden van de oude node die de Area tool uit de punten afleidt (staan niet in settings).
 // main: de velden die in beeld staan (rest onder ⚙️ meer).
@@ -17,11 +17,10 @@ export const AREA_SOORTEN = Object.freeze({
     geometry: ["scatterId", "label", "areaCenterX", "areaCenterZ", "areaWidth", "areaDepth", "areaRotationY", "sourceNodeIds", "points"],
     main: ["sourceAssetIds", "count", "scaleMin", "scaleMax", "itemsBlockPlayer", "groundCoverEnabled"]
   },
-  pad: {
-    label: "Pad / oppervlak", icon: "🛤️", nodeType: "surface_layer", closed: false, minPoints: 2,
-    geometry: ["surfaceId", "label", "points"],
-    main: ["textureAssetId", "width", "surfaceKind", "animated", "blocksPlayer"]
-  },
+  // 🛣️ Weg (8-11, was "Pad / oppervlak"): geen textuur of kleur meer, alleen een lijn van het wegennet.
+  // Wegen die elkaar raken of kruisen vormen samen één netwerk (road-network.js); klikken om te lopen gaat erover.
+  // In de game onzichtbaar, in de editor een oranje lijn. Oude textuur-instellingen worden genegeerd.
+  pad: { label: "Weg", icon: "🛣️", nodeType: "surface_layer", closed: false, minPoints: 2, road: true, geometry: [], main: [] },
   blokkade: {
     label: "Blokkade", icon: "🧱", nodeType: "blocker_area", closed: true, minPoints: 3,
     geometry: ["blockerId", "label", "shapeType", "x", "z", "width", "depth", "radius", "points"],
@@ -33,8 +32,33 @@ export const AREA_SOORTEN = Object.freeze({
     main: ["priority"]
   },
   // Een deelgebied (F4) gebruikt zijn eigen velden (gebied, muziek, veilig, voorrang); geen settings.
-  deelgebied: { label: "Deelgebied", icon: "🔷", nodeType: "area_definition", closed: true, minPoints: 3, geometry: [], main: [] }
+  deelgebied: { label: "Deelgebied", icon: "🔷", nodeType: "area_definition", closed: true, minPoints: 3, geometry: [], main: [] },
+  // Quest Builder stap 3: een gebied voor quests (ga naar, verlaat, alleen hier tellen, zoekgebied op de kaart).
+  // Alleen de quest-motor leest het; het doet niets met muziek, veilig of botsen.
+  questgebied: { label: "Questgebied", icon: "🎯", nodeType: "area_definition", closed: true, minPoints: 3, geometry: [], main: [] }
 });
+
+// Een cirkel (24 punten) of rechthoek rond (cx, cz) in mm, voor de knoppen ⭕ en ⬛ bij een Questgebied.
+export function areaCirclePointsMm(cxMm, czMm, radiusMm, count = 24) {
+  const r = Math.max(1000, Math.round(radiusMm));
+  return Array.from({ length: count }, (_, i) => {
+    const angle = (i / count) * Math.PI * 2;
+    return [Math.round(cxMm + Math.cos(angle) * r), Math.round(czMm + Math.sin(angle) * r)];
+  });
+}
+export function areaRectPointsMm(cxMm, czMm, halfMm) {
+  const h = Math.max(1000, Math.round(halfMm));
+  return [[cxMm - h, czMm - h], [cxMm + h, czMm - h], [cxMm + h, czMm + h], [cxMm - h, czMm + h]].map((point) => point.map(Math.round));
+}
+// Midden en "straal" (verste punt) van een vlak in mm.
+export function areaCenterMm(pointsMm) {
+  const list = Array.isArray(pointsMm) ? pointsMm : [];
+  if (!list.length) return { x: 0, z: 0, radius: 10000 };
+  const x = list.reduce((sum, point) => sum + point[0], 0) / list.length;
+  const z = list.reduce((sum, point) => sum + point[1], 0) / list.length;
+  const radius = Math.max(...list.map((point) => Math.hypot(point[0] - x, point[1] - z)));
+  return { x: Math.round(x), z: Math.round(z), radius: Math.round(radius) };
+}
 
 // Naam, icoon en Ⓘ-hulp per instelling: [icoon, naam, waarvoor, goede waarden, probleem → oplossing].
 const T = {
@@ -163,7 +187,7 @@ const ASSET = /^[A-Za-z0-9_.:-]+$/;
 // Controleert settings tegen de regels van de soort. Geeft een lijst foutmeldingen.
 export function areaSettingsIssues(soort, settings) {
   const specs = AREA_SETTING_SPECS[soort]?.fields || {};
-  if (settings === undefined || settings === null) return [];
+  if (settings === undefined || settings === null || AREA_SOORTEN[soort]?.road) return [];
   if (typeof settings !== "object" || Array.isArray(settings)) return ["Instellingen moeten een object zijn."];
   const issues = [];
   for (const [key, value] of Object.entries(settings)) {
@@ -227,6 +251,13 @@ export function areaSoort(body) {
 
 const mmToM = (mm) => Math.round(mm) / 1000;
 
+// 🛣️ Weg: de lijnen [punt, punt]. Een oude weg zonder lijnen = de punten op een rij.
+export function areaRoadLinks(body) {
+  const count = Array.isArray(body?.pointsMm) ? body.pointsMm.length : 0;
+  if (Array.isArray(body?.links)) return body.links.filter((link) => Array.isArray(link) && link.length === 2 && link[0] !== link[1] && link.every((n) => Number.isInteger(n) && n >= 0 && n < count)).map((link) => [link[0], link[1]]);
+  return Array.from({ length: Math.max(0, count - 1) }, (_, i) => [i, i + 1]);
+}
+
 // De punten van een vlak in meters ({x, z} of {x, y, z} bij een loopvlak).
 export function areaPointsMeters(body) {
   const points = Array.isArray(body?.pointsMm) ? body.pointsMm : [];
@@ -264,7 +295,7 @@ export function areaNodeValues(body, runtimeId) {
   if (soort === "begroeiing") {
     Object.assign(values, { scatterId: runtimeId, areaCenterX: box.x, areaCenterZ: box.z, areaWidth: box.width, areaDepth: box.depth, areaRotationY: 0, sourceNodeIds: [] });
   } else if (soort === "pad") {
-    values.surfaceId = runtimeId;
+    Object.assign(values, { surfaceId: runtimeId, links: areaRoadLinks(body) });
   } else if (soort === "blokkade") {
     Object.assign(values, { blockerId: runtimeId, shapeType: "polygon", x: box.x, z: box.z, width: box.width, depth: box.depth });
   } else if (soort === "loopvlak") {
@@ -315,6 +346,8 @@ export function areaBodyFromNodePatch(body, patch) {
     if (key === "closedEdges" && !Object.keys(next.settings).length) delete next.settings;
   }
   if (soort !== "deelgebied" && !next.shape) next.shape = "polygon";
+  // Een weg heeft geen instellingen: oude textuur/kleur van een pad gaan bij de eerste wijziging weg.
+  if (def.road) delete next.settings;
   return next;
 }
 
@@ -330,11 +363,16 @@ export function convertAreaSoort(body, soort, regions = []) {
   const next = JSON.parse(JSON.stringify(body || {}));
   const def = AREA_SOORTEN[soort];
   if (!def) return next;
+  // De Weg is het ene vaste wegennet, geen gewoon vlak. Ook callers buiten de
+  // Werkbank mogen hem daarom niet naar Begroeiing/Blokkade/etc. omzetten.
+  const currentDef = AREA_SOORTEN[areaSoort(body)];
+  if (currentDef?.road && !def.road) return next;
   delete next.settings;
   const points = Array.isArray(next.pointsMm) && next.pointsMm.length ? next.pointsMm : null;
   if (points) next.pointsMm = points.map((point) => (def.height ? [point[0], point[1], point.length > 2 ? point[2] : 0] : [point[0], point[1]]));
   next.soort = soort;
   next.shape = "polygon";
+  if (!def.road) delete next.links;
   for (const field of ["minXMm", "maxXMm", "minZMm", "maxZMm", "centerXMm", "centerZMm", "radiusMm"]) delete next[field];
   if (soort === "deelgebied") {
     if (!next.regionRef && points) {

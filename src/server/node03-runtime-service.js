@@ -7,6 +7,8 @@ import { isActorInstanceId, isResourceInstanceId } from "./runtime/actor-runtime
 import { computeHeal, describeEffect, effectBonuses, effectFromSource } from "../../apps/web/public/shared/effect-math.js";
 import { applyEffect, clearEffectsForDeath, combatRulesFromProject, itemCooldowns, itemReadyInMs, loadActiveEffects, planEffect, publicEffects, setItemCooldown } from "./runtime/player-effects.js";
 import { playerAbilityFromSection, playerHealAbilityFromSection } from "./authoring/actor-compiler.js";
+import { arrivalPoint, isUnlocked, nearestRespawnPortal, portalNear, portalRulesOf, portalsOf, portalVisibleFor, publicPortalState,
+  storeUnlock, travelCost, unlockedPortalIds, withinUnlockRange } from "./runtime/portal-runtime.js";
 
 const NODE03_INSTANCE_PREFIX = "node03:";
 const HEALTH_STAT_ID = "stat.health";
@@ -332,6 +334,8 @@ export class Node03RuntimeService {
     this.repository = repository;
     this.mmoService = mmoService;
     this.actionCooldowns = new ActionCooldowns();
+    // Portals (8-11): wachttijd na reizen per speler (in het geheugen; na een herstart mag je meteen weer).
+    this.portalCooldowns = new Map();
     // Fase 05: canonieke vijanden slaan spelers via deze service (enige schrijver van player_stats).
     if (mmoService?.actorRuntime && typeof mmoService.actorRuntime.setCombatBridge === "function") mmoService.actorRuntime.setCombatBridge(this);
   }
@@ -385,6 +389,16 @@ export class Node03RuntimeService {
       zoneId: zonePackage.zoneId,
       worldId: worldContext.worldId
     };
+  }
+
+  // Quest Builder (5-11): de admin werkt vanuit de editor aan de stand van een speler, zonder sessie van die speler.
+  adminContextForPlayer(playerId) {
+    const profile = this.db.prepare("SELECT * FROM player_profiles WHERE id = ? LIMIT 1").get(safeString(playerId, ""));
+    if (!profile) throw httpError(404, "Speler niet gevonden.");
+    const worldContext = this.mmoService.getPublishedWorldContext();
+    const world = worldContext.world;
+    return { sessionContext: null, worldContext, world, project: resolveProject(world), catalogs: resolveCatalogs(world),
+      profile, position: null, zonePackage: null, zoneId: profile.current_zone_id || null, worldId: worldContext.worldId };
   }
 
   resolveCurrentZonePackage(world, position) {
@@ -814,6 +828,11 @@ export class Node03RuntimeService {
     const name = displayForItem(ctx.catalogs, itemId);
     const heal = safeInteger(item.healAmount, 0);
     const effect = effectFromSource(item, name);
+    // Quest Builder stap 4: een brief (of ander item) lezen start een quest. Het item blijft in je tas.
+    if (heal <= 0 && !effect && this.questUseItem) {
+      const read = this.questUseItem(ctx, itemId, operationId);
+      if (read) return read;
+    }
     if (heal <= 0 && !effect) throw httpError(409, name + " kun je niet gebruiken.");
     const nowMs = Date.now();
     const waitMs = itemReadyInMs(this.db, ctx.profile.id, itemId, nowMs);
@@ -1192,6 +1211,8 @@ export class Node03RuntimeService {
       available: true,
       status: "available",
       respawnPolicyRef: spawn.respawnPolicyRef || "respawn_policy.node03_quick",
+      // Quest Builder stap 4: shared = één voor iedereen; personal = ieder zijn eigen; once = ieder 1×.
+      claimMode: spawn.claimMode === "personal" || spawn.claimMode === "once" ? spawn.claimMode : "shared",
       interaction: { action: "pickup", prompt: "Pick up", range: 3 },
       updatedAt: now()
     };
@@ -1255,6 +1276,9 @@ export class Node03RuntimeService {
       throw error;
     }
     if (action === "unstuck") return this.unstuckPlayer(ctx);
+    if (action === "portal_unlock") return this.portalUnlock(ctx, payload.targetId);
+    if (action === "portal_travel") return this.portalTravel(ctx, payload.targetId);
+    if (action === "portal_travel_mate") return this.portalTravelToMate(ctx, payload.targetId);
     if (action === "attack") return this.attackTarget(ctx, payload.targetId, operationId);
     if (action === "gather") return this.gatherTarget(ctx, payload.targetId, operationId);
     if (action === "pickup") return this.pickupTarget(ctx, payload.targetId, operationId);
@@ -1569,23 +1593,46 @@ export class Node03RuntimeService {
       throw error;
     }
     const pickup = target.state;
-    if (pickup.available === false || pickup.status === "claimed") {
-      return { action: "pickup", targetId: pickup.instanceId, message: pickup.displayName + " is al opgepakt.", events: [] };
+    const personal = pickup.claimMode === "personal" || pickup.claimMode === "once";
+    // Ieder zijn eigen / Ieder 1×: de wereld-pickup blijft liggen; per speler onthouden wie hem had.
+    const claim = personal ? this.pickupClaim(ctx.profile.id, pickup.instanceId) : null;
+    if (personal ? claim : (pickup.available === false || pickup.status === "claimed")) {
+      return { action: "pickup", targetId: pickup.instanceId, message: pickup.displayName + (pickup.claimMode === "once" ? ": die heb je al eens gepakt." : " is al opgepakt."), events: [] };
     }
     this.assertInRange(ctx, pickup, "pickup");
+    // Quest Builder stap 4: uniek = max 1; een brief voor een quest die je al doet of al gedaan hebt pak je niet nog eens.
+    if (pickup.pickupKind !== "currency") {
+      const item = catalogSection(ctx.catalogs, "items")[pickup.itemRef] || {};
+      const blocked = item.unique === true && this.ownedItemCount(ctx.profile.id, pickup.itemRef) >= 1
+        ? "Je hebt al " + pickup.displayName + ". Daar kun je er maar 1 van hebben."
+        : this.questPickupBlocked?.(ctx, pickup.itemRef) || "";
+      if (blocked) return { action: "pickup", targetId: pickup.instanceId, message: blocked, events: [] };
+    }
     const amount = pickup.pickupKind === "currency"
       ? Math.max(1, Math.round((safeInteger(pickup.minAmount, pickup.amount) + safeInteger(pickup.maxAmount, pickup.amount)) / 2))
       : Math.max(1, safeInteger(pickup.amount, 1));
     const grants = pickup.pickupKind === "currency"
       ? [this.grantCurrency(ctx, pickup.currencyRef, amount, "pickup_claimed", pickup.instanceId, operationId)]
       : this.grantItem(ctx, pickup.itemRef, amount, "pickup_claimed", pickup.instanceId, operationId);
-    pickup.available = false;
-    pickup.status = "claimed";
-    pickup.claimedBy = ctx.profile.id;
-    pickup.respawnAt = pickup.respawnPolicyRef ? addMs(respawnDelayMs(ctx.catalogs, pickup.respawnPolicyRef)) : null;
-    pickup.updatedAt = now();
-    this.saveEntityState(ctx, pickup);
+    if (personal) {
+      const respawnAt = pickup.claimMode === "once" ? null : addMs(respawnDelayMs(ctx.catalogs, pickup.respawnPolicyRef));
+      this.db.prepare(`
+        INSERT INTO player_pickup_claims (player_id, instance_id, claimed_at, respawn_at) VALUES (?, ?, ?, ?)
+        ON CONFLICT(player_id, instance_id) DO UPDATE SET claimed_at = excluded.claimed_at, respawn_at = excluded.respawn_at
+      `).run(ctx.profile.id, pickup.instanceId, now(), respawnAt);
+    } else {
+      pickup.available = false;
+      pickup.status = "claimed";
+      pickup.claimedBy = ctx.profile.id;
+      pickup.respawnAt = pickup.respawnPolicyRef ? addMs(respawnDelayMs(ctx.catalogs, pickup.respawnPolicyRef)) : null;
+      pickup.updatedAt = now();
+      this.saveEntityState(ctx, pickup);
+    }
     this.recordGameplayEvent(ctx, "pickup_claimed", "player", pickup.instanceId, { grants });
+    if (pickup.pickupKind !== "currency") {
+      this.questEvents?.(ctx, [ctx.profile.id], { type: "pickup", refId: pickup.itemRef, eventKey: "pickup:" + pickup.instanceId + ":" + operationId, operationId,
+        at: { x: Number.isFinite(Number(pickup.x)) ? Number(pickup.x) : ctx.position?.x, z: Number.isFinite(Number(pickup.z)) ? Number(pickup.z) : ctx.position?.z } });
+    }
     return {
       action: "pickup",
       targetId: pickup.instanceId,
@@ -1593,6 +1640,14 @@ export class Node03RuntimeService {
       events: [{ type: "picked_up", targetId: pickup.instanceId, label: pickup.displayName }],
       grants
     };
+  }
+
+  // Quest Builder stap 4: heeft deze speler deze pickup (Ieder zijn eigen / Ieder 1×) nu nog? null = nee, mag pakken.
+  pickupClaim(playerId, instanceId) {
+    const row = this.db.prepare("SELECT * FROM player_pickup_claims WHERE player_id = ? AND instance_id = ? LIMIT 1").get(playerId, instanceId);
+    if (!row) return null;
+    if (row.respawn_at && Date.parse(row.respawn_at) <= Date.now()) return null;
+    return row;
   }
 
   physicalPortalCandidates(ctx) {
@@ -1646,7 +1701,147 @@ export class Node03RuntimeService {
     })[0] || null;
   }
 
+  // ---- Portals (8-11) ----
+  portalFor(ctx, portalId) {
+    const id = safeString(portalId, "");
+    const portal = portalsOf(ctx.world).find((entry) => entry.id === id) || null;
+    if (!portal || !portalVisibleFor(portal, ctx.profile.id, this.mmoService.worldFlags)) {
+      const error = new Error("Deze portal bestaat niet (meer).");
+      error.status = 404;
+      throw error;
+    }
+    return portal;
+  }
+
+  portalRefused(message) {
+    const error = new Error(message);
+    error.status = 409;
+    return error;
+  }
+
+  // De game vraagt dit als je dichtbij loopt; de server kijkt zelf of je er echt bent.
+  portalUnlock(ctx, portalId) {
+    const portal = this.portalFor(ctx, portalId);
+    const unlocked = unlockedPortalIds(this.db, ctx.profile.id, ctx.worldId);
+    if (isUnlocked(portal, unlocked)) return { action: "portal_unlock", portalId: portal.id, message: "" };
+    if (!withinUnlockRange(ctx.position, portal)) throw this.portalRefused("Loop dichter naar de portal om hem vrij te spelen.");
+    storeUnlock(this.db, ctx.profile.id, ctx.worldId, portal.id, now());
+    this.recordGameplayEvent(ctx, "portal_unlocked", "player", portal.id, { portalId: portal.id });
+    return { action: "portal_unlock", portalId: portal.id, message: "🌀 Portal vrijgespeeld: " + (portal.displayName || portal.id) + ". Tik erop op de kaart om hierheen te reizen." };
+  }
+
+  portalTravel(ctx, portalId, mateName = "") {
+    const portal = this.portalFor(ctx, portalId);
+    const rules = portalRulesOf(ctx.world);
+    const playerId = ctx.profile.id;
+    const unlocked = unlockedPortalIds(this.db, playerId, ctx.worldId);
+    if (!isUnlocked(portal, unlocked)) throw this.portalRefused("Deze portal is nog niet vrijgespeeld. Loop er eerst naartoe.");
+    const visible = portalsOf(ctx.world).filter((entry) => portalVisibleFor(entry, playerId, this.mmoService.worldFlags));
+    const atPortal = portalNear(ctx.position, visible, unlocked);
+    if (atPortal && atPortal.id === portal.id) throw this.portalRefused("Je staat al bij " + (portal.displayName || "deze portal") + ".");
+    if (rules.travelFrom === "portal" && !atPortal) throw this.portalRefused("Je kunt alleen reizen als je bij een portal staat.");
+    const nowMs = Date.now();
+    const waitMs = (this.portalCooldowns.get(playerId) || 0) - nowMs;
+    if (waitMs > 0) throw this.portalRefused("Nog " + Math.ceil(waitMs / 1000) + " s wachten voordat je weer kunt reizen.");
+    const combatMs = Math.max(0, safeNumber(rules.combatBlockSeconds, 0)) * 1000;
+    const combatAt = this.vitals()?.combatAt?.get(playerId) || 0;
+    if (combatMs > 0 && nowMs - combatAt < combatMs) {
+      throw this.portalRefused("Je bent nog in gevecht. Reizen kan over " + Math.ceil((combatMs - (nowMs - combatAt)) / 1000) + " s.");
+    }
+    const cost = travelCost(rules, ctx.position, portal, Boolean(atPortal));
+    let paid = "";
+    if (cost > 0) {
+      const currencyName = displayForCurrency(ctx.catalogs, rules.costCurrencyId);
+      const have = safeInteger(this.db.prepare("SELECT amount_minor FROM player_currencies WHERE player_id = ? AND currency_id = ? LIMIT 1")
+        .get(playerId, rules.costCurrencyId)?.amount_minor, 0);
+      if (have < cost) throw this.portalRefused("Niet genoeg " + currencyName + ": de reis kost " + cost + " en je hebt " + have + ".");
+      this.removeCurrency(ctx, rules.costCurrencyId, cost, "portal_travel", portal.id);
+      paid = " (−" + cost + " " + currencyName + ")";
+    }
+    const arrival = arrivalPoint(portal);
+    const connection = { ...ctx.sessionContext, player: ctx.profile, worldId: ctx.worldId };
+    const position = this.mmoService.applyTeleportState(connection, {
+      zoneId: ctx.zoneId,
+      position: arrival,
+      animationState: "idle"
+    }, { reason: "portal" });
+    this.mmoService.schedulePersist(position, connection, true);
+    ctx.position = position;
+    if (rules.cooldownSeconds > 0) {
+      if (this.portalCooldowns.size > 5000) this.portalCooldowns.clear();
+      this.portalCooldowns.set(playerId, nowMs + rules.cooldownSeconds * 1000);
+    }
+    this.recordGameplayEvent(ctx, "portal_travel", "player", portal.id, { portalId: portal.id, cost });
+    return {
+      action: "portal_travel",
+      portalId: portal.id,
+      message: "🌀 " + (portal.displayName || "Portal") + (mateName ? " (bij " + mateName + ")" : "") + paid + ".",
+      position: this.mmoService.publicPositionForPlayer(position, ctx.sessionContext.session, ctx.worldId)
+    };
+  }
+
+  // Kevin 8-11: naar een teamgenoot reizen = naar de vrije portal (van jou) die het dichtst bij hem staat.
+  portalTravelToMate(ctx, mateId) {
+    const id = safeString(mateId, "");
+    const party = this.mmoService.partyRuntime;
+    const partyId = party ? party.partyIdFor(ctx.profile.id) : null;
+    if (!id || id === ctx.profile.id || !partyId || party.partyIdFor(id) !== partyId) throw this.portalRefused("Je kunt alleen naar iemand uit je groep reizen.");
+    const cached = this.mmoService.playerStateCache?.get(this.mmoService.getPlayerStateCacheKey(id, ctx.worldId)) || null;
+    const where = cached || this.db.prepare("SELECT x, z FROM player_positions WHERE player_id = ? AND world_id = ? LIMIT 1").get(id, ctx.worldId) || null;
+    if (!where) throw this.portalRefused("Waar je teamgenoot is, is nog niet bekend.");
+    const mate = { x: safeNumber(where.x, 0), z: safeNumber(where.z, 0) };
+    const unlocked = unlockedPortalIds(this.db, ctx.profile.id, ctx.worldId);
+    const visible = portalsOf(ctx.world).filter((entry) => portalVisibleFor(entry, ctx.profile.id, this.mmoService.worldFlags) && isUnlocked(entry, unlocked));
+    let best = null;
+    for (const entry of visible) {
+      const distance = Math.hypot(safeNumber(entry.x) - mate.x, safeNumber(entry.z) - mate.z);
+      if (!best || distance < best.distance) best = { portal: entry, distance };
+    }
+    if (!best) throw this.portalRefused("Je hebt nog geen portal vrijgespeeld.");
+    const name = safeString(this.db.prepare("SELECT display_name FROM player_profiles WHERE id = ? LIMIT 1").get(id)?.display_name, "je teamgenoot");
+    const result = this.portalTravel(ctx, best.portal.id, name);
+    return Object.assign(result, { action: "portal_travel_mate", mateId: id });
+  }
+
+  // Na doodgaan: de dichtstbijzijnde vrije portal met "Respawn hier" (zelfde vorm als de oude node-portals).
+  gamePortalRespawn(ctx) {
+    const rules = portalRulesOf(ctx.world);
+    if (rules.respawnAtPortal === false) return null;
+    const unlocked = unlockedPortalIds(this.db, ctx.profile.id, ctx.worldId);
+    const portal = nearestRespawnPortal(portalsOf(ctx.world), unlocked, ctx.position,
+      (entry) => portalVisibleFor(entry, ctx.profile.id, this.mmoService.worldFlags));
+    if (!portal) return null;
+    const arrival = arrivalPoint(portal);
+    return { zoneId: ctx.zoneId, zonePackage: ctx.zonePackage, portalRef: "portal:" + portal.id, linkId: null,
+      x: arrival.x, y: arrival.y, z: arrival.z, facing: arrival.rotationY, label: portal.displayName || "portal" };
+  }
+
+  portalSnapshot(ctx) {
+    if (!portalsOf(ctx.world).length) return null;
+    const unlocked = unlockedPortalIds(this.db, ctx.profile.id, ctx.worldId);
+    return publicPortalState(ctx.world, unlocked, ctx.profile.id, this.mmoService.worldFlags, ctx.position,
+      (this.portalCooldowns.get(ctx.profile.id) || 0) - Date.now());
+  }
+
   unstuckPlayer(ctx) {
+    // Kevin 8-11: met portals in de wereld ga je naar de dichtstbijzijnde vrijgespeelde portal (direct, zonder de wereld te herladen).
+    if (portalsOf(ctx.world).length) {
+      const unlocked = unlockedPortalIds(this.db, ctx.profile.id, ctx.worldId);
+      const portal = nearestRespawnPortal(portalsOf(ctx.world).map((entry) => Object.assign({}, entry, { respawnHere: true })), unlocked, ctx.position,
+        (entry) => portalVisibleFor(entry, ctx.profile.id, this.mmoService.worldFlags));
+      if (portal) {
+        const arrival = arrivalPoint(portal);
+        const connection = { ...ctx.sessionContext, player: ctx.profile, worldId: ctx.worldId };
+        const position = this.mmoService.applyTeleportState(connection, { zoneId: ctx.zoneId, position: arrival, animationState: "idle" }, { reason: "unstuck" });
+        this.mmoService.schedulePersist(position, connection, true);
+        ctx.position = position;
+        return {
+          action: "unstuck",
+          message: "Je bent terug bij " + (portal.displayName || "de dichtstbijzijnde portal") + ".",
+          position: this.mmoService.publicPositionForPlayer(position, ctx.sessionContext.session, ctx.worldId)
+        };
+      }
+    }
     const spawnRef = ctx.position.current_spawn_id;
     const zones = [ctx.zonePackage, ...projectZonePackages(ctx.project).filter((zone) => zone.zoneId !== ctx.zoneId)];
     let target = null;
@@ -1688,7 +1883,7 @@ export class Node03RuntimeService {
       error.status = 409;
       throw error;
     }
-    const portal = this.nearestDiscoveredRespawnPortal(ctx);
+    const portal = portalsOf(ctx.world).length ? this.gamePortalRespawn(ctx) : this.nearestDiscoveredRespawnPortal(ctx);
     const targetZonePackage = portal?.zonePackage || ctx.zonePackage;
     const fallbackSpawn = zoneDefaultSpawn(targetZonePackage, ctx.world);
     const target = portal || {
@@ -1870,7 +2065,9 @@ export class Node03RuntimeService {
 
   grantItem(ctx, itemId, amount, reason, sourceRef, operationId = randomId("node03_grant")) {
     const item = catalogSection(ctx.catalogs, "items")[itemId] || {};
-    const quantity = Math.max(1, safeInteger(amount, 1));
+    // Quest Builder stap 4: uniek = je kunt er maar 1 hebben (buit of beloning geeft er dan niet nog een).
+    if (item.unique === true && this.ownedItemCount(ctx.profile.id, itemId) >= 1) return [];
+    const quantity = item.unique === true ? 1 : Math.max(1, safeInteger(amount, 1));
     if (item.stackable !== false) {
       const bindState = item.bindPolicy === "bind_on_pickup" ? "bound" : DEFAULT_BIND_STATE;
       const existing = this.db.prepare("SELECT quantity FROM player_inventory_stacks WHERE player_id = ? AND item_id = ? AND bind_state = ? LIMIT 1")
@@ -2097,8 +2294,15 @@ export class Node03RuntimeService {
         this.db.prepare("UPDATE actor_loot_claims SET grants_json = ? WHERE claim_key = ?").run(stableJson(given), reward.claimKey);
         if (reward.playerId === ctx.profile.id) grants = given;
       }
-      this.saveActorSpawnState(ctx, plan.spawnKey, plan.occurrence, "dead", plan.respawnAtMs, plan.buildId);
+      // Een quest-vijand (stap 5) komt niet terug; die bewaart de vijandenserver zelf.
+      if (!plan.questSpawn) this.saveActorSpawnState(ctx, plan.spawnKey, plan.occurrence, "dead", plan.respawnAtMs, plan.buildId);
       this.recordGameplayEvent(ctx, "actor_defeated", "player", plan.instanceId, { damage: plan.damage, grants });
+      // Quest Builder: de kill telt voor iedereen die meevocht (1x per vijand-leven per speler).
+      // Stap 5: bij een quest-vijand welke verschijning het was, en alleen wie hem mag zien telt mee.
+      const spawn = plan.questSpawn || null;
+      this.questEvents?.(ctx, plan.rewards.map((reward) => reward.playerId),
+        { type: "defeat", refId: plan.actorId, eventKey: "defeat:" + plan.instanceId, operationId, at: { x: plan.x, z: plan.z },
+          spawn, canSee: spawn ? (playerId) => runtime.canSeeGroupId(spawn.groupId, playerId) : null });
     } else {
       this.recordGameplayEvent(ctx, "actor_hit", "player", plan.instanceId, { damage: plan.damage, healthAfter: plan.hpAfter });
     }
@@ -2129,8 +2333,10 @@ export class Node03RuntimeService {
     const grants = [];
     for (const item of plan.items) grants.push(...this.grantItem(ctx, item.itemId, item.quantity, "resource_gathered", plan.instanceId, operationId));
     this.db.prepare("UPDATE actor_loot_claims SET grants_json = ? WHERE claim_key = ?").run(stableJson(grants), plan.claimKey);
-    this.saveActorSpawnState(ctx, plan.spawnKey, plan.occurrence, "depleted", plan.respawnAtMs, plan.buildId);
+    // Stap 5: Ieder zijn eigen = alleen voor jou weg (in het geheugen), niet voor iedereen.
+    if (!plan.personal) this.saveActorSpawnState(ctx, plan.spawnKey, plan.occurrence, "depleted", plan.respawnAtMs, plan.buildId);
     this.recordGameplayEvent(ctx, "resource_gathered", "player", plan.instanceId, { grants });
+    this.questEvents?.(ctx, [ctx.profile.id], { type: "gather", refId: plan.resourceId, eventKey: "gather:" + (plan.eventKey || plan.instanceId), operationId, at: { x: plan.x, z: plan.z } });
     return {
       action: "gather",
       targetId: plan.instanceId,
@@ -2328,6 +2534,8 @@ export class Node03RuntimeService {
       effects: publicEffects(loadActiveEffects(this.db, ctx.profile.id, Date.now()), Date.now()),
       itemCooldowns: itemCooldowns(this.db, ctx.profile.id, Date.now()),
       healSpell: this.healSpellForHud(ctx),
+      // Portals (8-11): welke portals je ziet, welke vrij zijn, kosten en wachttijd.
+      portals: this.portalSnapshot(ctx),
       entities,
       interactionTargets: this.buildInteractionTargets(ctx, entities),
       ui: {
@@ -2412,6 +2620,15 @@ export class Node03RuntimeService {
 
   loadHudCatalog(ctx) {
     const slots = catalogSection(ctx.catalogs, "equipmentSlots");
+    // Quest Builder stap 4 + Kevin 5-11: een item dat een quest start opent bij een klik in de tas meteen het gesprek
+    // met de brief (verhaal, plaatje, doelen) en de knop Quest accepteren.
+    const reads = new Map();
+    for (const quest of Object.values(ctx.project?.campaigns?.quests?.byId || {})) {
+      if (quest?.startMode !== "item" || !quest.startItemRef || reads.has(quest.startItemRef)) continue;
+      const first = (Array.isArray(quest.steps) ? quest.steps : []).find((step) => step?.kind !== "end") || null;
+      reads.set(quest.startItemRef, { questId: quest.id, displayName: quest.displayName || quest.id, description: quest.description || "", imageAssetId: quest.imageAssetId || null,
+        goals: (Array.isArray(first?.objectives) ? first.objectives : []).filter((objective) => objective?.role !== "hidden").map((objective) => objective.displayName).filter(Boolean).slice(0, 8) });
+    }
     const items = Object.values(catalogSection(ctx.catalogs, "items")).map(function (item) {
       return {
         itemId: item.id,
@@ -2434,6 +2651,8 @@ export class Node03RuntimeService {
         attackPowerBonus: safeInteger(item.attackPowerBonus, 0),
         armorBonus: safeInteger(item.armorBonus, 0),
         questItem: item.questItem === true || item.category === "quest",
+        readable: reads.has(item.id),
+        reads: reads.get(item.id) || null,
         vendorValue: safeInteger(item.vendorBaseValueMinor, 0)
       };
     }).filter(function (item) {
@@ -2546,6 +2765,9 @@ export class Node03RuntimeService {
       const rows = statement.all(zoneCtx.worldId, zoneCtx.zoneId, NODE03_INSTANCE_PREFIX + "%");
       for (const row of rows) {
         const entity = safeJsonParse(row.state_json, {}) || {};
+        // Quest Builder stap 4: een pickup per speler is voor jou weg zodra jij hem had (anderen zien hem nog).
+        if (entity.entityKind === "pickup" && (entity.claimMode === "personal" || entity.claimMode === "once") && ctx.profile?.id
+          && this.pickupClaim(ctx.profile.id, entity.instanceId)) Object.assign(entity, { available: false, status: "claimed" });
         const distance = positionDistance(ctx.position, entity);
         all.push(Object.assign({}, entity, {
           zoneId: zoneCtx.zoneId,

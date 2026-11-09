@@ -2,11 +2,13 @@
 // Geen scherm per functie: elk veld wordt vanzelf een slider, aan/uit, keuzeknoppen, sleep-vak of tekstvak,
 // met icoon en Ⓘ-hulp. Alles schrijft naar documenten (/api/authoring/command), nooit naar de node-graph.
 import { api, command, el, friendlyError, slug } from "./canonical-api.js";
-import { createAssetPicker, createMiniPicker } from "./mini-asset-picker.js?v=20261028-picker1";
-import { convertShape } from "./werkbank-world.js?v=20261030-terrein6";
-import { renderUsers } from "./werkbank-users.js?v=20261028-users1";
+import { createAssetPicker, createMiniPicker } from "./mini-asset-picker.js?v=20261106-thumbs150";
+import { convertShape } from "./werkbank-world.js?v=20261108-portals1";
+import { renderUsers } from "./werkbank-users.js?v=20261104-account-reset1";
 import { computeDamage, rollLoot } from "../shared/combat-math.js";
-import { areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261027-om2b";
+import { areaCenterMm, areaCirclePointsMm, areaRectPointsMm, areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261108-roads7";
+import { QUEST_START_MODES, hasOwnSteps, objectiveText, questGraphIssues, questStartIssues, questStartMode, requirementText, stepsFromSimple } from "../shared/quest-graph.js?v=20261108-quest24";
+import { openQuestBuilder } from "./quest-builder.js?v=20261108-quest24";
 
 const DOC_MIME = "application/x-gk-doc";
 
@@ -15,11 +17,13 @@ const DOC_MIME = "application/x-gk-doc";
 // Een placed_model is een losse wereldinstantie, geen herbruikbare Bibliotheek-kaart.
 // De bron blijft de asset (of bij een pickup: het item); zo groeit de Werkbank niet
 // uit tot een lijst met iedere boom/stoel/steen die ooit in de wereld is neergezet.
-const LIBRARY_KINDS = ["item_definition", "currency", "ability", "loot_table", "resource_definition", "actor_archetype", "npc", "quest", "recipe"];
+const LIBRARY_KINDS = ["item_definition", "currency", "ability", "loot_table", "resource_definition", "actor_archetype", "npc", "portal", "quest", "recipe", "world_flag"];
 // Kaarten met een plek in de wereld: klik in de 3D-view, G = verplaatsen (R = draaien, S = groter/kleiner waar het kan).
 export const PLACED_KINDS = Object.freeze({
   pickup: { move: true },
   npc: { move: true, rotate: true },
+  // Portals (8-11): sleep de kaart op de wereld; G, R en S zoals bij een model.
+  portal: { move: true, rotate: true, scale: true },
   placed_model: { move: true, rotate: true, scale: true },
   actor_spawn: { move: true },
   resource_spawn: { move: true }
@@ -123,6 +127,35 @@ export function createDocBench(options = {}) {
       await bench.load();
       return result;
     }
+  };
+
+  // Alleen tijdelijke UI-invoer. Bestaande kaarten worden al meteen via de API
+  // opgeslagen; een nog niet aangemaakte kaart moet wel mee kunnen naar een ander
+  // apparaat van dezelfde gebruiker.
+  bench.resumeState = function resumeState() {
+    return clone({
+      selectedDocKey: bench.selectedDocKey || null,
+      newKind: bench.newKind || null,
+      settingsView: bench.settingsView || "project_settings",
+      draft: bench.draft || null,
+      childDocKey: bench.childDocKey || null,
+      groupOpen: bench.groupOpen || null,
+      moreOpen: bench.moreOpen === true,
+      questOpenSteps: bench.questOpenSteps || null
+    });
+  };
+
+  bench.restoreResumeState = function restoreResumeState(value) {
+    if (!value || typeof value !== "object") return;
+    bench.selectedDocKey = typeof value.selectedDocKey === "string" ? value.selectedDocKey : null;
+    bench.newKind = typeof value.newKind === "string" ? value.newKind : null;
+    bench.settingsView = typeof value.settingsView === "string" ? value.settingsView : "project_settings";
+    bench.draft = value.draft && typeof value.draft === "object" ? clone(value.draft) : null;
+    bench.childDocKey = value.childDocKey && typeof value.childDocKey === "object" ? clone(value.childDocKey) : {};
+    bench.groupOpen = value.groupOpen && typeof value.groupOpen === "object" ? clone(value.groupOpen) : {};
+    bench.moreOpen = value.moreOpen === true;
+    // Quest Builder: welke stappen per quest open stonden.
+    bench.questOpenSteps = value.questOpenSteps && typeof value.questOpenSteps === "object" ? clone(value.questOpenSteps) : {};
   };
 
   function assetById(id) {
@@ -583,6 +616,10 @@ export function createDocBench(options = {}) {
   function control(key, field, body, isNew, onChange) {
     const value = body[key];
     const type = field.ui?.control;
+    const rememberTypedDraft = (next) => {
+      if (!isNew || !bench.draft || bench.draft.body !== body) return;
+      if (emptyValue(next)) delete body[key]; else body[key] = next;
+    };
     if (type === "slider") return sliderControl(field, value, onChange);
     if (type === "toggle") return toggleControl(field, value, onChange);
     if (type === "select") return selectControl(field, value, body, onChange);
@@ -601,6 +638,7 @@ export function createDocBench(options = {}) {
     if (type === "tags") {
       const input = el("input", { type: "text", class: "wbdText", placeholder: "label, label" });
       input.value = Array.isArray(value) ? value.join(", ") : "";
+      input.addEventListener("input", () => rememberTypedDraft(Array.from(new Set(input.value.split(",").map((tag) => tag.trim().toLowerCase()).filter(Boolean)))));
       input.addEventListener("change", () => {
         const tags = Array.from(new Set(input.value.split(",").map((tag) => tag.trim().toLowerCase()).filter(Boolean)));
         onChange(tags.length ? tags : null);
@@ -609,20 +647,71 @@ export function createDocBench(options = {}) {
     }
     if (type === "points") {
       const count = Array.isArray(value) ? value.length : 0;
-      return el("span", { class: "wbdNote", text: count ? count + " punten (tekenen in de 3D-view)" : "Teken in de 3D-view" });
+      const what = field.type === "linkList" ? " lijnen" : " punten";
+      return el("span", { class: "wbdNote", text: count ? count + what + " (tekenen in de 3D-view)" : "Teken in de 3D-view" });
+    }
+    // 5-11: een langere tekst (bijv. het verhaal van een quest) in een vak met meerdere regels.
+    if (field.ui?.multiline) {
+      const area = el("textarea", { class: "wbdText wbdTextArea", rows: 4, maxlength: field.maxLength || 1000 });
+      area.value = emptyValue(value) ? "" : String(value);
+      area.addEventListener("input", () => rememberTypedDraft(area.value));
+      area.addEventListener("change", () => onChange(area.value.trim() || null));
+      return area;
     }
     const input = el("input", { type: "text", class: "wbdText", maxlength: field.maxLength || 200 });
     input.value = emptyValue(value) ? "" : String(value);
     if (type === "id" && !isNew) input.disabled = true;
+    input.addEventListener("input", () => rememberTypedDraft(input.value));
     input.addEventListener("change", () => onChange(input.value.trim() || null));
     return input;
   }
+
+  // Quest (5-11): het paneel is de kaart van de quest (naam, beloning, verhaal). Hoe hij werkt staat hier als één korte
+  // samenvatting met één knop; start, voorwaarden en stappen stel je in de Quest Builder in.
+  const START_SHORT = { npc: "bij een NPC", item: "item lezen", area: "gebied in", auto: "vanzelf" };
+  function questSummary(body, doc) {
+    if (!doc) return el("span", { class: "wbdNote", text: "Eerst ✓ Maken, dan stel je in de Quest Builder in hoe hij start en wat de speler moet doen." });
+    const nameOf = (ref) => { const target = ref ? bench.doc(ref) : null; return target ? docName(target) : String(ref || "…").replace(/^[a-z_]+:/, ""); };
+    const refExists = (ref) => { const target = bench.doc(ref); return Boolean(target) && !target.archived && (target.kind !== "area" || target.body?.soort === "questgebied"); };
+    const mode = questStartMode(body);
+    const start = body.start || {};
+    const who = mode === "npc" ? body.giverRef : mode === "item" ? start.itemRef : mode === "area" ? start.areaRef : null;
+    const rules = Array.isArray(start.rules) ? start.rules : [];
+    const need = rules.map((rule) => requirementText(rule, nameOf));
+    if (body.previousQuestRef) need.unshift("na " + nameOf(body.previousQuestRef));
+    const startLine = QUEST_START_MODES[mode].icon + " Start: " + START_SHORT[mode] + (who ? " (" + nameOf(who) + ")" : "")
+      + " · " + (need.length ? (rules.length > 1 ? (start.match === "any" ? "OF: " : "EN: ") : "") + need.join(", ") : "iedereen mag");
+    const own = hasOwnSteps(body);
+    const count = (kind) => body.steps.filter((step) => step?.kind === kind).length;
+    const spawnCount = Array.isArray(body.spawns) ? body.spawns.length : 0;
+    const stepsLine = own ? "🪜 " + count("step") + " stap(pen) · 🏁 " + count("end") + " einde(s)" + (spawnCount ? " · 👾 " + spawnCount + " verschijning(en)" : "")
+      : "🪜 Snelle quest: " + objectiveText(stepsFromSimple(body)[0].objectives[0], nameOf);
+    const maxLevel = bench.docs("project_settings")[0]?.body?.maxLevel || 50;
+    const startIssues = questStartIssues(body, { refExists, refLabel: nameOf, selfRef: doc.docKey, maxLevel }).length;
+    const issues = startIssues + (own ? questGraphIssues(body.steps, { refExists, partyLeave: body.partyLeave, spawns: body.spawns }).length : 0);
+    const button = el("button", { type: "button", class: "wbdPrimary", text: "📜 Quest Builder" });
+    button.addEventListener("click", () => openQuestBuilder(bench, doc.docKey, { setStatus, tab: startIssues ? "start" : "stappen" }));
+    return el("div", { class: "wbdQuestSteps" }, [
+      el("div", { class: "wbdQuestLines" }, [
+        el("span", { class: "wbdNote", text: startLine }),
+        el("span", { class: "wbdNote", text: stepsLine }),
+        el("span", { class: "wbdNote", text: issues ? "⚠️ " + issues + (issues === 1 ? " melding" : " meldingen") : "✅ Quest-check OK" })
+      ]),
+      button
+    ]);
+  }
+  const QUEST_SUMMARY_FIELD = { label: "Zo werkt hij", ui: { icon: "📜", control: "questSteps" },
+    help: { waarvoor: "Hoe de quest start, wie hem mag doen en wat de speler moet doen.", goed: "Klik 📜 Quest Builder: tab 🚪 Start, 🪜 Stappen, 👾 Verschijnen en 🧪 Testen.", probleem: "⚠️ melding → open de Quest Builder; de tab 🧪 Testen zegt wat er mis is." } };
+  bench.refControl = refControl;
+  bench.refListControl = refListControl;
 
   // ---------- het paneel dat zichzelf tekent ----------
 
   // Tekent één document (of een nieuw document) uit het schema. Bestaande documenten slaan elke wijziging
   // meteen op (realtime, met Ctrl+Z); een nieuw document heeft een ✓ Maken-knop.
-  bench.renderForm = function renderForm(host, { kind, docKey = null, title = null, onDone = null, place = null, onPreview = null } = {}) {
+  // only = alleen deze velden; bare = zonder kop en knoppen (de Quest Builder tekent zo een paar velden in zijn eigen tab);
+  // onSaved = na opslaan dit doen in plaats van dit formulier opnieuw tekenen.
+  bench.renderForm = function renderForm(host, { kind, docKey = null, title = null, onDone = null, place = null, onPreview = null, skip = [], only = null, bare = false, onSaved = null, labels = null } = {}) {
     const spec = bench.spec(kind);
     host.replaceChildren();
     if (!spec) { host.append(el("div", { class: "wbdEmpty", text: "Onbekende soort." })); return; }
@@ -641,7 +730,7 @@ export function createDocBench(options = {}) {
       el("div", { class: "wbdHeadText" }, [el("div", { class: "wbdHeadKind", text: isNew ? "Nieuw: " + spec.label : spec.label }), el("div", { class: "wbdHeadName", text: title || (isNew ? "" : docName(doc)) })])
     ]);
     if (doc?.archived) head.append(el("span", { class: "wbdBadge", text: "gearchiveerd" }));
-    host.append(head);
+    if (!bare) host.append(head);
 
     const visible = el("div", { class: "wbdFields" });
     const more = el("div", { class: "wbdFields wbdMore", hidden: true });
@@ -667,19 +756,29 @@ export function createDocBench(options = {}) {
     };
     // ui.when: { key, is: [...] } = alleen tonen als dat andere veld zo staat (bijv. Geneest alleen bij soort Genezen).
     const shownWhen = (field) => {
+      // ui.hideWhen: weg zodra dat andere veld gevuld is (snelle questvelden zodra de quest eigen stappen heeft).
+      if (field.ui?.hideWhen && !emptyValue(body[field.ui.hideWhen])) return false;
       const when = field.ui?.when;
       if (!when) return true;
-      const current = emptyValue(body[when.key]) ? spec.fields[when.key]?.default : body[when.key];
+      // Een pad (bijv. "start.mode") kijkt in een object-veld; fallback = de waarde als het leeg is.
+      const value = String(when.key).split(".").reduce((part, name) => (part && typeof part === "object" ? part[name] : undefined), body);
+      const current = emptyValue(value) ? (when.fallback !== undefined ? when.fallback : spec.fields[when.key]?.default) : value;
       return when.is.includes(current);
     };
     for (const [key, field] of Object.entries(spec.fields)) {
       if (field.ui?.place === "viewport") { viewportOnly.push([key, field]); continue; }
       if (field.ui?.place !== where) continue;
+      if (skip.includes(key) || (only && !only.includes(key))) continue;
       if (kind === "area" && field.ui?.soorten && !field.ui.soorten.includes(areaSoort(body))) continue;
       if (!shownWhen(field)) continue;
       const onChange = async (next) => {
         // Ombouw stap 2: soort wisselen houdt de punten; de instellingen van de oude soort gaan weg.
         if (kind === "area" && key === "soort") {
+          if (!isNew && areaSoort(body) === "pad" && next !== "pad") {
+            setStatus("Een Weg is een vast wegennet en kan geen ander vlak worden.", "error");
+            rerender();
+            return;
+          }
           const converted = convertAreaSoort(body, next || "deelgebied");
           for (const old of Object.keys(body)) delete body[old];
           Object.assign(body, converted);
@@ -704,27 +803,57 @@ export function createDocBench(options = {}) {
         if (isNew && key === spec.idField) bench.draft.idTouched = true;
         if (key === "displayName" && isNew && spec.idField && !bench.draft.idTouched) {
           const prefix = { item_definition: "item", ability: "ability", loot_table: "loot", resource_definition: "resource", actor_archetype: "actor",
-            currency: "currency", npc: "npc", quest: "quest", recipe: "recipe", placed_model: "model", player_class: "class",
-            terrain_texture: "tex", terrain_stamp: "stamp", terrain_water: "water" }[kind];
+            currency: "currency", npc: "npc", portal: "portal", quest: "quest", recipe: "recipe", placed_model: "model", player_class: "class",
+            terrain_texture: "tex", terrain_stamp: "stamp", terrain_water: "water", world_flag: "flag" }[kind];
           if (prefix && next) body[spec.idField] = prefix + "." + slug(next);
         }
         if (isNew && !spec.singleton) { rerender(); return; }
         try { await saveDoc(kind, doc, body, spec.label + " · " + field.label); } catch {}
-        rerender();
+        if (onSaved) onSaved(); else rerender();
       };
       if (onPreview && !isNew) onChange.preview = (next) => onPreview(Object.assign({}, body, { [key]: next }));
+      if (field.ui?.control === "questSteps") {
+        visible.append(fieldRow(key, QUEST_SUMMARY_FIELD, questSummary(body, doc), true));
+        continue;
+      }
+      // Start en voorwaarden tekent de Quest Builder zelf (tab 🚪 Start).
+      if (field.ui?.control === "questStart" || field.ui?.control === "questSpawns") continue;
       if (field.ui?.control === "areaSettings") {
         const rows = areaSettingsRows(field, body, onChange);
         visible.append(...rows.main);
         more.append(...rows.extra);
         continue;
       }
-      const row = fieldRow(key, field, control(key, field, body, isNew, onChange), ["loot", "refList", "assetList"].includes(field.ui?.control));
+      const shown = labels && labels[key] ? Object.assign({}, field, { label: labels[key] }) : field;
+      const lockedRoadType = kind === "area" && key === "soort" && !isNew && areaSoort(body) === "pad";
+      const fieldControl = lockedRoadType
+        ? el("div", { class: "wbdNote", text: "🛣️ Weg is een vast type en kan niet in een ander vlak worden veranderd." })
+        : control(key, field, body, isNew, onChange);
+      const row = fieldRow(key, shown, fieldControl, ["loot", "refList", "assetList"].includes(field.ui?.control) || field.ui?.multiline);
       if (field.ui?.group) groupBox(field.ui.group).fields.append(row);
-      else (field.ui?.more ? more : visible).append(row);
+      else (field.ui?.more && !bare ? more : visible).append(row);
+    }
+    // Quest Builder stap 3: een Questgebied snel als cirkel of rechthoek met een maat in meters (vrij = punten slepen).
+    if (kind === "area" && where === "werkbank" && !isNew && doc && areaSoort(body) === "questgebied") {
+      const now = areaCenterMm(body.pointsMm);
+      const size = el("input", { type: "number", class: "wbdNumber", min: "1", max: "500", step: "1", value: String(Math.max(1, Math.round(now.radius / 1000))), title: "Straal (cirkel) of halve breedte (rechthoek) in meters" });
+      const shapeTo = (make, label) => async () => {
+        const meters = Math.max(1, Math.min(500, Number(size.value) || 10));
+        body.pointsMm = make(now.x, now.z, meters * 1000);
+        try { await saveDoc(kind, doc, body, "Questgebied · " + label + " " + meters + " m"); } catch {}
+        rerender();
+      };
+      const circle = el("button", { type: "button", class: "wbdChoice", text: "⭕ Cirkel" });
+      const rect = el("button", { type: "button", class: "wbdChoice", text: "⬛ Rechthoek" });
+      circle.addEventListener("click", shapeTo(areaCirclePointsMm, "cirkel"));
+      rect.addEventListener("click", shapeTo(areaRectPointsMm, "rechthoek"));
+      visible.append(fieldRow("questArea", { label: "Vorm (m)", ui: { icon: "⭕" },
+        help: { waarvoor: "Maak het gebied een cirkel (straal in meter) of rechthoek (halve breedte in meter) op dezelfde plek.", goed: "10 tot 40 m voor een zoekgebied.", probleem: "Andere vorm nodig → sleep de punten in de 3D-view (F = punt erbij)." } },
+        el("div", { class: "wbdInline" }, [size, circle, rect])));
     }
     for (const [name, entry] of groups) entry.toggle.textContent = (entry.fields.hidden ? "▸ " : "▾ ") + name + " (" + entry.fields.childElementCount + ")";
     host.append(visible);
+    if (bare) return;
     if (more.childElementCount) {
       const toggle = el("button", { type: "button", class: "wbdMoreToggle", "aria-expanded": "false", text: "⚙️ meer (" + more.childElementCount + ")" });
       toggle.addEventListener("click", () => {
@@ -781,7 +910,7 @@ export function createDocBench(options = {}) {
     if (actions.childElementCount) host.append(actions);
 
     function rerender() {
-      bench.renderForm(host, { kind, docKey: isNew ? null : doc.docKey, title, onDone, place });
+      bench.renderForm(host, { kind, docKey: isNew ? null : doc.docKey, title, onDone, place, skip, only, bare, onSaved, labels });
     }
   };
 

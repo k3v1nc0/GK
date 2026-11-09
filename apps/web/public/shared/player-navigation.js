@@ -1,4 +1,5 @@
 import { ensureEdgeField, groundHeightAt, isPointOnWalkableSurface, resolveMovementCandidateInto, resolveWalkabilitySource } from "./movement-kernel.js";
+import { buildRoadGraph, planRoadRoute, roundRoadCorners } from "./road-network.js?v=20261108-roads6";
 
 function bounds(entry) {
   if (Number.isFinite(entry.minX)) return entry;
@@ -248,11 +249,81 @@ export function createPlayerNavigator(options = {}) {
     }
     return result(false, [], { reason: "no_path" });
   }
+  // Wegennet (🛣️ Weg): naar het dichtstbijzijnde stuk weg, over de weg, en eraf waar de weg het dichtst bij
+  // het doel komt. Elk stuk zoekt met dezelfde botsing als hierboven (om bomen en huizen heen).
+  // null = niet via de weg (kort stukje, geen weg in de buurt, of naast de weg is korter): dan de gewone route.
+  const roadGraph = buildRoadGraph(index.roads || []);
+  const routeLength = (from, points) => {
+    let length = 0;
+    let last = from;
+    for (const p of points) { length += Math.hypot(p.x - last.x, p.z - last.z); last = p; }
+    return length;
+  };
+  function searchRoadPath(start, goal, request) {
+    if (!roadGraph.edges.length) return null;
+    const direct = Math.hypot(goal.x - start.x, goal.z - start.z);
+    const origin = { ...point(start.x, start.z), y: start.y ?? groundHeightAt(index, start.x, start.z) };
+    const destination = point(goal.x, goal.z);
+    const directClear = lineClear(origin, destination);
+    // Een korte vrije klik hoeft niet onnodig de weg op. Is de rechte lijn
+    // geblokkeerd (water, rots of een obstakel), dan mag de weg ook dichtbij
+    // worden gebruikt om de veilige en kortste verbinding te vinden.
+    const minDistance = Number.isFinite(index.roadMinDistance) ? index.roadMinDistance : 20;
+    if (directClear && !(direct >= minDistance)) return null;
+    // Kevin 8-11: dichtbij (bv. naast een NPC in het gras) gewoon lopen, ook als er iets tussen staat (de NPC zelf, een boom).
+    // Alleen als de gewone looproute zelf langer is dan "Weg pas vanaf" (water ertussen, brug ver weg) mag de weg.
+    if (direct < minDistance) {
+      try {
+        const plain = searchPath(start, goal, { ...request, maxExpanded: Math.min(Number(request.maxExpanded) || 3000, 3000) });
+        if (plain.ok && routeLength(start, plain.points) <= minDistance) return plain;
+      } catch (error) {
+        if (error !== budgetExceeded) throw error;
+      }
+    }
+    const weight = Math.max(1, Number(index.roadPreference) || 2);
+    const candidateCount = Math.min(16, roadGraph.edges.length);
+    const plan = planRoadRoute(roadGraph, start, goal, {
+      offroadWeight: weight,
+      candidates: candidateCount,
+      // Kies bij voorkeur een op-/afstappunt dat zonder water of collider
+      // ertussen bereikbaar is. Als geen kandidaat rechtstreeks bereikbaar is,
+      // zoekt searchPath hieronder alsnog een omweg.
+      entryAllowed: (entry) => lineClear(origin, point(entry.x, entry.z)),
+      exitAllowed: (exit) => lineClear(point(exit.x, exit.z), destination)
+    });
+    if (!plan || (directClear && plan.cost >= weight * direct)) return null;
+    const beforeChecks = checks;
+    const points = [];
+    let cursor = start;
+    const leg = (target, legRequest) => {
+      const found = searchPath(cursor, target, legRequest);
+      if (!found.ok || !found.points.length) return false;
+      for (const p of found.points) {
+        const last = points[points.length - 1] || cursor;
+        if (Math.hypot(last.x - p.x, last.z - p.z) > 0.05) points.push(p);
+      }
+      cursor = found.points[found.points.length - 1];
+      return true;
+    };
+    // Bochten afronden (ook de bocht de weg op en eraf), zodat niemand scherp door de hoek gaat.
+    const radius = Number.isFinite(index.roadCornerRadius) ? index.roadCornerRadius : 4;
+    const targets = roundRoadCorners([{ x: start.x, z: start.z }, ...plan.points, { x: goal.x, z: goal.z }], radius).slice(1, -1);
+    // Naar de weg toe mag net zo ver zoeken als een gewone klik; over de weg alleen kleine omwegen.
+    for (let i = 0; i < targets.length; i += 1) {
+      if (!leg(targets[i], i === 0 ? { ...request, arrivalRadius: 0 } : { maxExpanded: 4000 })) return null;
+    }
+    if (!leg(goal, request)) return null;
+    return { ok: true, points, expanded, checks: checks - beforeChecks, road: true };
+  }
   function findPath(start, goal, request = {}) {
     const beforeChecks = checks;
     expanded = 0;
     checkLimit = Number.isFinite(request.maxChecks) ? checks + Math.max(0, request.maxChecks) : Infinity;
     try {
+      if (request.roads && [start?.x, start?.z, goal?.x, goal?.z].every(Number.isFinite)) {
+        const viaRoad = searchRoadPath(start, goal, request);
+        if (viaRoad) return viaRoad;
+      }
       return searchPath(start, goal, request);
     } catch (error) {
       if (error !== budgetExceeded) throw error;

@@ -88,9 +88,9 @@ export function createDocDrop({ bench, getRuntime, getActiveZoneId, onSelect, se
     if (!docKey) return false;
     event.preventDefault();
     const source = bench.doc(docKey);
-    const kinds = ["item_definition", "actor_archetype", "resource_definition", "npc", "placed_model"];
+    const kinds = ["item_definition", "actor_archetype", "resource_definition", "npc", "portal", "placed_model"];
     if (!source || source.archived || !kinds.includes(source.kind)) {
-      setStatus("Sleep een item, vijand, grondstof of NPC op de wereld; sleep losse modellen vanuit Assets.", "");
+      setStatus("Sleep een item, vijand, grondstof, NPC of portal op de wereld; sleep losse modellen vanuit Assets.", "");
       return true;
     }
     const runtime = getRuntime();
@@ -120,6 +120,9 @@ export function createDocDrop({ bench, getRuntime, getActiveZoneId, onSelect, se
         x, y, z
       });
       await save("placed_model", null, copyBody, "Model opnieuw geplaatst");
+    } else if (source.kind === "portal") {
+      // Portals (8-11): net als een NPC staat elke portal maar op één plek; slepen = verplaatsen.
+      await save("portal", source, Object.assign({}, source.body, { x, y, z }), "Portal verplaatst");
     } else {
       await save("npc", source, Object.assign({}, source.body, { x, y, z }), "NPC verplaatst");
     }

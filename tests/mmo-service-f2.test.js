@@ -58,3 +58,48 @@ test("join-ticket vereist een sessie", function () {
     mmo.shutdown();
   }
 });
+
+test("wereldsnapshots bevatten alleen live/grace-spelers en bewaren hun naam", function () {
+  const { mmo } = service();
+  try {
+    const row = { player_id: "player_1", world_id: "world.main", x: 1, y: 0, z: 2, rotation_y: 0, revision: 3, animation_state: "idle", moving: false };
+    mmo.playerStateCache.set("player_1::world.main", row);
+    mmo.primaryPresenceByPlayerId.set("player_1", {
+      playerId: "player_1", worldId: "world.main", displayName: "Kevin", modelAssetId: "model.ridder", selectedCharacterId: "class.ridder"
+    });
+
+    assert.deepEqual(mmo.getWorldPlayerStates("world.main"), [], "oude cachepositie is niet online");
+    mmo.pendingDisconnectByPlayerId.set("player_1", { playerId: "player_1", worldId: "world.main" });
+    assert.deepEqual(mmo.getWorldPlayerStates("world.main"), [row], "grace-speler blijft tijdelijk zichtbaar");
+    assert.deepEqual(mmo.snapshotPlayerStateRecord(row), {
+      playerId: "player_1", displayName: "Kevin", modelAssetId: "model.ridder", selectedCharacterId: "class.ridder", connectedSessionCount: 0,
+      worldId: "world.main", zoneId: null, spawnId: null, x: 1, y: 0, z: 2, rotationY: 0, moving: false,
+      animationState: "idle", revision: 3, lastProcessedInputSeq: 0, activeControllerSessionId: null, controllerEpoch: 0, teleport: false
+    });
+  } finally {
+    mmo.shutdown();
+  }
+});
+
+test("definitief vertrek ruimt de avatarcache op", function () {
+  const { mmo } = service();
+  try {
+    const row = { player_id: "player_2", world_id: "world.main", x: 0, y: 0, z: 0, rotation_y: 0, revision: 1, updated_at: "t" };
+    mmo.playerStateCache.set("player_2::world.main", row);
+    mmo.latestInputByPlayerId.set("player_2", { input: {} });
+    mmo.dirtyPlayerIdsByWorldId.set("world.main", new Set(["player_2"]));
+    let left = null;
+    mmo.broadcastRemotePlayerLeft = (connection) => { left = connection.player; };
+
+    assert.equal(mmo.finalizePendingPlayerDisconnect({
+      playerId: "player_2", worldId: "world.main", profile: { id: "player_2", display_name: "Anna" },
+      userId: "user_2", sessionId: "session_2", timer: null
+    }), true);
+    assert.equal(left.display_name, "Anna");
+    assert.equal(mmo.playerStateCache.has("player_2::world.main"), false);
+    assert.equal(mmo.latestInputByPlayerId.has("player_2"), false);
+    assert.equal(mmo.dirtyPlayerIdsByWorldId.has("world.main"), false);
+  } finally {
+    mmo.shutdown();
+  }
+});

@@ -193,7 +193,9 @@ export function createEmptyWalkabilityIndex() {
     // Ronde 3: watervlakken (Niet in / Doorheen / IJs), zie terrain.js.
     waters: [],
     // Dichte randen van loopvlakken (onzichtbare muren), zie walkableWallBlocks.
-    walls: []
+    walls: [],
+    // Wegennet (🛣️ Weg): lijnen waar de routezoeker bij klikken overheen loopt (zie road-network.js).
+    roads: []
   };
 }
 
@@ -681,6 +683,13 @@ export function createWalkabilityIndex(worldData, options = {}) {
   // Route bij klikken (Instellingen > Lopen en botsen): hoe groot de routezoeker mag zoeken.
   index.routeMaxExpanded = num(waterWalk?.routeSearchSize, 16000);
   index.routeMaxSpacing = num(waterWalk?.routeMaxSpacing, 8);
+  // Wegen (groep 🛣️ Wegen): naast de weg lopen telt zoveel keer zo zwaar; korter dan roadMinDistance = recht erop af.
+  index.roadPreference = Math.min(5, Math.max(1, num(waterWalk?.roadPreference, 2)));
+  index.roadMinDistance = Math.max(0, num(waterWalk?.roadMinDistance, 20));
+  index.roadCornerRadius = Math.min(20, Math.max(0, num(waterWalk?.roadCorner, 4)));
+  index.roads = (Array.isArray(worldData?.terrain?.roads) ? worldData.terrain.roads : [])
+    .map(function (road) { return { id: road?.id || null, points: normalizeWorldPointList(road?.points) }; })
+    .filter(function (road) { return road.points.length >= 2; });
   ensureEdgeField(index);
   index.waters = (Array.isArray(worldData?.terrain?.water) ? worldData.terrain.water : []).map(normalizeTerrainWater).filter(Boolean);
 
@@ -756,7 +765,9 @@ export function createWalkabilityIndex(worldData, options = {}) {
       closedEdges: Array.isArray(walkable?.closedEdges) ? walkable.closedEdges.slice() : [],
       points: points,
       mode: mode,
-      triangles: mode === "polygon" ? triangulateWalkableSurface(points) : []
+      triangles: mode === "polygon" ? triangulateWalkableSurface(points) : [],
+      // Kevin 8-11: alleen als een vlag aan (of uit) staat (zie walkabilityForFlags).
+      ...(walkable?.flag?.id ? { flag: { id: String(walkable.flag.id), on: walkable.flag.on !== false } } : {})
     });
     // Dichte randen: rand i loopt van punt i naar punt i+1 (de laatste terug naar het eerste).
     if (mode === "polygon" && Array.isArray(walkable?.closedEdges)) {
@@ -765,6 +776,7 @@ export function createWalkabilityIndex(worldData, options = {}) {
         const a = points[edge];
         const b = points[(edge + 1) % points.length];
         index.walls.push({
+          ...(walkable?.flag?.id ? { flag: { id: String(walkable.flag.id), on: walkable.flag.on !== false } } : {}),
           ax: a.x, az: a.z, ay: num(a.y, y), bx: b.x, bz: b.z, by: num(b.y, y),
           minX: Math.min(a.x, b.x), maxX: Math.max(a.x, b.x), minZ: Math.min(a.z, b.z), maxZ: Math.max(a.z, b.z)
         });
@@ -781,6 +793,25 @@ export function createWalkabilityIndex(worldData, options = {}) {
   return index;
 }
 
+
+// Kevin 8-11: dezelfde index zonder de loopvlakken (en hun dichte randen) die er voor deze speler niet zijn.
+// passes(flag) zegt of een vlag-poort klopt. Geeft de index zelf terug als er niets weg hoeft (geen kopie).
+// cache (Map) bewaart per combinatie één kopie; de afgeronde rand rekent elke kopie zelf (onder een brug is anders).
+export function walkabilityForFlags(index, passes, cache = null) {
+  const walkables = Array.isArray(index?.walkables) ? index.walkables : [];
+  const gone = walkables.filter((walkable) => walkable?.flag && !passes(walkable.flag));
+  if (!gone.length) return index;
+  const key = gone.map((walkable) => walkable.id).join("|");
+  if (cache && cache.has(key)) return cache.get(key);
+  const goneIds = new Set(gone.map((walkable) => walkable.flag.id + "|" + walkable.flag.on));
+  const variant = Object.assign({}, index, {
+    walkables: walkables.filter((walkable) => !gone.includes(walkable)),
+    walls: (Array.isArray(index.walls) ? index.walls : []).filter((wall) => !wall?.flag || !goneIds.has(wall.flag.id + "|" + wall.flag.on))
+  });
+  ensureEdgeField(variant);
+  if (cache) cache.set(key, variant);
+  return variant;
+}
 
 let activeWalkabilityIndex = createEmptyWalkabilityIndex();
 
@@ -875,7 +906,9 @@ export function solidCollisionEntriesForWorld(world) {
       x: x,
       z: z,
       radius: radius,
-      enabled: true
+      enabled: true,
+      // Quest Builder stap 9: alleen als een vlag aan (of uit) staat; per speler gefilterd.
+      ...(entity.flag?.id ? { flag: { id: String(entity.flag.id), on: entity.flag.on !== false } } : {})
     });
   }
   return entries;

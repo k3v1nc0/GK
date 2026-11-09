@@ -1,22 +1,23 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261103-model1";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261108-portals3";
 import { edgeBetweenPoints, editClosedEdges } from "./walkable-edge-tools.js?v=20261031-randen1";
 import { createTerrainEditor } from "./terrain-editor.js?v=20261102-terrein10";
-import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261016-scatter-pattern2";
-import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20261006-portal-pair2";
+import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261106-perf1";
+import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20261106-perf1";
 import {
   normalizeCanonicalId,
   normalizeReferenceKind,
   normalizeReferenceList,
   normalizeTagList,
   normalizeTagQuery
-} from "../shared/node-contract.js?v=20261006-portal-pair2";
-import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261006-portal-pair2";
-import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261103-water1";
-import { createAssetPicker } from "./mini-asset-picker.js?v=20261028-picker1";
+} from "../shared/node-contract.js?v=20261106-perf1";
+import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261106-perf1";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261108-portals2";
+import { createAssetPicker } from "./mini-asset-picker.js?v=20261106-thumbs150";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
-import { createDocDrop, docKeyFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261030-terrein6";
-import { AREA_EDITOR_PREFIX, AREA_SOORTEN, AREA_SOORT_ORDER, areaBodyFromNodePatch, areaNodeValues, areaSoort } from "../shared/area-soorten.js?v=20261027-om2b";
-import { removeVisualObjects, visualModelsForRelation, visualObjectRelations } from "./visual-object-relations.js?v=20261007-visual-builder2";
+import { createDocDrop, docKeyFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261108-portals1";
+import { createRoadEditor } from "./road-editor.js?v=20261108-roads7";
+import { AREA_EDITOR_PREFIX, AREA_SOORTEN, AREA_SOORT_ORDER, areaBodyFromNodePatch, areaCirclePointsMm, areaNodeValues, areaSoort } from "../shared/area-soorten.js?v=20261108-roads7";
+import { removeVisualObjects, visualModelsForRelation, visualObjectRelations } from "./visual-object-relations.js?v=20261106-perf1";
 import { FIELD_HELP_STATUSES, createSemanticFieldHelpRegistry, formatSemanticFieldHelp, semanticFieldHelpEntry } from "./semantic-field-help.js?v=20261012-semantic-help1";
 import {
   ASSET_ROLE_LABELS,
@@ -34,7 +35,7 @@ import {
   optionLabel,
   relationScope,
   thumbnailStandIns
-} from "./content-workbench.js?v=20261022-workbench-w3";
+} from "./content-workbench.js?v=20261106-perf1";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -61,6 +62,7 @@ const EDITOR_HEALTHCHECK_STALE_MS = 45000;
 const EDITOR_HEALTHCHECK_INTERVAL_MS = 15000;
 const EDITOR_AUTOSAVE_DELAY_MS = 45000;
 const EDITOR_AUTOSAVE_RETRY_MS = 15000;
+const EDITOR_RESUME_SAVE_DELAY_MS = 900;
 
 const HEAD = 34;
 const PAD = 8;
@@ -133,7 +135,6 @@ const AUTHORING_ROUTE_STORAGE_KEY = "gk.editorAuthoringRoute";
 const AUTHORING_INDICATORS_STORAGE_KEY = "gk.editorAuthoringIndicators";
 const RUNTIME_NAMEPLATES_STORAGE_KEY = "gk.editorRuntimeNameplates";
 const CURRENT_GROUP_STORAGE_KEY = "gk.editorCurrentGroupId";
-const EDITOR_LAYOUT_STORAGE_KEY = "gk.editorLayoutSizes.v2";
 const EDITOR_MOBILE_PANEL_STORAGE_KEY = "gk.editorMobilePanel";
 const ALL_LAYOUT_STORAGE_KEY = "gk.editorAllLayouts.v2";
 const NODE_PANE_VIEWS = ["tools", "graph", "viewport", "assets"];
@@ -381,6 +382,7 @@ const state = {
   },
   statusMessage: "",
   statusKind: "",
+  publishBlocker: null,
   connection: {
     status: navigator.onLine === false ? "disconnected" : "standby",
     pending: 0,
@@ -507,7 +509,6 @@ const el = {
   graphZoomOutButton: document.querySelector("#graphZoomOutButton"),
   graphZoomInButton: document.querySelector("#graphZoomInButton"),
   zoomResetButton: document.querySelector("#zoomResetButton"),
-  layoutResizers: Array.from(document.querySelectorAll(".layout > .layoutResizer")),
   viewportSelectionBox: document.querySelector("#viewportSelectionBox"),
   allLayoutRoot: document.querySelector("#allLayoutRoot"),
   allLayoutOverflow: document.querySelector("#allLayoutOverflow"),
@@ -523,7 +524,6 @@ const el = {
   oldModeMenu: document.querySelector("#oldModeMenu"),
   settingsMenuPanel: document.querySelector("#settingsMenuPanel"),
   settingsCardPanel: document.querySelector("#settingsCardPanel"),
-  workbenchRelationResizer: document.querySelector("#workbenchRelationResizer"),
   workbenchSelectionPanel: document.querySelector("#workbenchSelectionPanel"),
   workbenchLibraryPanel: document.querySelector("#workbenchLibraryPanel"),
   workbenchRelationStrip: document.querySelector("#workbenchRelationStrip"),
@@ -557,10 +557,10 @@ let viewportTouchEditSuppress = false;
 // setMobilePanel() -> updateAllLayoutMode()) can never hit these before their `let`
 // initializer has run - that previously threw a TDZ ReferenceError that silently
 // aborted the whole script's startup.
-let allLayoutActive = false;
 let allLayoutLastUsedViews = new Set();
 let editorLayoutServerReady = false;
 let editorLayoutSaveTimer = null;
+let loadedEditorResumeState = null;
 const POINT_LONG_PRESS_MS = 520;
 const POINT_LONG_PRESS_MOVE_PX = 9;
 const floatingPanelLiveStates = new Map();
@@ -913,11 +913,32 @@ const docBench = createDocBench({
   settingsCardExtra: function (kind, host) { settingsCardExtra(kind, host); },
   onChanged: function () {
     updateDocPendingBadge();
-    refreshViewportForDocs();
+    // 🛣️ De Weg staat niet in de 3D-wereld zelf (alleen de punten en lijnen erover): niet de hele wereld opnieuw laden.
+    if (roadSaving) roadEditor.sync(); else { refreshViewportForDocs(); roadEditor.sync(); }
     if (state.editorMode === "workbench") renderWorkbenchLibrary(workbenchContext());
     if (state.editorMode === "settings" && el.settingsMenuPanel) docBench.renderSettingsMenu(el.settingsMenuPanel, renderSettingsCardOnly);
     if (state.editorMode === "terrain") terrainEditor.render();
   }
+});
+
+// 🛣️ Weg (8-11): het wegennet heeft een eigen gereedschap in de 3D-view (punten en lijnen, F/G/R/T, Ctrl+C/V/D).
+let roadSaving = false;
+const roadEditor = createRoadEditor({
+  runtime: function () { return runtime; },
+  roadDocs: roadAreaDocs,
+  isActive: roadEditorActive,
+  select: function (docKey) { selectAreaDoc(docKey); },
+  save: async function (doc, body, label) {
+    roadSaving = true;
+    try { return await docBench.saveDoc("area", doc, body, label); } finally { roadSaving = false; }
+  },
+  archive: function (docKey) { return docBench.archiveDoc(docKey, "Weg samengevoegd"); },
+  setStatus: function (message, kind) { setStatus(message, kind); },
+  groundAt: function (clientX, clientY) { return terrainGroundPointFromClient(clientX, clientY); },
+  lastPointer: function () { return terrainLastPointer; },
+  suppressClick: function () { suppressNextViewportRuntimeClick(); },
+  canvasTarget: function (event) { return terrainCanvasTarget(event); },
+  entityAtPointer: function () { return runtimeEntityIdAtLastPointer(); }
 });
 
 // Wereld tekenen: de tab Terrein (hoogte, stempels, verf en grond; opslaan bij Opslaan of de tab verlaten).
@@ -1069,6 +1090,11 @@ function selectAreaDoc(docKey, options = {}) {
   if (options.focus) focusTerrainOrSelected();
   const doc = docBench.doc(docKey);
   const def = doc ? AREA_SOORTEN[areaSoort(doc.body)] : null;
+  if (def?.road) {
+    roadEditor.render();
+    roadEditor.hint();
+    return;
+  }
   setStatus((def ? def.icon + " " + def.label : "Vlak") + " gekozen. Sleep punten; G/R/T = hele vlak; F = punt erbij; Del = punt weg.", "");
 }
 
@@ -1095,19 +1121,28 @@ async function createAreaDoc(soort) {
   if (!docBench.workspace) await docBench.load();
   const def = AREA_SOORTEN[soort];
   if (!def) return;
+  // 🛣️ Er is maar één Weg in het spel: bestaat hij al, dan kiezen we die.
+  const existingRoad = def.road ? roadAreaDocs()[0] : null;
+  if (existingRoad) {
+    selectAreaDoc(existingRoad.docKey);
+    setStatus("🛣️ Er is maar één Weg; die is nu gekozen. F = punt erbij.", "");
+    return;
+  }
   const center = editorCameraGroundPoint() || { x: 0, z: 0 };
   const mm = function (value) { return Math.round(Number(value) * 1000); };
   const cx = Number(center.x) || 0;
   const cz = Number(center.z) || 0;
   const groundY = terrainGroundY();
   const corners = soort === "pad" ? [[-5, 0], [5, 0]] : [[-4, -4], [4, -4], [4, 4], [-4, 4]];
-  const pointsMm = corners.map(function (offset) {
+  // Questgebied: meteen een cirkel van 10 m (straal en vorm pas je aan in het paneel).
+  const pointsMm = soort === "questgebied" ? areaCirclePointsMm(mm(cx), mm(cz), 10000) : corners.map(function (offset) {
     const point = [mm(cx + offset[0]), mm(cz + offset[1])];
     if (def.height) point.push(mm(groundY + 0.35));
     return point;
   });
   const stamp = Date.now().toString(36);
   const body = { areaId: soort + ".vlak_" + stamp, displayName: def.label + " " + (docBench.docs("area").length + 1), soort: soort, shape: "polygon", pointsMm: pointsMm };
+  if (def.road) Object.assign(body, { displayName: "Wegennet", links: [[0, 1]] });
   try {
     const result = await docBench.saveDoc("area", null, body, def.label + " gemaakt");
     selectAreaDoc(result.docKey);
@@ -1238,73 +1273,6 @@ function hasInspectorSelection() {
   return Boolean(state.selectedNodeIds.length || state.selectedEdgeIds.length);
 }
 
-function setRootCssVar(name, value, persist = true) {
-  if (!name || !value) return;
-  document.documentElement.style.setProperty(name, value);
-  if (!persist) return;
-  try {
-    const stored = JSON.parse(window.localStorage.getItem(EDITOR_LAYOUT_STORAGE_KEY) || "{}");
-    stored[name] = value;
-    window.localStorage.setItem(EDITOR_LAYOUT_STORAGE_KEY, JSON.stringify(stored));
-  } catch {}
-}
-
-function applyStoredEditorLayoutSizes() {
-  try {
-    const stored = JSON.parse(window.localStorage.getItem(EDITOR_LAYOUT_STORAGE_KEY) || "{}");
-    const allowed = new Set([
-      "--tools-width",
-      "--graph-width",
-      "--viewport-width",
-      "--assets-width",
-      "--workbench-tools-width",
-      "--workbench-viewport-width",
-      "--workbench-assets-width",
-      "--workbench-relations-height",
-      "--mobile-tools-height",
-      "--mobile-graph-height",
-      "--mobile-viewport-height",
-      "--mobile-assets-height",
-      "--workbench-mobile-tools-height",
-      "--workbench-mobile-viewport-height",
-      "--workbench-mobile-assets-height"
-    ]);
-    for (const [name, value] of Object.entries(stored || {})) {
-      if (!allowed.has(name)) continue;
-      if (typeof value !== "string" || !/^\d+(\.\d+)?px$/.test(value)) continue;
-      document.documentElement.style.setProperty(name, value);
-    }
-  } catch {}
-}
-
-function persistEditorLayoutSizes() {
-  try {
-    const names = [
-      "--tools-width",
-      "--graph-width",
-      "--viewport-width",
-      "--assets-width",
-      "--workbench-tools-width",
-      "--workbench-viewport-width",
-      "--workbench-assets-width",
-      "--workbench-relations-height",
-      "--mobile-tools-height",
-      "--mobile-graph-height",
-      "--mobile-viewport-height",
-      "--mobile-assets-height",
-      "--workbench-mobile-tools-height",
-      "--workbench-mobile-viewport-height",
-      "--workbench-mobile-assets-height"
-    ];
-    const stored = {};
-    for (const name of names) {
-      const value = document.documentElement.style.getPropertyValue(name).trim();
-      if (value) stored[name] = value;
-    }
-    window.localStorage.setItem(EDITOR_LAYOUT_STORAGE_KEY, JSON.stringify(stored));
-  } catch {}
-}
-
 function setMobilePanel(panel, persist = true) {
   let next = ["all", "tools", "graph", "inspector", "viewport", "assets"].includes(panel) ? panel : "all";
   if (next === "inspector" && !hasInspectorSelection()) next = "graph";
@@ -1402,6 +1370,7 @@ function storeFloatingPanelState(panelId, panelState, deviceKey = floatingPanelD
       ...percentState
     };
     window.localStorage.setItem(EDITOR_FLOATING_PANELS_STORAGE_KEY, JSON.stringify(store));
+    scheduleEditorLayoutServerSave(EDITOR_RESUME_SAVE_DELAY_MS);
   } catch {}
 }
 
@@ -1773,6 +1742,24 @@ function captureUploadViewportRefreshTiming(durationMs) {
 function setStatus(message, kind) {
   state.statusMessage = message || "";
   state.statusKind = kind || "";
+  renderStatusLine();
+}
+
+function publishBlockerFromError(error) {
+  const errors = Array.isArray(error?.details?.errors) ? error.details.errors : [];
+  const first = errors[0] || null;
+  return {
+    code: first?.code || error?.code || "BUILD_BLOCKED",
+    docKey: first?.docKey || null,
+    editorTab: first?.editorTab || null,
+    stepId: first?.stepId || null,
+    spawnId: first?.spawnId || null,
+    message: first?.message || error?.message || "SAVE TO GAME is tegengehouden."
+  };
+}
+
+function setPublishBlocker(error) {
+  state.publishBlocker = error ? publishBlockerFromError(error) : null;
   renderStatusLine();
 }
 
@@ -2882,6 +2869,8 @@ function terrainTypeLabel(type) {
 
 function selectedTerrainNode() {
   const areaNode = selectedAreaDocNode();
+  // 🛣️ De Weg heeft een eigen gereedschap (road-editor.js), niet het puntengereedschap van de vlakken.
+  if (areaNode && isRoadAreaNode(areaNode)) return null;
   if (areaNode) return TERRAIN_TOOL_NODE_TYPES.has(areaNode.type) ? areaNode : null;
   if (state.viewportMarqueeSelection || state.selectedNodeIds.length !== 1) return null;
   const node = nodeById(state.selectedNodeId);
@@ -4399,6 +4388,8 @@ function terrainAllNodeMarkers() {
   for (const node of (state.graph.nodes || []).concat(areaDocNodes())) {
     if (node.id === selectedId) continue;
     if (isRetiredAreaNode(node)) continue;
+    // 🛣️ De Weg tekent zijn eigen punten en lijnen (road-editor.js).
+    if (isRoadAreaNode(node)) continue;
     if (TERRAIN_TOOL_NODE_TYPES.has(node.type)) {
       const points = terrainNodePoints(node);
       const geometry = terrainWalkableSurfaceGeometry(node, points);
@@ -4423,6 +4414,23 @@ function terrainAllNodeMarkers() {
   return markers;
 }
 
+function isRoadAreaNode(node) {
+  return Boolean(node?.areaDoc && node.type === "surface_layer");
+}
+
+// 🛣️ De Weg-documenten (actief); de gekozen eerst.
+function roadAreaDocs() {
+  if (!docBench.workspace) return [];
+  const list = docBench.docs("area").filter(function (doc) { return !doc.archived && AREA_SOORTEN[areaSoort(doc.body)]?.road; });
+  const chosen = docBench.selectedDocKey;
+  return list.sort(function (a, b) { return (b.docKey === chosen) - (a.docKey === chosen); });
+}
+
+function roadEditorActive() {
+  const node = selectedAreaDocNode();
+  return Boolean(node && isRoadAreaNode(node));
+}
+
 function pushTerrainOverlay(overlay, includeMarkers = true) {
   if (!runtime || typeof runtime.setTerrainEditorOverlay !== "function") return;
   if (overlay) {
@@ -4441,6 +4449,7 @@ function pushTerrainOverlay(overlay, includeMarkers = true) {
 }
 
 function syncTerrainToolPanel(includeMarkers = true) {
+  roadEditor.render();
   const summary = terrainSelectedNodeSummary();
   const node = summary?.node || null;
   const capabilities = summary?.capabilities || null;
@@ -4463,52 +4472,23 @@ function syncTerrainToolPanel(includeMarkers = true) {
 
 function renderStatusLine() {
   if (!el.statusText) return;
-  const parts = [];
-  if (state.viewportDebugKey) parts.push("key received: " + state.viewportDebugKey);
-  const scatterNode = selectedScatterNode();
-  if (scatterNode) {
-    const summary = scatterSelectedNodeSummary();
-    parts.push(scatterSelectionText(scatterNode));
-    if (summary?.points && summary.points.length) parts.push(summary.points.length + " points");
-    const selectedPointText = scatterSelectedPointText();
-    if (selectedPointText) parts.push(selectedPointText);
-  } else {
-    const terrainNode = selectedTerrainNode();
-    if (terrainNode) {
-      const summary = terrainSelectedNodeSummary();
-      const capabilities = summary?.capabilities || terrainNodeCapabilities(terrainNode);
-      parts.push(terrainSelectionText(terrainNode, capabilities));
-      if (summary?.points && summary.points.length) parts.push(summary.points.length + " points");
-      const selectedPointText = terrainSelectedPointText();
-      if (selectedPointText) parts.push(selectedPointText);
-    } else {
-      const modeLabel = viewportModeLabelText();
-      const snapshot = selectedTransformSnapshot();
-      const node = selectedModelNode();
-      const selectedId = runtimeSelectedEntityId() || runtimeNodeId(node);
-      parts.push(modeLabel);
-      if (state.viewportAxis) parts.push("as vergrendeld: " + state.viewportAxis.toUpperCase());
-      parts.push(selectedId ? "selected entity id: " + selectedId : "No mesh selected");
-      parts.push("transform active: " + (runtimeTransformActive() ? "yes" : "no"));
-      if (runtimeTransformActive()) {
-        const transformDebug = runtimeTransformDebugState();
-        if (transformDebug) {
-          parts.push("delta " + formatViewportNumber(transformDebug.dx, 0) + "," + formatViewportNumber(transformDebug.dy, 0));
-          parts.push("previews " + (transformDebug.previews || 0));
-          parts.push("changed " + (transformDebug.changed ? "yes" : "no"));
-        }
-      }
-      if (node) {
-        const source = snapshot
-          ? viewportVectorFromWorld(snapshot.position)
-          : viewportVectorFromWorld({ x: node.values.x, y: node.values.y, z: node.values.z });
-        parts.push("Loc X " + formatViewportNumber(source.x) + " Y " + formatViewportNumber(source.y) + " Z " + formatViewportNumber(source.z));
-      }
-    }
+  const blocker = state.publishBlocker;
+  const message = state.statusMessage;
+  el.statusText.replaceChildren();
+  el.statusText.className = "statusLine" + (blocker ? " error" : (state.statusKind ? " " + state.statusKind : ""));
+  el.statusText.hidden = !blocker && !message;
+  if (!blocker) {
+    if (message) el.statusText.textContent = message;
+    return;
   }
-  if (state.statusMessage) parts.push(state.statusMessage);
-  el.statusText.textContent = parts.join(" | ");
-  el.statusText.className = "statusLine" + (state.statusKind ? " " + state.statusKind : "");
+  const link = document.createElement("a");
+  link.href = "#";
+  link.textContent = "⚠ " + blocker.message;
+  link.addEventListener("click", function (event) {
+    event.preventDefault();
+    void openPublishBlocker(blocker);
+  });
+  el.statusText.appendChild(link);
 }
 
 function renderViewportControls(options = {}) {
@@ -5971,6 +5951,9 @@ async function boot() {
   updateDocPendingBadge();
   docBench.load().then(function () {
     updateDocPendingBadge();
+    // De Weg zit niet in de gewone werelddata. Vul zijn eigen overlay meteen
+    // zodra de documenten er zijn, dus ook na een verse pagina/serverstart.
+    roadEditor.sync();
     if (state.editorMode === "workbench") renderWorkbench();
     if (state.editorMode === "settings") void renderSettingsTab();
   }).catch(function (error) { console.warn("Documenten konden niet laden:", error?.message || error); });
@@ -6128,26 +6111,10 @@ async function boot() {
       setViewportAxis(null);
     },
     onLoadErrors: renderViewportErrors,
-    onEditorCameraChange: function (fields) {
-      const node = state.graph.nodes.find(function (n) { return n.type === "editor_camera"; });
-      if (!node) return;
-      patchValues(node.id, {
-        targetX: fields.targetX,
-        targetY: fields.targetY,
-        targetZ: fields.targetZ,
-        pitch: fields.pitch,
-        yaw: fields.yaw,
-        distance: fields.distance
-      }, {
-        historyLabel: "",
-        refreshViewport: false,
-        refreshValidation: false,
-        refreshGraph: false,
-        refreshEdgeList: false,
-        refreshInspector: false,
-        refreshAssetUsage: false,
-        countUnsaved: false
-      });
+    onEditorCameraChange: function () {
+      // Navigeren in de editor is gebruikersstatus, geen projectwijziging. De volledige
+      // live cameraview wordt via /api/editor/layout aan het account gekoppeld.
+      scheduleEditorLayoutServerSave(EDITOR_RESUME_SAVE_DELAY_MS);
       scheduleEditorMinimapRedraw();
     }
   });
@@ -6172,6 +6139,7 @@ async function boot() {
   setStatus("Klaar.", "success");
   renderUnsaved();
   void refreshViewport({ force: true }).then(function () {
+    restoreResumeCameraAfterWorldLoad();
     return refreshValidation();
   });
 }
@@ -6182,6 +6150,7 @@ async function reloadGraph(options = {}) {
   state.graph = graph;
   state.nodeTypes = graph.nodeTypes || state.nodeTypes || {};
   state.graphLoaded = true;
+  restoreResumeSelectionAfterGraphLoad();
   const rememberedModel = state.workbenchSelectedModelId
     ? graphNodeByIdInGraph(state.graph, state.workbenchSelectedModelId)
     : null;
@@ -16522,9 +16491,55 @@ function updateDocPendingBadge() {
   const actions = notLiveGraphActions();
   const pending = cards + actions;
   el.publishButton.dataset.pending = pending ? String(pending) : "";
+  if (!docBench.workspace) delete el.publishButton.dataset.publishState;
+  else el.publishButton.dataset.publishState = state.publishBlocker ? "blocked" : (pending ? "pending" : "saved");
   el.publishButton.title = pending
     ? [actions ? actions + " bewaarde actie(s) uit de 3D-view" : "", cards ? cards + " kaart(en)" : ""].filter(Boolean).join(" + ") + " nog niet in de game"
     : "Alles staat in de game";
+}
+
+async function openPublishBlocker(blocker) {
+  setGameTabOpen(false);
+  if (!docBench.workspace) await docBench.load();
+  const doc = blocker?.docKey ? docBench.doc(blocker.docKey) : null;
+  if (!doc) {
+    setEditorMode(String(blocker?.message || "").toLowerCase().includes("terrein") ? "terrain" : "workbench");
+    return;
+  }
+  const spec = docBench.spec(doc.kind);
+  if (spec?.place === "instellingen") {
+    docBench.settingsView = doc.kind;
+    docBench.childDocKey[doc.kind] = doc.docKey;
+    setEditorMode("settings");
+    return;
+  }
+  if (spec?.place === "terrein") {
+    setEditorMode("terrain");
+    return;
+  }
+  setEditorMode("workbench");
+  state.workbenchLibraryType = "doc:" + doc.kind;
+  if (doc.kind === "area") selectAreaDoc(doc.docKey, { focus: true });
+  else if (PLACED_DOC_KINDS.has(doc.kind)) selectPlacedDoc(doc.docKey);
+  else focusDoc(doc.docKey);
+  if (doc.kind !== "quest" || (!blocker.editorTab && !String(blocker.code || "").startsWith("QUEST_"))) return;
+  if (blocker.stepId) {
+    const saved = docBench.questOpenSteps || (docBench.questOpenSteps = {});
+    saved[doc.docKey] = Array.from(new Set([...(saved[doc.docKey] || []), blocker.stepId]));
+  }
+  openQuestBuilder(docBench, doc.docKey, { setStatus, tab: blocker.editorTab || "stappen" });
+  requestAnimationFrame(function () {
+    const attribute = blocker.spawnId ? "spawn" : "step";
+    const wanted = blocker.spawnId || blocker.stepId;
+    if (!wanted) return;
+    const target = Array.from(document.querySelectorAll(".qbOverlay [data-" + attribute + "]"))
+      .find((node) => node.dataset[attribute] === wanted);
+    if (target) {
+      target.scrollIntoView({ block: "center", behavior: "smooth" });
+      target.classList.add("qbFlash");
+      setTimeout(function () { target.classList.remove("qbFlash"); }, 1200);
+    }
+  });
 }
 
 function afterDocHistory() {
@@ -25256,7 +25271,7 @@ function clampNumber(value, min, max) {
 }
 
 function resizePair(startA, startB, delta, minA, minB) {
-  const total = Math.max(1, startA + startB);
+  const total = Math.max(0, startA + startB);
   const maxA = Math.max(minA, total - minB);
   const a = clampNumber(startA + delta, minA, maxA);
   return { a: a, b: Math.max(minB, total - a) };
@@ -25267,138 +25282,6 @@ function resizeRuntimeAfterLayout() {
     if (runtime && typeof runtime.render === "function") runtime.render("layout-resize");
     scheduleViewportFloatingPanelLayoutRefresh();
   });
-}
-
-function applyEditorLayoutResize(drag, event) {
-  if (!drag) return;
-  if (drag.mobile) {
-    const deltaY = event.clientY - drag.startY;
-    if (drag.id === "tools") {
-      const pair = resizePair(drag.toolsHeight, drag.workbench ? drag.viewportHeight : drag.graphHeight, deltaY, 0, 0);
-      setRootCssVar(drag.workbench ? "--workbench-mobile-tools-height" : "--mobile-tools-height", Math.round(pair.a) + "px", false);
-      setRootCssVar(drag.workbench ? "--workbench-mobile-viewport-height" : "--mobile-graph-height", Math.round(pair.b) + "px", false);
-    } else if (drag.id === "graph") {
-      const pair = resizePair(drag.graphHeight, drag.viewportHeight, deltaY, 0, 0);
-      setRootCssVar("--mobile-graph-height", Math.round(pair.a) + "px", false);
-      setRootCssVar("--mobile-viewport-height", Math.round(pair.b) + "px", false);
-    } else if (drag.id === "viewport") {
-      const pair = resizePair(drag.viewportHeight, drag.assetsHeight, deltaY, 0, 0);
-      setRootCssVar(drag.workbench ? "--workbench-mobile-viewport-height" : "--mobile-viewport-height", Math.round(pair.a) + "px", false);
-      setRootCssVar(drag.workbench ? "--workbench-mobile-assets-height" : "--mobile-assets-height", Math.round(pair.b) + "px", false);
-    }
-    resizeRuntimeAfterLayout();
-    return;
-  }
-
-  const deltaX = event.clientX - drag.startX;
-  if (drag.id === "tools") {
-    const pair = resizePair(drag.toolsWidth, drag.workbench ? drag.viewportWidth : drag.graphWidth, deltaX, 0, 0);
-    setRootCssVar(drag.workbench ? "--workbench-tools-width" : "--tools-width", Math.round(pair.a) + "px", false);
-    setRootCssVar(drag.workbench ? "--workbench-viewport-width" : "--graph-width", Math.round(pair.b) + "px", false);
-  } else if (drag.id === "graph") {
-    const pair = resizePair(drag.graphWidth, drag.viewportWidth, deltaX, 0, 0);
-    setRootCssVar("--graph-width", Math.round(pair.a) + "px", false);
-    setRootCssVar("--viewport-width", Math.round(pair.b) + "px", false);
-  } else if (drag.id === "viewport") {
-    const pair = resizePair(drag.viewportWidth, drag.assetsWidth, deltaX, 0, 0);
-    setRootCssVar(drag.workbench ? "--workbench-viewport-width" : "--viewport-width", Math.round(pair.a) + "px", false);
-    setRootCssVar(drag.workbench ? "--workbench-assets-width" : "--assets-width", Math.round(pair.b) + "px", false);
-  }
-  resizeRuntimeAfterLayout();
-}
-
-function beginEditorLayoutResize(event, resizer) {
-  if (!resizer || (event.button !== undefined && event.button !== 0)) return;
-  if (!el.layout) return;
-  event.preventDefault();
-  event.stopPropagation();
-  const tools = document.querySelector(".tools");
-  const graph = document.querySelector(".graphColumn");
-  const viewport = document.querySelector(".viewportColumn");
-  const assets = document.querySelector(".assetColumn");
-  const layoutRect = el.layout.getBoundingClientRect();
-  const drag = {
-    id: resizer.dataset.resizer,
-    mobile: isMobileLayout(),
-    workbench: state.editorMode === "workbench",
-    startX: event.clientX,
-    startY: event.clientY,
-    layoutWidth: layoutRect.width,
-    mobileMaxHeight: Math.max(180, layoutRect.height - 80),
-    toolsWidth: tools?.getBoundingClientRect().width || 250,
-    graphWidth: graph?.getBoundingClientRect().width || 320,
-    viewportWidth: viewport?.getBoundingClientRect().width || 320,
-    assetsWidth: assets?.getBoundingClientRect().width || 310,
-    toolsHeight: tools?.getBoundingClientRect().height || 220,
-    graphHeight: graph?.getBoundingClientRect().height || 340,
-    viewportHeight: viewport?.getBoundingClientRect().height || 360,
-    assetsHeight: assets?.getBoundingClientRect().height || 260
-  };
-  resizer.classList.add("active");
-  try { resizer.setPointerCapture?.(event.pointerId); } catch {}
-  function onMove(moveEvent) {
-    if (moveEvent.pointerId !== event.pointerId) return;
-    moveEvent.preventDefault();
-    applyEditorLayoutResize(drag, moveEvent);
-  }
-  function onUp(upEvent) {
-    if (upEvent.pointerId !== undefined && upEvent.pointerId !== event.pointerId) return;
-    resizer.classList.remove("active");
-    persistEditorLayoutSizes();
-    try { resizer.releasePointerCapture?.(event.pointerId); } catch {}
-    window.removeEventListener("pointermove", onMove, true);
-    window.removeEventListener("pointerup", onUp, true);
-    window.removeEventListener("pointercancel", onUp, true);
-  }
-  window.addEventListener("pointermove", onMove, true);
-  window.addEventListener("pointerup", onUp, true);
-  window.addEventListener("pointercancel", onUp, true);
-}
-
-function initEditorLayoutResizers() {
-  for (const resizer of el.layoutResizers || []) {
-    resizer.addEventListener("pointerdown", function (event) {
-      beginEditorLayoutResize(event, resizer);
-    });
-  }
-  if (el.workbenchRelationResizer) {
-    el.workbenchRelationResizer.addEventListener("pointerdown", beginWorkbenchRelationResize);
-  }
-}
-
-function beginWorkbenchRelationResize(event) {
-  const resizer = el.workbenchRelationResizer;
-  const strip = el.workbenchRelationStrip;
-  if (state.editorMode !== "workbench" || !resizer || !strip || !el.viewportWrap) return;
-  if (event.button !== undefined && event.button !== 0) return;
-  event.preventDefault();
-  event.stopPropagation();
-  const pointerId = event.pointerId;
-  const startY = event.clientY;
-  const stageElement = state.workbenchStage === "overview" && el.workbenchOverviewPanel ? el.workbenchOverviewPanel : el.viewportWrap;
-  const viewportHeight = stageElement.getBoundingClientRect().height;
-  const relationHeight = strip.getBoundingClientRect().height;
-  resizer.classList.add("active");
-  try { resizer.setPointerCapture?.(pointerId); } catch {}
-  function onMove(moveEvent) {
-    if (moveEvent.pointerId !== pointerId) return;
-    moveEvent.preventDefault();
-    const pair = resizePair(viewportHeight, relationHeight, moveEvent.clientY - startY, 0, 0);
-    setRootCssVar("--workbench-relations-height", Math.round(pair.b) + "px", false);
-    resizeRuntimeAfterLayout();
-  }
-  function onUp(upEvent) {
-    if (upEvent.pointerId !== undefined && upEvent.pointerId !== pointerId) return;
-    resizer.classList.remove("active");
-    persistEditorLayoutSizes();
-    try { resizer.releasePointerCapture?.(pointerId); } catch {}
-    window.removeEventListener("pointermove", onMove, true);
-    window.removeEventListener("pointerup", onUp, true);
-    window.removeEventListener("pointercancel", onUp, true);
-  }
-  window.addEventListener("pointermove", onMove, true);
-  window.addEventListener("pointerup", onUp, true);
-  window.addEventListener("pointercancel", onUp, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -25471,7 +25354,7 @@ function isValidAllLayoutNode(node, allowedViews = allPaneViews()) {
   if (node.dir === "row" || node.dir === "col") {
     return Array.isArray(node.children) && node.children.length >= 1 &&
       node.children.every(function (child) {
-        return child && typeof child.size === "number" && child.size > 0 && isValidAllLayoutNode(child.node, allowedViews);
+        return child && typeof child.size === "number" && child.size >= 0 && isValidAllLayoutNode(child.node, allowedViews);
       });
   }
   return false;
@@ -25486,6 +25369,42 @@ function defaultAllLayoutTrees() {
   };
 }
 
+// Een split in dezelfde richting als zijn ouder vormt visueel één rij of kolom.
+// Maak daar ook één siblinglijst van, zodat iedere resizer alleen zijn twee
+// directe buurpanelen wijzigt en een derde paneel op zijn plek blijft staan.
+function flattenAllLayoutSplits(node) {
+  if (!node || node.view || !Array.isArray(node.children)) return node;
+  const flattenedChildren = [];
+  for (const child of node.children) {
+    const childNode = flattenAllLayoutSplits(child.node);
+    if (childNode && childNode.dir === node.dir && Array.isArray(childNode.children)) {
+      const nestedTotal = childNode.children.reduce(function (total, nestedChild) {
+        return total + Math.max(0, Number(nestedChild.size) || 0);
+      }, 0);
+      if (nestedTotal > 0) {
+        for (const nestedChild of childNode.children) {
+          flattenedChildren.push({
+            size: Math.max(0, Number(child.size) || 0) * (Math.max(0, Number(nestedChild.size) || 0) / nestedTotal),
+            node: nestedChild.node
+          });
+        }
+        continue;
+      }
+    }
+    flattenedChildren.push({ size: Math.max(0, Number(child.size) || 0), node: childNode });
+  }
+  node.children = flattenedChildren;
+  return node;
+}
+
+function flattenAllLayoutTrees(layouts) {
+  if (!layouts || typeof layouts !== "object") return layouts;
+  for (const mode of Object.keys(layouts)) {
+    layouts[mode] = flattenAllLayoutSplits(layouts[mode]);
+  }
+  return layouts;
+}
+
 function isValidAllLayoutTrees(layouts) {
   return Boolean(layouts
     && isValidAllLayoutNode(layouts.nodes, NODE_PANE_VIEWS)
@@ -25496,7 +25415,7 @@ function isValidAllLayoutTrees(layouts) {
 function withSettingsLayout(layouts) {
   if (!isValidAllLayoutNode(layouts.settings, SETTINGS_PANE_VIEWS)) layouts.settings = defaultAllLayoutTree("settings");
   if (!isValidAllLayoutNode(layouts.terrain, TERRAIN_PANE_VIEWS)) layouts.terrain = defaultAllLayoutTree("terrain");
-  return layouts;
+  return flattenAllLayoutTrees(layouts);
 }
 
 function loadStoredAllLayoutTrees() {
@@ -25510,17 +25429,189 @@ function loadStoredAllLayoutTrees() {
   return defaultAllLayoutTrees();
 }
 
+function editorResumeClone(value) {
+  if (value === undefined) return null;
+  try { return JSON.parse(JSON.stringify(value)); } catch { return null; }
+}
+
+function currentEditorResumePayload() {
+  const capturedCamera = runtime && typeof runtime.captureViewState === "function"
+    ? runtime.captureViewState()
+    : loadedEditorResumeState?.cameraView || null;
+  return editorResumeClone({
+    version: 1,
+    savedAt: new Date().toISOString(),
+    cameraView: capturedCamera,
+    ui: {
+      mobilePanel: state.mobilePanel,
+      assetCardSize: state.assetCardSize,
+      floatingPanelDevice: floatingPanelDeviceKey(),
+      authoringRouteId: state.authoringRouteId,
+      currentGroupId: state.currentGroupId,
+      authoringOverviewActive: state.authoringOverviewActive,
+      selectedNodeId: state.selectedNodeId,
+      selectedNodeIds: state.selectedNodeIds,
+      selectedEdgeIds: state.selectedEdgeIds,
+      viewportMode: state.viewportMode,
+      snapMode: state.snapMode,
+      snapGridSize: state.snapGridSize,
+      previewAnimations: state.previewAnimations,
+      graphView: state.view,
+      workbenchSelectedModelId: state.workbenchSelectedModelId,
+      workbenchLibraryType: state.workbenchLibraryType,
+      workbenchSearch: state.workbenchSearch,
+      workbenchStage: state.workbenchStage,
+      workbenchDefinitionId: state.workbenchDefinitionId,
+      workbenchRelationScope: state.workbenchRelationScope,
+      catalogHubType: state.catalogHubType,
+      catalogHubSelectedNodeId: state.catalogHubSelectedNodeId,
+      catalogHubSearch: state.catalogHubSearch,
+      settingsHubKind: state.settingsHubKind,
+      settingsHubSelectedNodeId: state.settingsHubSelectedNodeId,
+      settingsHubSearch: state.settingsHubSearch,
+      questTimelineView: state.questTimelineView,
+      questTimelineSelectedQuestId: state.questTimelineSelectedQuestId,
+      questTimelineSelectedStepId: state.questTimelineSelectedStepId,
+      questTimelineSelectedDialogueId: state.questTimelineSelectedDialogueId,
+      questTimelineSelectedEntryId: state.questTimelineSelectedEntryId
+    },
+    drafts: {
+      documents: typeof docBench.resumeState === "function" ? docBench.resumeState() : null,
+      objectFunction: state.objectFunctionDraft,
+      visualBuilder: state.visualBuilderDraft,
+      zoneCanvas: state.zoneCanvasDraft,
+      worldContent: state.worldContentDraft,
+      questTimeline: state.questTimelineDraft,
+      questTimelineDialogue: state.questTimelineDialogueDraft,
+      questTimelineInsert: state.questTimelineInsertDraft,
+      questTimelineDialogueInsert: state.questTimelineDialogueInsertDraft,
+      questTimelineChild: state.questTimelineChildDraft,
+      questTimelinePendingTarget: state.questTimelinePendingTargetRef,
+      catalogHub: state.catalogHubDraft,
+      settingsHub: state.settingsHubDraft,
+      workbenchEnemy: state.workbenchEnemyDraft,
+      workbenchLootRule: state.workbenchLootRuleDraft,
+      workbenchCreate: state.workbenchCreateDraft,
+      workbenchDefinition: state.workbenchDefinitionDraft,
+      workbenchRow: state.workbenchRowDraft,
+      workbenchStatRule: state.workbenchStatRuleDraft,
+      assetManager: {
+        assetId: state.assetManager.assetId,
+        replacementAssetId: state.assetManager.replacementAssetId,
+        draftName: state.assetManager.draftName,
+        draftCategory: state.assetManager.draftCategory
+      }
+    },
+    floatingPanels: readFloatingPanelStore()
+  });
+}
+
+function applyEditorResumeState(resume) {
+  if (!resume || typeof resume !== "object") return;
+  loadedEditorResumeState = editorResumeClone(resume);
+  const ui = resume.ui && typeof resume.ui === "object" ? resume.ui : {};
+  const stringOrNull = function (value) { return typeof value === "string" && value ? value : null; };
+  if (["all", "tools", "graph", "inspector", "viewport", "assets"].includes(ui.mobilePanel)) state.mobilePanel = ui.mobilePanel;
+  if (Number.isFinite(Number(ui.assetCardSize))) state.assetCardSize = clampAssetCardSize(ui.assetCardSize);
+  state.storedAuthoringRouteId = stringOrNull(ui.authoringRouteId) || state.storedAuthoringRouteId;
+  state.authoringRouteId = state.storedAuthoringRouteId;
+  state.storedCurrentGroupId = stringOrNull(ui.currentGroupId) || state.storedCurrentGroupId;
+  state.currentGroupId = state.storedCurrentGroupId;
+  if (typeof ui.authoringOverviewActive === "boolean") state.authoringOverviewActive = ui.authoringOverviewActive;
+  state.selectedNodeId = stringOrNull(ui.selectedNodeId);
+  state.selectedNodeIds = Array.isArray(ui.selectedNodeIds) ? ui.selectedNodeIds.filter(function (id) { return typeof id === "string"; }).slice(0, 500) : [];
+  state.selectedEdgeIds = Array.isArray(ui.selectedEdgeIds) ? ui.selectedEdgeIds.filter(function (id) { return typeof id === "string"; }).slice(0, 500) : [];
+  if (["translate", "rotate", "scale"].includes(ui.viewportMode)) state.viewportMode = ui.viewportMode;
+  if (["off", "grid", "ground"].includes(ui.snapMode)) state.snapMode = ui.snapMode;
+  if (Number.isFinite(Number(ui.snapGridSize))) state.snapGridSize = Math.max(0.001, Number(ui.snapGridSize));
+  if (typeof ui.previewAnimations === "boolean") state.previewAnimations = ui.previewAnimations;
+  if (ui.graphView && [ui.graphView.panX, ui.graphView.panY, ui.graphView.scale].every(function (value) { return Number.isFinite(Number(value)); })) {
+    state.view = { panX: Number(ui.graphView.panX), panY: Number(ui.graphView.panY), scale: clampGraphScale(ui.graphView.scale) };
+  }
+  state.workbenchSelectedModelId = stringOrNull(ui.workbenchSelectedModelId);
+  if (typeof ui.workbenchLibraryType === "string") state.workbenchLibraryType = ui.workbenchLibraryType;
+  if (typeof ui.workbenchSearch === "string") state.workbenchSearch = ui.workbenchSearch;
+  if (["overview", "world"].includes(ui.workbenchStage)) state.workbenchStage = ui.workbenchStage;
+  state.workbenchDefinitionId = stringOrNull(ui.workbenchDefinitionId);
+  if (["direct", "all", "used"].includes(ui.workbenchRelationScope)) state.workbenchRelationScope = ui.workbenchRelationScope;
+  for (const key of ["catalogHubType", "catalogHubSearch", "settingsHubKind", "settingsHubSearch", "questTimelineView"]) {
+    if (typeof ui[key] === "string") state[key] = ui[key];
+  }
+  for (const key of ["catalogHubSelectedNodeId", "settingsHubSelectedNodeId", "questTimelineSelectedQuestId", "questTimelineSelectedStepId", "questTimelineSelectedDialogueId", "questTimelineSelectedEntryId"]) {
+    state[key] = stringOrNull(ui[key]);
+  }
+  const drafts = resume.drafts && typeof resume.drafts === "object" ? resume.drafts : {};
+  if (typeof docBench.restoreResumeState === "function") docBench.restoreResumeState(drafts.documents);
+  const draftMap = {
+    objectFunctionDraft: "objectFunction", visualBuilderDraft: "visualBuilder", zoneCanvasDraft: "zoneCanvas", worldContentDraft: "worldContent",
+    questTimelineDraft: "questTimeline", questTimelineDialogueDraft: "questTimelineDialogue", questTimelineInsertDraft: "questTimelineInsert",
+    questTimelineDialogueInsertDraft: "questTimelineDialogueInsert", questTimelineChildDraft: "questTimelineChild",
+    questTimelinePendingTargetRef: "questTimelinePendingTarget", catalogHubDraft: "catalogHub", settingsHubDraft: "settingsHub",
+    workbenchEnemyDraft: "workbenchEnemy", workbenchLootRuleDraft: "workbenchLootRule", workbenchCreateDraft: "workbenchCreate",
+    workbenchDefinitionDraft: "workbenchDefinition", workbenchRowDraft: "workbenchRow", workbenchStatRuleDraft: "workbenchStatRule"
+  };
+  for (const [stateKey, draftKey] of Object.entries(draftMap)) state[stateKey] = editorResumeClone(drafts[draftKey]);
+  if (drafts.assetManager && typeof drafts.assetManager === "object") {
+    state.assetManager.assetId = stringOrNull(drafts.assetManager.assetId);
+    state.assetManager.replacementAssetId = typeof drafts.assetManager.replacementAssetId === "string" ? drafts.assetManager.replacementAssetId : "";
+    state.assetManager.draftName = typeof drafts.assetManager.draftName === "string" ? drafts.assetManager.draftName : null;
+    state.assetManager.draftCategory = typeof drafts.assetManager.draftCategory === "string" ? drafts.assetManager.draftCategory : null;
+  }
+  if (resume.floatingPanels && typeof resume.floatingPanels === "object") {
+    const floatingPanels = editorResumeClone(resume.floatingPanels) || {};
+    const deviceKey = floatingPanelDeviceKey();
+    const otherDeviceKey = deviceKey === "mobile" ? "desktop" : "mobile";
+    // Posities zijn ook als percentages opgeslagen. Bij de eerste overstap naar een
+    // ander scherm kunnen we daarom veilig de laatst bekende indeling als basis nemen.
+    if (!floatingPanels[deviceKey] && floatingPanels[otherDeviceKey]) {
+      floatingPanels[deviceKey] = editorResumeClone(floatingPanels[otherDeviceKey]);
+    }
+    try { window.localStorage.setItem(EDITOR_FLOATING_PANELS_STORAGE_KEY, JSON.stringify(floatingPanels)); } catch {}
+    floatingPanelLiveStates.clear();
+  }
+  try {
+    window.localStorage.setItem(EDITOR_MOBILE_PANEL_STORAGE_KEY, state.mobilePanel);
+    window.localStorage.setItem(ASSET_CARD_SIZE_STORAGE_KEY, String(state.assetCardSize));
+    if (state.workbenchSelectedModelId) window.localStorage.setItem(WORKBENCH_SELECTION_STORAGE_KEY, state.workbenchSelectedModelId);
+    else window.localStorage.removeItem(WORKBENCH_SELECTION_STORAGE_KEY);
+    storeWorkbenchValue(WORKBENCH_STAGE_STORAGE_KEY, state.workbenchStage);
+    storeWorkbenchValue(WORKBENCH_DEFINITION_STORAGE_KEY, state.workbenchDefinitionId);
+  } catch {}
+  applyAssetCardSize(state.assetCardSize, false);
+  setMobilePanel(state.mobilePanel, false);
+}
+
+function restoreResumeSelectionAfterGraphLoad() {
+  if (!loadedEditorResumeState) return;
+  const nodeIds = new Set((state.graph.nodes || []).map(function (node) { return node.id; }));
+  const edgeIds = new Set((state.graph.edges || []).map(function (edge) { return edge.id; }).filter(Boolean));
+  state.selectedNodeIds = state.selectedNodeIds.filter(function (id) { return nodeIds.has(id); });
+  state.selectedEdgeIds = state.selectedEdgeIds.filter(function (id) { return edgeIds.has(id); });
+  state.selectedNodeId = nodeIds.has(state.selectedNodeId) ? state.selectedNodeId : state.selectedNodeIds[0] || null;
+}
+
+function restoreResumeCameraAfterWorldLoad() {
+  const cameraView = loadedEditorResumeState?.cameraView;
+  if (!cameraView || !runtime || typeof runtime.restoreViewState !== "function") return false;
+  const restored = runtime.restoreViewState(cameraView);
+  if (restored) scheduleEditorMinimapRedraw();
+  return restored;
+}
+
 function currentEditorLayoutPayload() {
   if (!state.allLayoutTrees) state.allLayoutTrees = defaultAllLayoutTrees();
   if (state.allLayoutTree) state.allLayoutTrees[state.editorMode] = state.allLayoutTree;
+  flattenAllLayoutTrees(state.allLayoutTrees);
+  state.allLayoutTree = state.allLayoutTrees[state.editorMode];
   return {
-    version: 1,
+    version: 2,
     editorMode: state.editorMode,
-    layouts: state.allLayoutTrees
+    layouts: state.allLayoutTrees,
+    resume: currentEditorResumePayload()
   };
 }
 
-function scheduleEditorLayoutServerSave() {
+function scheduleEditorLayoutServerSave(delayMs = 250) {
   if (!editorLayoutServerReady) return;
   if (editorLayoutSaveTimer) clearTimeout(editorLayoutSaveTimer);
   editorLayoutSaveTimer = setTimeout(function () {
@@ -25532,7 +25623,7 @@ function scheduleEditorLayoutServerSave() {
     }).catch(function (error) {
       console.warn("Editorindeling kon niet worden opgeslagen:", error?.message || error);
     });
-  }, 250);
+  }, Math.max(200, Number(delayMs) || 250));
 }
 
 function flushEditorLayoutServerSave() {
@@ -25567,6 +25658,7 @@ async function loadEditorLayoutFromServer() {
       window.localStorage.setItem(EDITOR_MODE_STORAGE_KEY, state.editorMode);
     } catch {}
   }
+  if (stored?.resume) applyEditorResumeState(stored.resume);
   editorLayoutServerReady = true;
   if (!stored) persistAllLayoutTree();
 }
@@ -25797,7 +25889,7 @@ function buildAllSplit(node, path) {
       wrap.appendChild(resizer);
     }
     const childEl = buildAllLayoutNode(child.node, path.concat(index));
-    childEl.style.flex = String(Math.max(0.0001, child.size)) + " 1 0px";
+    childEl.style.flex = String(Math.max(0, child.size)) + " 1 0px";
     wrap.appendChild(childEl);
   });
   return wrap;
@@ -25907,32 +25999,47 @@ function beginAllSplitResize(event, resizerEl, splitNode, indexA, indexB) {
   event.preventDefault();
   event.stopPropagation();
   const dir = splitNode.dir;
+  const splitEl = resizerEl.parentElement;
   const childElA = resizerEl.previousElementSibling;
   const childElB = resizerEl.nextElementSibling;
-  if (!childElA || !childElB) return;
-  const rectA = childElA.getBoundingClientRect();
-  const rectB = childElB.getBoundingClientRect();
-  const startSizeA = dir === "row" ? rectA.width : rectA.height;
-  const startSizeB = dir === "row" ? rectB.width : rectB.height;
-  const totalPx = Math.max(1, startSizeA + startSizeB);
-  const growA = splitNode.children[indexA].size;
-  const growB = splitNode.children[indexB].size;
-  const growPerPx = (growA + growB) / totalPx;
+  if (!splitEl || !childElA || !childElB) return;
+
+  // Zet tijdens het slepen ieder direct paneel vast op zijn huidige pixelmaat.
+  // Zo kan flexbox geen andere resizer in dezelfde split mee verplaatsen.
+  const childEls = Array.from(splitEl.children).filter(function (childEl) {
+    return !childEl.classList.contains("allSplitResizer");
+  });
+  if (childEls.length !== splitNode.children.length) return;
+  const originalSizes = splitNode.children.map(function (child) { return child.size; });
+  const startSizes = childEls.map(function (childEl) {
+    const rect = childEl.getBoundingClientRect();
+    return dir === "row" ? rect.width : rect.height;
+  });
+  const totalStartSize = Math.max(1, startSizes.reduce(function (total, size) { return total + size; }, 0));
+  const startShares = startSizes.map(function (size) { return (size / totalStartSize) * 100; });
+  const startSizeA = startSizes[indexA];
+  const startSizeB = startSizes[indexB];
+  childEls.forEach(function (childEl, index) {
+    childEl.style.flex = "0 0 " + startSizes[index] + "px";
+  });
   const startX = event.clientX;
   const startY = event.clientY;
-  const minPx = 20;
+  let didMove = false;
   resizerEl.classList.add("active");
   try { resizerEl.setPointerCapture?.(event.pointerId); } catch {}
   function onMove(moveEvent) {
     if (moveEvent.pointerId !== event.pointerId) return;
     moveEvent.preventDefault();
     const delta = dir === "row" ? (moveEvent.clientX - startX) : (moveEvent.clientY - startY);
-    const deltaPx = clampNumber(delta, minPx - startSizeA, startSizeB - minPx);
-    const deltaGrow = deltaPx * growPerPx;
-    splitNode.children[indexA].size = Math.max(0.02, growA + deltaGrow);
-    splitNode.children[indexB].size = Math.max(0.02, growB - deltaGrow);
-    childElA.style.flex = String(splitNode.children[indexA].size) + " 1 0px";
-    childElB.style.flex = String(splitNode.children[indexB].size) + " 1 0px";
+    const pair = resizePair(startSizeA, startSizeB, delta, 0, 0);
+    if (!didMove) {
+      didMove = true;
+      splitNode.children.forEach(function (child, index) { child.size = Math.max(0, startShares[index]); });
+    }
+    splitNode.children[indexA].size = Math.max(0, (pair.a / totalStartSize) * 100);
+    splitNode.children[indexB].size = Math.max(0, (pair.b / totalStartSize) * 100);
+    childElA.style.flexBasis = pair.a + "px";
+    childElB.style.flexBasis = pair.b + "px";
     resizeRuntimeAfterLayout();
   }
   function onUp(upEvent) {
@@ -25942,42 +26049,19 @@ function beginAllSplitResize(event, resizerEl, splitNode, indexA, indexB) {
     window.removeEventListener("pointermove", onMove, true);
     window.removeEventListener("pointerup", onUp, true);
     window.removeEventListener("pointercancel", onUp, true);
-    persistAllLayoutTree();
+    childEls.forEach(function (childEl, index) {
+      const size = didMove ? splitNode.children[index].size : originalSizes[index];
+      childEl.style.flex = String(Math.max(0, size)) + " 1 0px";
+    });
+    if (didMove) persistAllLayoutTree();
   }
   window.addEventListener("pointermove", onMove, true);
   window.addEventListener("pointerup", onUp, true);
   window.addEventListener("pointercancel", onUp, true);
 }
 
-function restoreFlatEditorLayoutOrder() {
-  if (!el.layout) return;
-  const toolsEl = document.querySelector(".tools");
-  const graphEl = document.querySelector(".graphColumn");
-  const viewportEl = document.querySelector(".viewportColumn");
-  const assetsEl = document.querySelector(".assetColumn");
-  const resizerTools = el.layout.querySelector('[data-resizer="tools"]');
-  const resizerGraph = el.layout.querySelector('[data-resizer="graph"]');
-  const resizerViewport = el.layout.querySelector('[data-resizer="viewport"]');
-  if (toolsEl && resizerTools) el.layout.insertBefore(toolsEl, resizerTools);
-  if (graphEl && resizerGraph) el.layout.insertBefore(graphEl, resizerGraph);
-  if (viewportEl && resizerViewport) el.layout.insertBefore(viewportEl, resizerViewport);
-  if (assetsEl) el.layout.appendChild(assetsEl);
-  if (el.workbenchRelationStrip && el.statusText?.parentElement === viewportEl) {
-    viewportEl.insertBefore(el.workbenchRelationStrip, el.statusText);
-  }
-}
-
 function updateAllLayoutMode() {
-  const shouldBeActive = true;
-  if (shouldBeActive && !allLayoutActive) {
-    allLayoutActive = true;
-    renderAllLayout();
-  } else if (shouldBeActive && allLayoutActive) {
-    renderAllLayout();
-  } else if (!shouldBeActive && allLayoutActive) {
-    allLayoutActive = false;
-    restoreFlatEditorLayoutOrder();
-  }
+  renderAllLayout();
 }
 
 function initAllLayoutControls() {
@@ -26028,7 +26112,6 @@ function focusViewportSelection() {
 }
 
 function initMobileControls() {
-  applyStoredEditorLayoutSizes();
   initAllLayoutControls();
   setMobilePanel("all", false);
   updateTopbarLabels();
@@ -26039,7 +26122,6 @@ function initMobileControls() {
       });
     }
   }
-  initEditorLayoutResizers();
   initWorkbenchW2();
   if (el.fullscreenButton) el.fullscreenButton.addEventListener("click", toggleEditorFullscreen);
   document.addEventListener("fullscreenchange", updateEditorFullscreenButton);
@@ -30902,6 +30984,8 @@ async function bakeWorldMinimapForGame(buildId, onProgress) {
 async function publish() {
   if (el.publishButton.disabled) return;
   el.publishButton.disabled = true;
+  el.publishButton.dataset.publishState = "saving";
+  setPublishBlocker(null);
   if (el.bakeButton) el.bakeButton.disabled = true;
   clearAutoSaveDraftTimer();
   try {
@@ -30914,15 +30998,10 @@ async function publish() {
     setNotLiveGraphActions(0);
     state.viewportDirty = false;
     clearViewportRefreshTimer();
+    setPublishBlocker(null);
     updateDocPendingBadge();
-    const sameBuild = build && build.buildId === build.previousBuildId;
-    const publishedText = !build ? "Alles staat al in de game."
-      : sameBuild ? "Gepubliceerd naar de game. De kaarten staan al zo in de game (zelfde build " + build.buildId.slice(0, 10) + ")."
-        : "Gepubliceerd naar de game (met nieuwe build " + build.buildId.slice(0, 10) + ").";
     // De kaart (minimap) wordt niet meer hier gemaakt (duurde minuten bij een grote wereld); dat doet de knop BAKE.
-    const mapStatus = await refreshBakeStatus();
-    if (mapStatus && !mapStatus.upToDate) setStatus(publishedText + " Let op: de kaart (minimap) is verouderd. Klik BAKE als je klaar bent met de wereld.", "error");
-    else setStatus(publishedText + (mapStatus ? " De kaart is up-to-date." : ""), "success");
+    await refreshBakeStatus();
     // De tab Game laadt de nieuwe build: meteen als hij open is, anders bij de volgende keer openen.
     const gameFrame = el.gameTabPanel?.querySelector("iframe");
     if (gameFrame && !el.gameTabPanel.hidden) gameFrame.contentWindow?.location.reload();
@@ -30931,7 +31010,8 @@ async function publish() {
     const paneFrame = gamePaneHost?.querySelector("iframe");
     if (paneFrame) paneFrame.contentWindow?.location.reload();
   } catch (error) {
-    setStatus(error.message, "error");
+    setPublishBlocker(error);
+    el.publishButton.dataset.publishState = "blocked";
   } finally {
     el.publishButton.disabled = false;
     if (el.bakeButton) el.bakeButton.disabled = false;
@@ -30945,7 +31025,7 @@ async function refreshBakeStatus() {
     const data = await response.json().catch(function () { return {}; });
     if (!response.ok || !data.ok) return null;
     if (el.bakeButton) {
-      el.bakeButton.dataset.stale = data.upToDate ? "" : "1";
+      el.bakeButton.dataset.stale = data.upToDate ? "0" : "1";
       el.bakeButton.title = data.upToDate ? "De kaart (minimap) is up-to-date" : (data.hasMap ? "De kaart (minimap) is verouderd: klik om opnieuw te maken" : "Er is nog geen kaart (minimap): klik om te maken");
     }
     return data;
@@ -32411,6 +32491,7 @@ function handleTerrainPointerDown(event) {
   }
   if (runtimeTransformActive()) return;
   terrainRememberPointer(event);
+  if (roadEditor.handlePointerDown(event)) return;
   if (handleScatterPointerDown(event)) return;
   if (terrainHasActiveSession() && isPrimaryPointerAction(event) && terrainCanvasTarget(event)) {
     event.preventDefault();
@@ -32948,6 +33029,7 @@ function handleTerrainPointerMove(event) {
     if (runtime && typeof runtime.previewTransformAt === "function") runtime.previewTransformAt(event.clientX, event.clientY);
     return;
   }
+  if (roadEditor.handlePointerMove(event)) return;
   if (handleScatterPointerMove(event)) return;
   const isKeyboardSession = terrainHasActiveSession() && state.terrainTool.dragPointerId === null;
   const isPointerSession = state.terrainTool.dragPointerId !== null && event.pointerId === state.terrainTool.dragPointerId;
@@ -33001,6 +33083,7 @@ function handleTerrainPointerUp(event) {
     if (runtime && typeof runtime.previewTransformAt === "function") runtime.previewTransformAt(event.clientX, event.clientY);
     return;
   }
+  if (roadEditor.handlePointerUp(event)) return;
   if (handleScatterPointerUp(event)) return;
   if (state.terrainTool.dragPointerId === null || event.pointerId !== state.terrainTool.dragPointerId) return;
   event.preventDefault();
@@ -33129,6 +33212,7 @@ function scatterKeyboardOwnsShortcuts(scatterNode, event) {
 function handleEditorKeyDown(event) {
   const meta = event.ctrlKey || event.metaKey;
   if (isEditableTarget(event.target)) return;
+  if (roadEditor.handleKeyDown(event)) return;
   const shortcutLabel = viewportShortcutDebugLabel(event);
   if (shortcutLabel) setViewportShortcutDebug(shortcutLabel);
   const scatterNode = selectedScatterNode();
@@ -33548,6 +33632,13 @@ window.addEventListener("pointercancel", handleTerrainPointerUp, true);
 window.addEventListener("mouseup", handleTerrainMouseUpFallback, true);
 window.addEventListener("blur", clearViewportTouchEditState, true);
 window.addEventListener("pagehide", flushEditorLayoutServerSave);
+document.addEventListener("input", function () { scheduleEditorLayoutServerSave(EDITOR_RESUME_SAVE_DELAY_MS); }, true);
+document.addEventListener("change", function () { scheduleEditorLayoutServerSave(EDITOR_RESUME_SAVE_DELAY_MS); }, true);
+document.addEventListener("click", function () { scheduleEditorLayoutServerSave(EDITOR_RESUME_SAVE_DELAY_MS); }, true);
+window.addEventListener("pointerup", function () { scheduleEditorLayoutServerSave(EDITOR_RESUME_SAVE_DELAY_MS); }, true);
+document.addEventListener("visibilitychange", function () {
+  if (document.visibilityState === "hidden") flushEditorLayoutServerSave();
+});
 
 if (el.nodesModeButton) el.nodesModeButton.addEventListener("click", function () { if (el.oldModeMenu) el.oldModeMenu.open = false; setEditorMode("nodes"); });
 if (el.workbenchModeButton) el.workbenchModeButton.addEventListener("click", function () { setGameTabOpen(false); setEditorMode("workbench"); });

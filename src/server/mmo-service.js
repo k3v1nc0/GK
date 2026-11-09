@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { buildRuntimeWorld } from "./authoring/world-builder.js";
 import { createSpatialIndex, metersToMm, resolveMembership } from "../../apps/web/public/shared/spatial.js";
-import { buildWalkabilityIndex, groundHeightAt, resolveMovement, solidCollisionEntriesForWorld } from "../../apps/web/public/shared/movement-kernel.js";
+import { buildWalkabilityIndex, groundHeightAt, resolveMovement, solidCollisionEntriesForWorld, walkabilityForFlags } from "../../apps/web/public/shared/movement-kernel.js";
 import { mmoNetworkPresetValues } from "../shared/node-types.js";
 import { createWorldClock } from "./runtime/world-clock.js";
 import { ActorRuntime } from "./runtime/actor-runtime.js";
@@ -19,6 +19,9 @@ import { AUTH_TIMEOUT_MS, CLOSE_CODES, PROTOCOL_NAME, PROTOCOL_VERSION as PROTOC
 
 const HEARTBEAT_INTERVAL_MS = Math.max(1000, Number(process.env.GAME_WS_HEARTBEAT_INTERVAL_MS || 15000));
 const HEARTBEAT_TIMEOUT_MS = Math.max(5000, Number(process.env.GAME_WS_HEARTBEAT_TIMEOUT_MS || 30000));
+// Een mobiele browser wordt bij scherm-uit vaak kort bevroren. Houd de avatar daarom nog even vast:
+// een reconnect neemt hem zonder despawn weer over; pas daarna verdwijnt hij echt uit de wereld.
+const PLAYER_DISCONNECT_GRACE_MS = Math.max(0, Number(process.env.GAME_PLAYER_DISCONNECT_GRACE_MS || 300000));
 // F2-E2-T05: posities worden in de tick alleen gemarkeerd en op deze timer weggeschreven (RPO <= interval).
 const POSITION_FLUSH_INTERVAL_MS = Math.min(5000, Math.max(250, Number(process.env.GAME_POSITION_FLUSH_INTERVAL_MS || 1000)));
 // monitorEventLoopDelay meet de tijd tussen twee timer-ticks van deze resolutie; een lege eventloop
@@ -676,6 +679,7 @@ function publicRemotePlayerLeft(profile, worldId) {
   if (!profile) return null;
   return {
     playerId: profile.id,
+    displayName: profile.display_name,
     worldId: worldId || profile.current_world_id || null,
     connectedSessionCount: 0,
     isSelfAccount: false
@@ -834,6 +838,7 @@ export class MmoService {
     this.playerStateCache = new Map();
     this.playerIdsByWorldId = new Map();
     this.primaryPresenceByPlayerId = new Map();
+    this.pendingDisconnectByPlayerId = new Map();
     this.positionCheckpoint = createPositionCheckpointer({
       write: (rows) => this.writePositionRows(rows),
       getRow: (key) => this.playerStateCache.get(key) || null,
@@ -889,7 +894,9 @@ export class MmoService {
       isDefeated: (playerId) => this.isPlayerDefeatedForMovement(playerId),
       connections: (worldId) => Array.from(this.connectionsByWorldId.get(worldId) || [])
         .map((id) => this.connectionsById.get(id)).filter((connection) => connection && !connection.closed),
-      send: (connection, payload) => send(connection.ws, payload)
+      send: (connection, payload) => send(connection.ws, payload),
+      // Quest Builder stap 5: quest-vijanden voor de groep zien alleen de leden van die groep.
+      partyOf: (playerId) => (this.partyRuntime ? this.partyRuntime.partyIdFor(playerId) : null)
     });
     // Healing (2-11): regeneratie en tijdelijke effecten van spelers, 1x per seconde in dezelfde worldtick.
     this.vitalsRuntime = new VitalsRuntime({
@@ -958,6 +965,10 @@ export class MmoService {
     this.connectedSessionIdsByUserId.clear();
     this.playerIdsByWorldId.clear();
     this.primaryPresenceByPlayerId.clear();
+    for (const pending of this.pendingDisconnectByPlayerId.values()) {
+      if (pending?.timer) clearTimeout(pending.timer);
+    }
+    this.pendingDisconnectByPlayerId.clear();
     this.fogDiscoveryRuntimeByPlayerWorld.clear();
   }
 
@@ -1043,6 +1054,10 @@ export class MmoService {
     this.canonicalBuildProvider = typeof provider === "function" ? provider : null;
     this.worldCache = null;
     this.spatialCache = null;
+  }
+
+  invalidateWorldCache() {
+    if (this.worldCache) this.worldCache.canonicalBuildId = "__asset_refresh__" + nowMs();
   }
 
   // Fase 04: Region/Area-index uit de actieve canonieke build (in geheugen, één keer per build opgebouwd).
@@ -1137,6 +1152,43 @@ export class MmoService {
     this.worldCache = { world: world, worldId: worldId, publishedAt: publishedAt, canonicalBuildId: canonicalBuildId, walkabilityIndex: walkabilityIndex, solidColliders: solidColliders };
     this.lastWorldBuildAt = nowMs();
     return this.worldCache;
+  }
+
+  // Kevin 8-11: lopen op een loopvlak (brug) met "Alleen als vlag" alleen als de vlag voor deze speler klopt.
+  movementIndexFor(worldContext, state, pointerTarget) {
+    const index = movementIndexForPlayerInput(worldContext, state, pointerTarget);
+    const flags = this.worldFlags;
+    if (!flags || !index) return index;
+    if (!this.flagIndexCache) this.flagIndexCache = new WeakMap();
+    let cache = this.flagIndexCache.get(index);
+    if (!cache) {
+      cache = new Map();
+      cache.hasFlags = (Array.isArray(index.walkables) ? index.walkables : []).some((walkable) => walkable?.flag);
+      this.flagIndexCache.set(index, cache);
+    }
+    if (!cache.hasFlags) return index;
+    const id = String(state?.player_id || "");
+    return walkabilityForFlags(index, (flag) => flags.passes(id, flag), cache);
+  }
+
+  // Quest Builder stap 9: botsen alleen met wat deze speler ziet (NPC's en modellen met "Alleen als vlag").
+  // Zelfde botsingen (zelfde objecten, dus aan/uit door dood of geplukt blijft gelden); per speler bewaard tot een vlag verandert.
+  solidsForPlayer(worldContext, playerId) {
+    const solids = Array.isArray(worldContext?.solidColliders) ? worldContext.solidColliders : [];
+    const flags = this.worldFlags;
+    if (!flags || !solids.length) return solids;
+    if (worldContext.flagSolidsOf !== solids) {
+      worldContext.flagSolidsOf = solids;
+      worldContext.hasFlagSolids = solids.some((solid) => solid?.flag);
+    }
+    if (!worldContext.hasFlagSolids) return solids;
+    if (!this.flagSolidsByPlayer || this.flagSolidsByPlayer.size > 2000) this.flagSolidsByPlayer = new Map();
+    const id = String(playerId || "");
+    const cached = this.flagSolidsByPlayer.get(id);
+    if (cached && cached.solids === solids && cached.version === flags.version) return cached.list;
+    const list = solids.filter((solid) => !solid?.flag || flags.passes(id, solid.flag));
+    this.flagSolidsByPlayer.set(id, { solids, version: flags.version, list });
+    return list;
   }
 
   setWorldEntityColliderEnabled(entityId, enabled) {
@@ -1858,7 +1910,8 @@ export class MmoService {
       const record = this.primaryPresenceByPlayerId.get(playerId) || null;
       if (record && record.worldId && worldId && record.worldId !== worldId) continue;
       const connection = this.getConnectionForPlayer(playerId, worldId);
-      const profile = connection?.player || null;
+      const pendingDisconnect = this.pendingDisconnectByPlayerId.get(playerId) || null;
+      const profile = connection?.player || pendingDisconnect?.profile || null;
       const position = record || (connection ? this.primaryPresenceByPlayerId.get(playerId) : null);
       if (!profile || !position) continue;
       players.push(publicRemotePlayerSnapshot(profile, {
@@ -2009,8 +2062,13 @@ export class MmoService {
 
   snapshotPlayerStateRecord(state, options = {}) {
     if (!state) return null;
+    const presence = this.primaryPresenceByPlayerId.get(state.player_id) || null;
     return {
       playerId: state.player_id,
+      displayName: presence?.displayName || null,
+      modelAssetId: presence?.modelAssetId || null,
+      selectedCharacterId: presence?.selectedCharacterId || null,
+      connectedSessionCount: this.countConnectedPlayerSessions(state.player_id),
       worldId: state.world_id || null,
       zoneId: state.current_zone_id || null,
       spawnId: state.current_spawn_id || null,
@@ -2029,7 +2087,14 @@ export class MmoService {
   }
 
   getWorldPlayerStates(worldId, playerIds = null) {
-    const entries = Array.from(this.playerStateCache.values()).filter((state) => state && state.world_id === worldId);
+    // De cache bewaart ook de laatst gepersiste positie. Alleen spelers met een live verbinding of een
+    // lopende reconnect-graceperiode horen echter in ticks en snapshots thuis.
+    const entries = Array.from(this.playerStateCache.values()).filter((state) => {
+      if (!state || state.world_id !== worldId) return false;
+      if (this.countConnectedPlayerSessions(state.player_id) > 0) return true;
+      const pending = this.pendingDisconnectByPlayerId.get(state.player_id) || null;
+      return Boolean(pending && pending.worldId === worldId);
+    });
     const allowedIds = Array.isArray(playerIds) ? new Set(playerIds.map((id) => String(id || "").trim()).filter(Boolean)) : null;
     return allowedIds
       ? entries.filter((state) => allowedIds.has(String(state.player_id || "").trim()))
@@ -2704,7 +2769,7 @@ export class MmoService {
       directionZ /= magnitude;
     }
     const speed = baseSpeed * (input?.sprint === true ? sprintMultiplier : 1);
-    const solids = Array.isArray(worldContext?.solidColliders) ? worldContext.solidColliders : [];
+    const solids = this.solidsForPlayer(worldContext, state.player_id);
     const pathQueue = this.pathQueueByPlayerId ? this.pathQueueByPlayerId.get(String(state.player_id || "")) || null : null;
     const pathMode = Boolean(pathQueue && (pathQueue.points.length > 0 || pathQueue.active));
     let resolved;
@@ -2732,7 +2797,7 @@ export class MmoService {
         const desiredStep = { x: position.x + (toX / toDistance) * step, y: position.y, z: position.z + (toZ / toDistance) * step };
         const stepResult = resolveMovement(position, desiredStep, {
           radius: radius,
-          index: movementIndexForPlayerInput(worldContext, state, target),
+          index: this.movementIndexFor(worldContext, state, target),
           solids: solids
         });
         const moved = Math.hypot(stepResult.x - position.x, stepResult.z - position.z);
@@ -2745,7 +2810,7 @@ export class MmoService {
           if (Math.hypot(prev.x - position.x, prev.z - position.z) <= PATH_TRUST_RADIUS) {
             const check = resolveMovement({ x: prev.x, y: position.y, z: prev.z }, { x: target.x, y: position.y, z: target.z }, {
               radius: radius,
-              index: movementIndexForPlayerInput(worldContext, state, target),
+              index: this.movementIndexFor(worldContext, state, target),
               solids: solids
             });
             if (Math.hypot(check.x - target.x, check.z - target.z) <= PATH_POINT_REACHED) {
@@ -2788,7 +2853,7 @@ export class MmoService {
         y: currentPosition.y,
         z: currentPosition.z + (directionZ * speed * dtSeconds)
       };
-      const movementIndex = movementIndexForPlayerInput(worldContext, state, pointerTarget);
+      const movementIndex = this.movementIndexFor(worldContext, state, pointerTarget);
       resolved = moving
         ? resolveMovement(currentPosition, desired, {
           radius: radius,
@@ -3122,6 +3187,73 @@ export class MmoService {
     }
   }
 
+  cancelPendingPlayerDisconnect(playerId, worldId = null) {
+    const pending = this.pendingDisconnectByPlayerId.get(playerId) || null;
+    if (!pending || (worldId && pending.worldId && pending.worldId !== worldId)) return false;
+    if (pending.timer) clearTimeout(pending.timer);
+    this.pendingDisconnectByPlayerId.delete(playerId);
+    return true;
+  }
+
+  schedulePendingPlayerDisconnect(connection, presenceRecord, code, reason) {
+    const playerId = connection?.player?.id || null;
+    const worldId = connection?.worldId || null;
+    if (!playerId || !worldId) return false;
+    this.cancelPendingPlayerDisconnect(playerId);
+    const pending = {
+      playerId,
+      worldId,
+      profile: connection.player,
+      userId: connection.user?.id || connection.session?.user_id || "",
+      sessionId: connection.session?.id || null,
+      presenceRecord: presenceRecord || this.primaryPresenceByPlayerId.get(playerId) || null,
+      code,
+      reason,
+      expiresAtMs: nowMs() + PLAYER_DISCONNECT_GRACE_MS,
+      timer: null
+    };
+    pending.timer = setTimeout(() => this.finalizePendingPlayerDisconnect(pending), PLAYER_DISCONNECT_GRACE_MS);
+    if (typeof pending.timer.unref === "function") pending.timer.unref();
+    this.pendingDisconnectByPlayerId.set(playerId, pending);
+    return true;
+  }
+
+  finalizePendingPlayerDisconnect(pending) {
+    if (!pending?.playerId || !pending.worldId) return false;
+    const registered = this.pendingDisconnectByPlayerId.get(pending.playerId) || null;
+    if (registered && registered !== pending) return false;
+    if (registered === pending) this.pendingDisconnectByPlayerId.delete(pending.playerId);
+    if (pending.timer) clearTimeout(pending.timer);
+    if (this.countConnectedPlayerSessions(pending.playerId) > 0) return false;
+
+    this.discardQueuedRemoteBroadcast(pending.playerId);
+    this.broadcastRemotePlayerLeft({
+      player: pending.profile,
+      user: { id: pending.userId },
+      session: { id: pending.sessionId, user_id: pending.userId },
+      worldId: pending.worldId
+    }, pending.presenceRecord);
+
+    const cacheKey = positionKey(pending.playerId, pending.worldId);
+    this.playerStateCache.delete(cacheKey);
+    this.latestInputByPlayerId.delete(pending.playerId);
+    this.pointerStallTicksByPlayerId.delete(pending.playerId);
+    this.clearPathQueue(pending.playerId);
+    this.interestIndex.remove(pending.playerId);
+    const dirty = this.dirtyPlayerIdsByWorldId.get(pending.worldId);
+    if (dirty) {
+      dirty.delete(pending.playerId);
+      if (dirty.size === 0) this.dirtyPlayerIdsByWorldId.delete(pending.worldId);
+    }
+    for (const queued of this.aoiPendingByConnectionId.values()) queued?.delete?.(pending.playerId);
+    for (const visible of this.aoiVisibleByConnectionId.values()) visible?.delete?.(pending.playerId);
+    for (const key of this.aoiSentAtByKey.keys()) {
+      if (key.endsWith("|" + pending.playerId)) this.aoiSentAtByKey.delete(key);
+    }
+    this.recordEvent("player_presence_left", pending.userId, pending.playerId, pending.sessionId);
+    return true;
+  }
+
   ensureConnectionSet(map, key) {
     let set = map.get(key);
     if (!set) {
@@ -3191,8 +3323,9 @@ export class MmoService {
     const worldContext = this.getPublishedWorldContext();
     const profile = this.ensurePlayerProfile(sessionContext.user, worldContext);
     const characterLease = this.acquireCharacterLease(profile, sessionContext.session);
+    const resumedDuringGrace = this.cancelPendingPlayerDisconnect(profile.id, worldContext.worldId);
     const position = this.ensurePlayerPosition(profile, worldContext, sessionContext);
-    const playerWasPresent = this.countConnectedPlayerSessions(profile.id) > 0;
+    const playerWasPresent = this.countConnectedPlayerSessions(profile.id) > 0 || resumedDuringGrace;
     const connectionId = "conn_" + (++this.connectionSeq);
     const connection = {
       id: connectionId,
@@ -3244,8 +3377,9 @@ export class MmoService {
       }
       this.handleMessage(connection, data);
     });
-    ws.on("close", () => {
-      this.closeConnection(connection, 1000, "closed");
+    ws.on("close", (socketCode, socketReason) => {
+      const reason = String(socketReason || "").trim() || "closed";
+      this.closeConnection(connection, Number(socketCode) || 1000, reason);
     });
     ws.on("error", () => {
       this.closeConnection(connection, 1011, "socket_error");
@@ -3611,8 +3745,22 @@ export class MmoService {
       }
       if (playerRemaining === 0) {
         this.discardQueuedRemoteBroadcast(playerId);
-        this.broadcastRemotePlayerLeft(connection, presenceRecord);
-        this.recordEvent("player_presence_left", userId || connection.session?.user_id || "", playerId, sessionId);
+        const immediateDeparture = code === 4001 || code === 4002 || reason === "logout" || reason === "idle_timeout" || PLAYER_DISCONNECT_GRACE_MS === 0;
+        if (immediateDeparture) {
+          this.finalizePendingPlayerDisconnect({
+            playerId,
+            worldId,
+            profile: connection.player,
+            userId: userId || connection.session?.user_id || "",
+            sessionId,
+            presenceRecord,
+            code,
+            reason,
+            timer: null
+          });
+        } else {
+          this.schedulePendingPlayerDisconnect(connection, presenceRecord, code, reason);
+        }
       } else if (presenceRecord) {
         this.primaryPresenceByPlayerId.set(playerId, Object.assign({}, presenceRecord, {
           connectedSessionCount: playerRemaining
@@ -3655,6 +3803,14 @@ export class MmoService {
       // (klokcorrectie) sloeg anders een ping over, waarna de verbinding na 30 s werd gesloten.
       if (current - connection.lastPingAt >= HEARTBEAT_INTERVAL_MS - 1000) {
         connection.lastPingAt = current;
+        // Een WebSocket control-ping wordt door de browser/netwerklaag beantwoord, ook wanneer JavaScript
+        // in een achtergrondtab sterk wordt afgeremd. De JSON-ping blijft bestaan voor clientdiagnostiek.
+        try {
+          if (typeof connection.ws?.ping === "function") connection.ws.ping();
+        } catch {
+          this.closeConnection(connection, 4000, "heartbeat_send_failed");
+          continue;
+        }
         const payload = { ok: true, serverTime: now(), type: "ping" };
         send(connection.ws, eventMessage("ping", payload, this.stampServerPayload(connection.worldId, payload)));
       }

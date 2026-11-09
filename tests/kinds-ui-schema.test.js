@@ -57,7 +57,8 @@ test("de standaardwaarden zijn zelf geldig", () => {
 
 test("per soort staan hooguit ±6 velden in beeld (rest onder ⚙️ meer of in een uitklapblok)", () => {
   for (const [kind, spec] of Object.entries(CANONICAL_KINDS)) {
-    const visible = Object.values(spec.fields).filter((field) => field.ui.place === spec.place && !field.ui.more && !field.ui.group);
+    // hideWhen-velden wisselen af met een ander veld (snelle quest of Quest Builder-stappen), dus tellen niet mee.
+    const visible = Object.values(spec.fields).filter((field) => field.ui.place === spec.place && !field.ui.more && !field.ui.group && !field.ui.hideWhen);
     assert.ok(visible.length <= 7, kind + " toont " + visible.length + " velden zonder ⚙️");
   }
 });

@@ -60,7 +60,12 @@ export const LOOT_KINDS = {
         ui: ui("⭕", "slider", "werkbank", { step: 100, unit: "m", scale: 1000, more: true }), default: 800,
         help: help("Hoe groot de grondstof is om tegenaan te lopen en aan te klikken.", "Ongeveer de breedte van het model: 0,5-1,5 m.", "Moeilijk aan te klikken → groter. Spelers blijven haken → kleiner.") },
       respawnMs: { type: "integer", required: true, min: 1000, max: 86400000, audience: "server", label: "Terug na",
-        ui: ui("⏳", "slider", "werkbank", { step: 1000, unit: "s", scale: 1000, range: [1000, 900000] }), default: 60000, help: HELP_RESPAWN }
+        ui: ui("⏳", "slider", "werkbank", { step: 1000, unit: "s", scale: 1000, range: [1000, 900000] }), default: 60000, help: HELP_RESPAWN },
+      // Quest Builder stap 5: gedeeld (wie het eerst komt) of ieder zijn eigen (voor jou weg, anderen zien hem nog).
+      gatherMode: { type: "select", required: false, options: ["shared", "personal"], optionIcons: { shared: "🌍", personal: "🧍" },
+        optionLabels: { shared: "Gedeeld: wie het eerst komt", personal: "Ieder zijn eigen" }, audience: "server", label: "Oogsten",
+        ui: ui("🤲", "select", "werkbank"), default: "shared",
+        help: help("Wie hem kan oogsten. Gedeeld: wie het eerst komt; daarna is hij voor iedereen weg tot hij terugkomt. Ieder zijn eigen: voor jou weg (tot Terug na), anderen zien en oogsten hem nog.", "Gedeeld voor gewone grondstoffen; Ieder zijn eigen voor hout of kruiden voor een quest.", "Spelers oogsten elkaars questhout weg → kies Ieder zijn eigen.") }
     }
   },
   resource_spawn: {

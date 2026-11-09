@@ -7,6 +7,7 @@ import { help, ui } from "./ui.js";
 const num = (label, icon, def, min, max, step, unit, helpText, extra = {}) => ({ type: "number", required: false, min, max, audience: "client", label,
   ui: ui(icon, "slider", "instellingen", Object.assign({ step, unit }, extra)), default: def, help: helpText });
 const GROUP_ROUTE = "🧭 Route bij klikken";
+const GROUP_ROADS = "🛣️ Wegen";
 const toggle = (label, icon, def, helpText, extra = {}) => ({ type: "boolean", required: false, audience: "client", label,
   ui: ui(icon, "toggle", "instellingen", extra), default: def, help: helpText });
 
@@ -55,7 +56,22 @@ export const WATER_WALK_KINDS = {
         help("Hoe grof de route over grote afstanden zoekt. Bruggen vindt hij altijd, ook bij grote stappen.",
           "8 m. Kleiner = preciezer om smalle doorgangen heen, maar zwaarder.",
           "De route mist een smal pad → kleiner. Klikken ver weg voelt traag → groter."),
-        { group: GROUP_ROUTE })
+        { group: GROUP_ROUTE }),
+      roadPreference: num("Voorkeur voor de weg", "🛣️", 2, 1, 5, 0.25, "x",
+        help("Hoeveel liever je character (en een NPC die vooruitloopt) over de weg loopt dan ernaast. Naast de weg telt elke meter zoveel keer zo zwaar.",
+          "2. Dan loopt hij over de weg als dat niet meer dan twee keer zo ver is als ernaast. 1 = de weg alleen als die echt korter is.",
+          "Hij loopt dwars door het veld terwijl er een weg is → hoger. Hij maakt rare omwegen over de weg → lager."),
+        { group: GROUP_ROADS }),
+      roadMinDistance: num("Weg pas vanaf", "📏", 20, 0, 200, 5, "m",
+        help("Is de plek (of NPC) dichterbij dan dit, dan loopt hij er gewoon heen zonder eerst naar de weg te gaan. Ook als er iets tussen staat, zoals de NPC zelf of een boom. Alleen als de gewone looproute langer is (water ertussen, brug ver weg) neemt hij toch de weg.",
+          "20 tot 50 m. Dan gaan korte klikjes en praten met een NPC naast je niet eerst naar de weg.",
+          "Bij een korte klik of een NPC naast je loopt hij eerst naar de weg → hoger. Hij gebruikt de weg te weinig → lager."),
+        { group: GROUP_ROADS, range: [0, 100] }),
+      roadCorner: num("Bochten afronden", "↪️", 4, 0, 20, 0.5, "m",
+        help("Hoe ruim je character en de NPC een bocht van de weg nemen. De hoek wordt een boog met deze straal (korter als de stukken weg kort zijn).",
+          "3 tot 6 m. 0 = scherp door de hoek, precies over de punten.",
+          "Hij gaat te strak door de bocht → hoger. Hij snijdt te ver af (door het gras) → lager."),
+        { group: GROUP_ROADS, range: [0, 10] })
     }
   }
 };

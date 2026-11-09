@@ -1910,17 +1910,16 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
 .viewportErrors .err { font-size: 11px; color: #ffb0b0; background: rgba(60,18,18,0.85); border: 1px solid #6e2b2b; padding: 4px 8px; border-radius: 6px; }
 .statusLine {
   flex: 0 0 auto;
-  padding: 5px 10px;
-  font-size: 11px;
-  line-height: 1.25;
-  color: #8b99a4;
-  border-top: 1px solid #161f29;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: #ffb0b0;
+  background: #2b1216;
+  border-top: 1px solid #6e2b2b;
+  white-space: normal;
 }
-.statusLine.error { color: #ff9d9d; }
-.statusLine.success { color: #8be0a8; }
+.statusLine a { display: block; color: inherit; font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
+.statusLine a:hover, .statusLine a:focus-visible { color: #fff; }
 
 .editorHelpTooltip {
   position: fixed;
@@ -2503,11 +2502,13 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
   overflow-x: hidden;
   padding: 4px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(var(--asset-card-size), var(--asset-card-size)));
+  /* Vierkante kaarten op de ingestelde maat; de resterende ruimte wordt tussen
+     de kolommen verdeeld zodat de rij wel de volledige paneelbreedte gebruikt. */
+  grid-template-columns: repeat(auto-fill, var(--asset-card-size));
   grid-auto-rows: var(--asset-card-size);
   gap: 4px;
   align-content: start;
-  justify-content: start;
+  justify-content: space-between;
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
 }
@@ -2553,7 +2554,7 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
   background: #0a1119;
   overflow: hidden;
 }
-.assetThumb img { width: 100%; height: 100%; object-fit: cover; }
+.assetThumb img { width: 100%; height: 100%; object-fit: contain; }
 .assetTypeIcon { font-size: 11px; font-weight: 800; letter-spacing: 1px; color: #5b6b78; }
 .assetThumbStatus {
   position: absolute;
@@ -3404,7 +3405,6 @@ body.workbenchMode.workbenchStageOverview .workbenchOverview {
   position: relative;
   z-index: 3;
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr);
   gap: 7px;
   align-items: center;
   width: 100%;
@@ -3588,25 +3588,6 @@ body.workbenchMode.workbenchStageOverview .workbenchOverview {
   body[data-mobile-panel="all"] .allLayoutRoot {
     display: flex;
   }
-  body.workbenchMode .mobilePanelTabs { display: none; }
-  body.workbenchMode .layout {
-    grid-template-columns: 1fr;
-    grid-template-rows:
-      minmax(0, var(--workbench-mobile-tools-height))
-      16px
-      minmax(0, var(--workbench-mobile-viewport-height))
-      16px
-      minmax(0, var(--workbench-mobile-assets-height));
-    overflow-y: auto;
-  }
-  body.workbenchMode .tools,
-  body.workbenchMode .viewportColumn,
-  body.workbenchMode .assetColumn { display: flex !important; width: 100%; }
-  body.workbenchMode .layoutResizer[data-resizer="tools"],
-  body.workbenchMode .layoutResizer[data-resizer="viewport"] { display: block !important; }
-  body.workbenchMode .layoutResizer[data-resizer="graph"] { display: none !important; }
-  body.workbenchMode .workbenchRelationResizer { display: block !important; flex-basis: 16px; }
-  body.workbenchMode .allLayoutRoot { display: none !important; }
 }
 
 @media (pointer: coarse) {

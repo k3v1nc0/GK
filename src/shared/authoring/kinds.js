@@ -16,8 +16,10 @@ import { NETWORK_KINDS } from "./kinds/network.js";
 import { WATER_WALK_KINDS } from "./kinds/water-walk.js";
 import { PARTY_KINDS } from "./kinds/party.js";
 import { CHAT_KINDS } from "./kinds/chat.js";
+import { PORTAL_KINDS } from "./kinds/portal.js";
 import { effectFields } from "./kinds/effect-fields.js";
 import { AREA_SETTING_SPECS, AREA_SOORT_ORDER, AREA_SOORTEN, areaSettingsIssues, areaSoort } from "./kinds/area.js";
+import { questSpawnsShapeIssues, questStartShapeIssues, questStepsShapeIssues } from "../../../apps/web/public/shared/quest-graph.js";
 
 const ID_PATTERN = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$/;
 const ASSET_PATTERN = /^[A-Za-z0-9_.:-]+$/;
@@ -111,7 +113,11 @@ export const CANONICAL_KINDS = {
         help: help("Mag het item verhandeld of verkocht worden?", "Aan voor gewone items, uit voor questitems.", "Questitem belandt op de markt → zet dit uit.") },
       questItem: { type: "boolean", required: false, audience: "client", label: "Questitem",
         ui: ui("📜", "toggle", "werkbank", { more: true }), default: false,
-        help: help("Is dit een item dat alleen voor een quest is?", "Aan voor brieven, sleutels en bewijsstukken.", "Questitem kan weggegooid worden → zet dit aan.") },
+        help: help("Is dit een item dat alleen voor een quest is? Dan staat het in het tas-vak 🔑 Quest, kun je het niet weggooien of verkopen en gaat het weg als de quest klaar is.", "Aan voor brieven, sleutels en bewijsstukken.", "Questitem kan weggegooid worden → zet dit aan.") },
+      // Quest Builder stap 4: zoals in ESO/WoW kun je een uniek item maar 1× bij je hebben.
+      unique: { type: "boolean", required: false, audience: "client", label: "Uniek (max 1)",
+        ui: ui("1️⃣", "toggle", "werkbank", { more: true }), default: false,
+        help: help("Een speler kan hier maar 1 van hebben. Oppakken, buit en kopen geven er niet nog een.", "Aan voor een brief die een quest start, een sleutel of een bijzonder bewijsstuk.", "Spelers hebben er meer dan 1 → zet dit aan.") },
       iconAssetId: { type: "asset", assetType: "image", required: false, maxLength: 160, audience: "client", label: "Eigen icoon",
         ui: ui("🖼️", "asset", "werkbank", { more: true }), default: null,
         help: help("Een eigen plaatje voor in de tas. Leeg = het plaatje van het 3D-model.", "Meestal leeg laten; vierkant plaatje van 64-128 px als je toch wilt.", "Icoon ziet er wazig uit → gebruik een groter plaatje.") },
@@ -178,7 +184,12 @@ export const CANONICAL_KINDS = {
         help: help("Hoeveel je krijgt als je hem oppakt.", "1 tot 5 stuks.", "Spelers hebben te snel genoeg → lager.") },
       respawnPolicyRef: { type: "id", required: false, maxLength: 120, audience: "server", label: "Terugkomen",
         ui: ui("⏳", "select", "werkbank", { optionsFrom: "respawnPolicies" }), default: null,
-        help: help("Of en wanneer de pickup terugkomt nadat iemand hem pakt.", "Kies een beleid uit de lijst; leeg = komt niet terug.", "Pickup komt nooit terug → kies hier een beleid.") }
+        help: help("Hoe snel de pickup terugkomt nadat iemand hem pakt (bij Ieder zijn eigen: voor die speler).", "Kies uit de lijst; leeg = Snel (30 s - 1 min). Nooit terug: zet Oppakken op Ieder 1×.", "Komt te snel terug → kies Langzaam of Zeldzaam.") },
+      // Quest Builder stap 4: een quest-object is per speler (ESO/WoW): iedereen pakt zijn eigen, of ieder maar 1×.
+      claimMode: { type: "select", required: false, options: ["shared", "personal", "once"], optionIcons: { shared: "🌍", personal: "🧍", once: "1️⃣" },
+        optionLabels: { shared: "Gedeeld: één voor iedereen", personal: "Ieder zijn eigen", once: "Ieder 1× (komt niet terug)" }, audience: "server", label: "Oppakken",
+        ui: ui("🫳", "select", "werkbank"), default: "shared",
+        help: help("Wie hem kan pakken. Gedeeld: wie het eerst komt; daarna is hij voor iedereen weg tot hij terugkomt. Ieder zijn eigen: voor jou weg, anderen zien hem nog. Ieder 1×: elke speler kan hem precies één keer pakken.", "Gedeeld voor gewone spullen; Ieder 1× voor een brief of sleutel voor een quest.", "Spelers pakken hem voor elkaar weg → kies Ieder zijn eigen of Ieder 1×.") }
     }
   },
   // F4-E1-T02: een Region is een exclusieve rechthoek in world-mm. Regions overlappen nooit (half-open grenzen).
@@ -224,7 +235,7 @@ export const CANONICAL_KINDS = {
         optionIcons: Object.fromEntries(AREA_SOORT_ORDER.map((key) => [key, AREA_SOORTEN[key].icon])),
         optionLabels: Object.fromEntries(AREA_SOORT_ORDER.map((key) => [key, AREA_SOORTEN[key].label])),
         ui: ui("🧩", "select", "werkbank"), default: null,
-        help: help("Wat dit vlak is: begroeiing, pad, blokkade, loopvlak of deelgebied.", "Kies het icoon; de punten blijven staan als je wisselt.", "Verkeerde soort → klik een ander icoon; zet daarna de instellingen opnieuw.") },
+        help: help("Wat dit vlak is: begroeiing, pad, blokkade, loopvlak, deelgebied of questgebied (voor quests).", "Kies het icoon; de punten blijven staan als je wisselt.", "Verkeerde soort → klik een ander icoon; zet daarna de instellingen opnieuw.") },
       settings: { type: "areaSettings", required: false, audience: "client", label: "Instellingen", soorten: AREA_SETTING_SPECS,
         ui: ui("🎛️", "areaSettings", "werkbank"), default: null,
         help: help("De instellingen die bij deze soort horen (textuur, modellen, breedte).", "Begin met de velden in beeld; de rest staat onder ⚙️ meer.", "Ziet er raar uit → zet een veld terug op de standaard.") },
@@ -238,14 +249,28 @@ export const CANONICAL_KINDS = {
       centerZMm: mmField("Midden Z", false, "🎯"),
       radiusMm: { type: "integer", required: false, min: 1000, max: MAX_WORLD_MM, audience: "client", label: "Straal",
         ui: ui("⭕", "slider", "viewport", { step: 100, unit: "m", scale: 1000, range: [1000, 100000] }), default: null, help: SHAPE_HELP },
-      pointsMm: { type: "pointList", required: false, minItems: 2, maxItems: 512, allowHeight: true, min: MM.min, max: MM.max, audience: "client", label: "Punten",
+      // Een 🛣️ Weg (het hele wegennet) mag tot 4096 punten; andere vlakken blijven op 512 (areaShapeIssues).
+      pointsMm: { type: "pointList", required: false, minItems: 2, maxItems: 4096, allowHeight: true, min: MM.min, max: MM.max, audience: "client", label: "Punten",
         ui: ui("🔷", "points", "viewport"), default: null, help: SHAPE_HELP },
+      // 🛣️ Weg (8-11): welk punt met welk punt verbonden is ([punt, punt]); zonder = punten op een rij.
+      links: { type: "linkList", required: false, maxItems: 8192, audience: "client", label: "Lijnen",
+        ui: ui("〰️", "points", "viewport", { soorten: ["pad"] }), default: null,
+        help: help("De lijnen van het wegennet: welk punt aan welk punt vastzit. Aan één punt kunnen zoveel lijnen als je wilt.",
+          "Teken in de 3D-view: F = punt of lijn erbij, twee punten kiezen + F = vastmaken.", "Een stuk weg zit nergens aan vast → kies een punt van dat stuk en een punt van de weg en druk F.") },
       // Alleen de server kiest de Area bij overlap; de client hoeft de prioriteit niet te kennen.
       priority: { type: "integer", required: false, min: 0, max: 100, audience: "server", label: "Voorrang",
         ui: ui("🥇", "slider", "werkbank", { step: 1, more: true, soorten: ["deelgebied"] }), default: 0,
         help: help("Welk deelgebied wint als twee elkaar overlappen.", "0 voor gewone plekken; hoger voor een klein plekje binnen een groter gebied.", "Verkeerde muziek op een overlap → geef het kleine gebied meer voorrang.") },
       musicAssetId: { type: "asset", assetType: "audio", required: false, maxLength: 160, audience: "client", label: "Muziek",
         ui: ui("🎵", "asset", "werkbank", { soorten: ["deelgebied"] }), default: null, help: MUSIC_HELP },
+      // Kevin 8-11: een loopvlak (bijv. een brug) is er alleen als een vlag aan (of uit) staat, per speler (zoals een NPC of model).
+      flagRef: { type: "ref", refKind: "world_flag", required: false, audience: "client", label: "Alleen als vlag",
+        ui: ui("🚩", "ref", "werkbank", { more: true, soorten: ["loopvlak"] }), default: null,
+        help: help("Kun je hier alleen lopen als een vlag aan (of uit) staat? Per speler: de een loopt over de brug, de ander niet.",
+          "Leeg = altijd. Sleep dezelfde 🚩 Vlag als op het model van de brug, dan horen ze bij elkaar.", "Je loopt over een brug die er niet is → zet hier de vlag van de brug.") },
+      flagOn: { type: "select", required: false, options: ["on", "off"], optionLabels: { on: "De vlag staat aan", off: "De vlag staat uit" }, audience: "client", label: "Wanneer",
+        ui: ui("🔁", "select", "werkbank", { more: true, soorten: ["loopvlak"] }), default: "on",
+        help: help("Is het loopvlak er als de vlag aan is, of juist als hij uit is?", "Aan: na de quest kun je erover. Uit: na de quest is hij weg.", "Het werkt andersom → kies de andere.") },
       // Fase 05: veilig gebied. Hier weigert de server elke aanval (van en op spelers) en jagen vijanden niet.
       safe: { type: "boolean", required: false, audience: "client", label: "Veilig (geen gevechten)",
         ui: ui("🕊️", "toggle", "werkbank", { soorten: ["deelgebied"] }), default: false,
@@ -286,6 +311,7 @@ export const CANONICAL_KINDS = {
   ...ACTOR_KINDS,
   ...WORLD_KINDS,
   ...GAME_KINDS,
+  ...PORTAL_KINDS,
   ...NETWORK_KINDS,
   ...WATER_WALK_KINDS,
   ...PARTY_KINDS,
@@ -387,6 +413,14 @@ export function validateDocument(kind, body) {
       if (bad) issues.push(issue(key, "FIELD_POINT", field.label + ": elk punt is [x, z] in hele mm" + (field.allowHeight ? " (een loopvlak mag [x, z, hoogte])." : ".")));
       continue;
     }
+    if (field.type === "linkList") {
+      if (!Array.isArray(value)) { issues.push(issue(key, "FIELD_TYPE", field.label + " moet een lijst zijn.")); continue; }
+      if (value.length > field.maxItems) issues.push(issue(key, "FIELD_RANGE", field.label + ": hooguit " + field.maxItems + "."));
+      if (value.some((link) => !Array.isArray(link) || link.length !== 2 || link.some((n) => !Number.isInteger(n) || n < 0) || link[0] === link[1])) {
+        issues.push(issue(key, "FIELD_LINK", field.label + ": elke lijn is [punt, ander punt]."));
+      }
+      continue;
+    }
     if (field.type === "terrainChunks") {
       // Wereld tekenen: { "cx:cz": sha1 } (vak → vingerafdruk van het bestand in assets/terrain).
       if (typeof value !== "object" || Array.isArray(value)) { issues.push(issue(key, "FIELD_TYPE", field.label + " moet een object zijn.")); continue; }
@@ -406,6 +440,26 @@ export function validateDocument(kind, body) {
         || typeof ref.file !== "string" || !/^[0-9a-f]{40}$/.test(ref.file) || !Array.isArray(ref.layers) || ref.layers.length > 3
         || ref.layers.some((layer) => typeof layer !== "string" || layer.length > 160 || (layer && !layer.startsWith("terrain_texture:")));
       if (entries.some(badEntry)) issues.push(issue(key, "FIELD_TERRAIN", field.label + ": elk vak is \"x:z\" met { file, layers }."));
+      continue;
+    }
+    if (field.type === "questSteps") {
+      const shape = questStepsShapeIssues(value);
+      for (const message of shape.issues) issues.push(issue(key, "QUEST_STEPS", message));
+      refs.push(...shape.refs);
+      continue;
+    }
+    if (field.type === "questStart") {
+      // Quest Builder stap 4: hoe de quest start en de voorwaarden (EN/OF).
+      const shape = questStartShapeIssues(value);
+      for (const message of shape.issues) issues.push(issue(key, "QUEST_START", message));
+      refs.push(...shape.refs);
+      continue;
+    }
+    if (field.type === "questSpawns") {
+      // Quest Builder stap 5: wat de quest laat verschijnen.
+      const shape = questSpawnsShapeIssues(value);
+      for (const message of shape.issues) issues.push(issue(key, "QUEST_SPAWNS", message));
+      refs.push(...shape.refs);
       continue;
     }
     if (field.type === "areaSettings") {
@@ -505,6 +559,7 @@ function shapeIssues(kind, body, issues) {
   if (kind === "area" && areaSoort(body) !== "deelgebied") { areaShapeIssues(body, issues); return; }
   if (kind === "area") {
     if (body.settings) issues.push(issue("settings", "SOORT_FIELD", "Een deelgebied heeft geen instellingen."));
+    if (body.links) issues.push(issue("links", "SOORT_FIELD", "Lijnen horen alleen bij een weg."));
     if (!body.shape) issues.push(issue("shape", "FIELD_REQUIRED", "Vorm is verplicht."));
     if (Array.isArray(body.pointsMm) && body.pointsMm.some((point) => point.length !== 2)) issues.push(issue("pointsMm", "FIELD_POINT", "Alleen een loopvlak heeft een hoogte per punt."));
     if (Array.isArray(body.pointsMm) && body.pointsMm.length < 3) issues.push(issue("pointsMm", "FIELD_RANGE", "Een deelgebied heeft minstens 3 punten."));
@@ -540,6 +595,11 @@ function areaShapeIssues(body, issues) {
   if (body.shape && body.shape !== "polygon") issues.push(issue("shape", "SOORT_SHAPE", def.label + " is altijd getekend met punten."));
   const points = Array.isArray(body.pointsMm) ? body.pointsMm : [];
   if (points.length < def.minPoints) issues.push(issue("pointsMm", "FIELD_REQUIRED", def.label + " heeft minstens " + def.minPoints + " punten nodig."));
+  if (!def.road && points.length > 512) issues.push(issue("pointsMm", "FIELD_RANGE", def.label + ": hooguit 512 punten."));
+  if (!def.road && body.links) issues.push(issue("links", "SOORT_FIELD", "Lijnen horen alleen bij een weg."));
+  if (def.road && Array.isArray(body.links) && body.links.some((link) => Array.isArray(link) && link.some((n) => n >= points.length))) {
+    issues.push(issue("links", "FIELD_LINK", "Een lijn wijst naar een punt dat er niet is."));
+  }
   if (!def.height && points.some((point) => point.length !== 2)) issues.push(issue("pointsMm", "FIELD_POINT", "Alleen een loopvlak heeft een hoogte per punt."));
   for (const message of areaSettingsIssues(soort, body.settings)) issues.push(issue("settings", "SETTING_INVALID", message));
 }

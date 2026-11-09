@@ -1,6 +1,16 @@
 // Eén achtergrondwerker per speler. Nieuwe klikken vervangen lopend zoekwerk;
 // een laat antwoord van een oude klik mag de speler nooit de verkeerde kant opsturen.
-export function createPlayerPathClient(makeWorker = () => new Worker(new URL("./player-navigation-worker.js?v=20261103-routes3", import.meta.url), { type: "module" })) {
+export function nextPlayerRouteWaypoint(route, position, arrivalRadius = 0.15) {
+  if (!Array.isArray(route) || !route.length || !position) return null;
+  const radius = Math.max(0, Number(arrivalRadius) || 0);
+  // Alleen tussenpunten verwijderen. Het laatste doel blijft staan en wordt door
+  // de gewone aankomstregel afgehandeld. Zo hoeft een speler een tussenpunt niet
+  // op een fractie van een millimeter exact te raken voordat de route doorgaat.
+  while (route.length > 1 && Math.hypot(route[0].x - position.x, route[0].z - position.z) <= radius) route.shift();
+  return route[0] || null;
+}
+
+export function createPlayerPathClient(makeWorker = () => new Worker(new URL("./player-navigation-worker.js?v=20261108-roads9", import.meta.url), { type: "module" })) {
   let worker = null, pending = null, contextKey = null, nextId = 0;
   function cancel() {
     if (!pending) return;

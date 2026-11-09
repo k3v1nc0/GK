@@ -78,14 +78,17 @@ test("spelregels uit kaarten: speler, valuta, winkel, crafting, quests, HUD en m
 
   // Quests: inleveren met item- en geldbeloning; de tweede komt pas na de eerste.
   const quests = world.gameProject.campaigns.quests.byId;
-  assert.equal(quests["quest.hout"].steps[0].stepType, "deliver");
+  // Quest Builder stap 1: de snelle Quest-kaart wordt 1 stap + einde, met de oude stap-ID's.
+  assert.deepEqual(quests["quest.hout"].steps.map((step) => [step.id, step.kind]), [["step.deliver", "step"], ["end", "end"]]);
+  assert.equal(quests["quest.hout"].steps[0].objectives[0].objectiveType, "deliver");
+  assert.equal(quests["quest.hout"].steps[0].objectives[0].requiredAmount, 2);
+  assert.ok(quests["quest.hout"].version);
   assert.deepEqual(quests["quest.hout"].rewards.map((reward) => reward.actionKind), ["xp", "currency", "item"]);
-  assert.equal(quests["quest.smid"].steps[0].stepType, "reach");
+  assert.equal(quests["quest.smid"].steps[0].objectives[0].objectiveType, "talk");
+  assert.equal(quests["quest.smid"].steps[0].objectives[0].targetRef, "target.npc.npc.smid");
   assert.deepEqual(quests["quest.smid"].prerequisiteQuestRefs, ["quest.hout"]);
   const boerGesprek = world.gameProject.campaigns.dialogues.byId["dialogue.npc.npc.boer"];
   assert.ok(boerGesprek.entriesById[boerGesprek.startEntryRef].choices.some((choice) => choice.nextEntryRef === "entry.offer.quest.hout"));
-  const smidGesprek = world.gameProject.campaigns.dialogues.byId["dialogue.npc.npc.smid"];
-  assert.ok(smidGesprek.entriesById[smidGesprek.startEntryRef].choices.some((choice) => choice.action === "complete_quest" && choice.questRef === "quest.smid"));
 
   // Game-scherm: tas uit, winkel en werkbank-venster aan (er is een smid), terugkomen altijd aan.
   const hud = world.gameProject.ui.modules.map((module) => module.nodeType);

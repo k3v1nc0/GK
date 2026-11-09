@@ -52,22 +52,38 @@ test("naam en wachtwoord wijzigen; het account wordt uitgelogd", async () => {
   assert.ok(await ctx.auth.login("anna_smit", "nieuwwachtwoord", "pc"), "nieuw wachtwoord werkt");
 });
 
-test("voortgang resetten wist tas, geld en level, maar houdt het account", async () => {
+test("spel resetten wist alle characters maar houdt account en editorindeling", async () => {
   const ctx = setup();
   const anna = await player(ctx, "anna");
+  ctx.db.prepare("UPDATE users SET active_profile_id = ? WHERE id = ?").run(anna.profileId, anna.userId);
+  ctx.db.prepare("INSERT INTO editor_user_layouts (user_id, layout_json, updated_at) VALUES (?, '{\"dock\":\"links\"}', ?)").run(anna.userId, ctx.stamp);
   const result = ctx.admin.resetProgress(anna.userId);
-  assert.ok(result.cleared >= 2);
+  assert.ok(result.cleared >= 3);
   assert.equal(ctx.db.prepare("SELECT COUNT(*) AS n FROM player_currencies WHERE player_id = ?").get(anna.profileId).n, 0);
   assert.equal(ctx.db.prepare("SELECT COUNT(*) AS n FROM player_progression WHERE player_id = ?").get(anna.profileId).n, 0);
+  assert.equal(ctx.db.prepare("SELECT COUNT(*) AS n FROM player_profiles WHERE user_id = ?").get(anna.userId).n, 0, "characterkeuze begint leeg");
+  assert.equal(ctx.db.prepare("SELECT active_profile_id FROM users WHERE id = ?").get(anna.userId).active_profile_id, null);
   assert.equal(ctx.db.prepare("SELECT COUNT(*) AS n FROM users WHERE id = ?").get(anna.userId).n, 1);
+  assert.equal(ctx.db.prepare("SELECT layout_json FROM editor_user_layouts WHERE user_id = ?").get(anna.userId).layout_json, '{\"dock\":\"links\"}');
 });
 
 test("verwijderen: speler weg, maar nooit jezelf of een admin", async () => {
   const ctx = setup();
   const anna = await player(ctx, "anna");
+  const bob = await player(ctx, "bob");
+  ctx.db.prepare("INSERT INTO parties (id, leader_player_id, loot_policy_id, created_at, updated_at) VALUES ('party_1', ?, 'default', ?, ?)")
+    .run(anna.profileId, ctx.stamp, ctx.stamp);
+  ctx.db.prepare("INSERT INTO party_members (party_id, player_id, role, joined_at) VALUES ('party_1', ?, 'member', ?)")
+    .run(bob.profileId, ctx.stamp);
+  ctx.db.prepare("INSERT INTO market_orders (id, seller_player_id, item_kind, item_id, quantity_total, quantity_remaining, currency_id, unit_price_minor, status, created_at, expires_at, updated_at) VALUES ('order_1', ?, 'item_stack', 'item.test', 1, 0, 'currency.goud', 10, 'filled', ?, ?, ?)")
+    .run(anna.profileId, ctx.stamp, ctx.stamp, ctx.stamp);
+  ctx.db.prepare("INSERT INTO market_trades (id, operation_id, order_id, buyer_player_id, seller_player_id, quantity, currency_id, unit_price_minor, gross_amount_minor, tax_amount_minor, seller_amount_minor, created_at) VALUES ('trade_1', 'op_1', 'order_1', ?, ?, 1, 'currency.goud', 10, 10, 0, 10, ?)")
+    .run(bob.profileId, anna.profileId, ctx.stamp);
   assert.throws(() => ctx.admin.remove("admin", "admin"), { status: 403 });
   ctx.admin.remove(anna.userId, "admin");
   assert.equal(ctx.db.prepare("SELECT COUNT(*) AS n FROM users WHERE id = ?").get(anna.userId).n, 0);
   assert.equal(ctx.db.prepare("SELECT COUNT(*) AS n FROM player_profiles WHERE id = ?").get(anna.profileId).n, 0);
   assert.equal(ctx.db.prepare("SELECT COUNT(*) AS n FROM player_currencies WHERE player_id = ?").get(anna.profileId).n, 0);
+  assert.equal(ctx.db.prepare("SELECT COUNT(*) AS n FROM parties WHERE id = 'party_1'").get().n, 0);
+  assert.equal(ctx.db.prepare("SELECT COUNT(*) AS n FROM market_trades WHERE id = 'trade_1'").get().n, 0);
 });

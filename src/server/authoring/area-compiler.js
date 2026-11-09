@@ -8,7 +8,8 @@ export function parseAreaLegacyRef(legacyRef) {
   return match ? { nodeType: match[1], runtimeId: match[2] } : null;
 }
 
-const isShape = (doc) => doc.kind === "area" && areaSoort(doc.body) !== "deelgebied";
+// Een Questgebied is geen vorm in de wereld: alleen de quest-motor leest het (game-compiler).
+const isShape = (doc) => doc.kind === "area" && areaSoort(doc.body) !== "deelgebied" && areaSoort(doc.body) !== "questgebied";
 
 // Geeft null als er geen vlakken zijn (dan blijft een oudere build bytegelijk).
 export function compileAreaShapes(known, options = {}) {
@@ -28,7 +29,9 @@ export function compileAreaShapes(known, options = {}) {
     const def = AREA_SOORTEN[soort];
     const runtimeId = legacy ? legacy.runtimeId : "area." + doc.body.areaId;
     const values = areaNodeValues(doc.body, runtimeId);
-    if (assetTypes) {
+    // Kevin 8-11: een loopvlak met "Alleen als vlag" (alleen als het er is, zo blijft een oude build gelijk).
+    if (soort === "loopvlak" && doc.body.flagRef) values.flag = { id: String(doc.body.flagRef).replace(/^[a-z_]+:/, ""), on: doc.body.flagOn !== "off" };
+    if (assetTypes && soort !== "pad") {
       const check = (assetId, wanted, what) => {
         if (!assetId) return;
         if (!assetTypes.has(assetId)) errors.push({ code: "ASSET_UNKNOWN", docKey: doc.docKey, message: doc.body.displayName + " gebruikt onbekend " + what + " " + assetId });

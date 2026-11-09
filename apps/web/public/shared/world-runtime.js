@@ -2,8 +2,8 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
-import { normalizeWorldSettingsPreset, worldSettingsPresetValues } from "./node-types.js?v=20260728-zone-canvas-fix23";
-import { previewTokenText } from "./token-preview.js?v=20260717-node01-foundation";
+import { normalizeWorldSettingsPreset, worldSettingsPresetValues } from "./node-types.js?v=20261106-perf1";
+import { previewTokenText } from "./token-preview.js?v=20261106-perf1";
 import {
   effectiveGroundBounds,
   effectiveWorldGroundBounds,
@@ -23,10 +23,11 @@ import {
   resolveMovement,
   resolveWalkabilitySource,
   createWalkabilityIndex,
-  isPointBlockedBySurface
+  isPointBlockedBySurface,
+  ensureEdgeField
 } from "./movement-kernel.js";
 import { terrainHeightAt } from "./terrain.js";
-import { createPlayerPathClient } from "./player-path-client.js?v=20261103-routes3";
+import { createPlayerPathClient } from "./player-path-client.js?v=20261108-roads9";
 import { createTerrainLayer, seedTerrainChunk, seedTerrainPaint } from "./terrain-render.js";
 import { createWaterLayer } from "./water-render.js?v=20261030-terrein6";
 export {
@@ -4706,6 +4707,10 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let transformGuide = null;
   let terrainEditorOverlay = null;
   let terrainEditorOverlayState = null;
+  // 🛣️ Weg (editor): zie setRoadEditorOverlay. Waar de punten getekend zijn (zelfde hoogte bij klikken).
+  let roadEditorOverlay = null;
+  let roadEditorState = null;
+  let roadEditorPositions = [];
   let scatterEditorOverlay = null;
   let scatterEditorOverlayState = null;
   let terrainRuntimeGroup = null;
@@ -4908,6 +4913,12 @@ export function createGkWorldRuntime(canvas, options = {}) {
   const remotePlayers = new Map();
   const runtimeTargetRoots = new Map();
   const runtimeTargetSuppressedEntityIds = new Set();
+  // Stap 8: NPC's die nu met de speler meelopen (begeleiden): hun vaste model is even onzichtbaar (botsen blijft gelijk aan de server).
+  const escortHiddenEntityIds = new Set();
+  // Quest Builder stap 9: NPC's en modellen die er voor deze speler (door een vlag) niet zijn: niet botsen.
+  const flagHiddenEntityIds = new Set();
+  // Kevin 8-11: de vlaggen die voor deze speler aan staan (loopvlakken zoals een brug met "Alleen als vlag").
+  let playerFlagsOn = new Set();
   const runtimePhysicalEntityIds = new Set();
   let runtimeTargetNameplatesVisible = true;
   let camYaw = 0;
@@ -5489,7 +5500,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
     const scatterBatchingAllowed = shouldBatchScatterProps();
     for (const entity of entityBlueprints) {
       const assetId = entity?.modelAssetId || "";
-      if (entityBatchingAllowed && canBatchStaticProp(world, assetId) && !runtimePhysicalEntityIds.has(String(entity?.id || entity?.nodeId || ""))) {
+      if (entityBatchingAllowed && !entity?.flag && canBatchStaticProp(world, assetId) && !runtimePhysicalEntityIds.has(String(entity?.id || entity?.nodeId || ""))) {
         let bucket = entityGroups.get(assetId);
         if (!bucket) {
           bucket = [];
@@ -6088,7 +6099,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
         const entityId = String(entry.object?.userData?.entityId || entry.id || "").trim();
         const runtimeTargetSuppressed = entry.object?.userData?.runtimeTargetSuppressed === true
           || (entityId && runtimeTargetSuppressedEntityIds.has(entityId));
-        entry.object.visible = item.visible !== false && !runtimeTargetSuppressed;
+        entry.object.visible = item.visible !== false && !runtimeTargetSuppressed && !(entityId && escortHiddenEntityIds.has(entityId));
         entry.object.userData.chunkCulled = item.visible === false;
         const shouldShadowProxy = item.loaded !== false
           && item.renderResident === false
@@ -8024,6 +8035,11 @@ function resolveChunkDebugCenter(policy) {
     terrainEditorOverlay = createTerrainOverlay();
     sanitizeNonWorldShadowCasters(terrainEditorOverlay);
     scene.add(terrainEditorOverlay);
+    roadEditorOverlay = new THREE.Group();
+    roadEditorOverlay.name = "GK editor terrain overlay (weg)";
+    roadEditorOverlay.frustumCulled = false;
+    markDebugOverlayTree(roadEditorOverlay, "terrain");
+    scene.add(roadEditorOverlay);
     scatterEditorOverlay = createScatterOverlay();
     sanitizeNonWorldShadowCasters(scatterEditorOverlay);
     scene.add(scatterEditorOverlay);
@@ -9542,6 +9558,99 @@ function resolveChunkDebugCenter(policy) {
       scatterEditorOverlay.add(handle);
     }
     requestRender("scatter-overlay-update");
+  }
+
+  // 🛣️ Weg (editor): het wegennet als punten en lijnen, altijd te zien. state = { points: [{x, z}], links: [[i, j]],
+  // selectedPoints, selectedLinks, active }. De editor (road-editor.js) doet het klikken via pickRoadEditor.
+  function roadOverlayY(x, z) {
+    return num(world?.ground?.y, 0) + terrainLift(x, z) + 0.12;
+  }
+  function buildRoadEditorOverlay() {
+    if (!roadEditorOverlay) return;
+    for (const child of Array.from(roadEditorOverlay.children)) {
+      roadEditorOverlay.remove(child);
+      disposeObject(child);
+    }
+    roadEditorPositions = [];
+    const data = roadEditorState;
+    const points = Array.isArray(data?.points) ? data.points : [];
+    roadEditorOverlay.visible = mode === "editor" && points.length > 0;
+    if (!roadEditorOverlay.visible) { requestRender("road-overlay"); return; }
+    const active = data.active === true;
+    const pos = points.map((p) => new THREE.Vector3(num(p.x, 0), roadOverlayY(p.x, p.z), num(p.z, 0)));
+    roadEditorPositions = pos;
+    const selectedPoints = new Set(Array.isArray(data.selectedPoints) ? data.selectedPoints : []);
+    const selectedLinks = new Set(Array.isArray(data.selectedLinks) ? data.selectedLinks : []);
+    const ribbon = (list, width, color, opacity, order) => {
+      const vertices = [];
+      for (const [a, b] of list) {
+        const p = pos[a], q = pos[b];
+        if (!p || !q) continue;
+        const dx = q.x - p.x, dz = q.z - p.z, length = Math.hypot(dx, dz) || 1;
+        const nx = -dz / length * width / 2, nz = dx / length * width / 2;
+        vertices.push(p.x + nx, p.y, p.z + nz, p.x - nx, p.y, p.z - nz, q.x + nx, q.y, q.z + nz,
+          q.x + nx, q.y, q.z + nz, p.x - nx, p.y, p.z - nz, q.x - nx, q.y, q.z - nz);
+      }
+      if (!vertices.length) return;
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+      const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, depthTest: false, depthWrite: false, transparent: true, opacity, toneMapped: false }));
+      mesh.renderOrder = order;
+      mesh.frustumCulled = false;
+      mesh.raycast = function () {};
+      mesh.userData.debugOverlay = true;
+      mesh.userData.debugOverlayKind = "terrain";
+      roadEditorOverlay.add(mesh);
+    };
+    const links = Array.isArray(data.links) ? data.links : [];
+    ribbon(links.filter((_, k) => !selectedLinks.has(k)), active ? 0.35 : 0.25, active ? 0xffb347 : 0xd99a3c, active ? 0.95 : 0.7, 2002);
+    ribbon(links.filter((_, k) => selectedLinks.has(k)), 0.55, 0xffffff, 1, 2003);
+    const sphere = (list, radius, color, order) => {
+      if (!list.length) return;
+      const mesh = new THREE.InstancedMesh(new THREE.SphereGeometry(radius, 12, 8),
+        new THREE.MeshBasicMaterial({ color, depthTest: false, depthWrite: false, transparent: true, opacity: 1, toneMapped: false }), list.length);
+      const matrix = new THREE.Matrix4();
+      list.forEach((i, k) => { matrix.makeTranslation(pos[i].x, pos[i].y, pos[i].z); mesh.setMatrixAt(k, matrix); });
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.renderOrder = order;
+      mesh.frustumCulled = false;
+      mesh.raycast = function () {};
+      mesh.userData.debugOverlay = true;
+      mesh.userData.debugOverlayKind = "terrain";
+      roadEditorOverlay.add(mesh);
+    };
+    const all = points.map((_, i) => i);
+    sphere(all.filter((i) => !selectedPoints.has(i)), active ? 0.45 : 0.3, active ? 0x4ade80 : 0x9ccf8a, 2004);
+    sphere(all.filter((i) => selectedPoints.has(i)), 0.6, 0xffffff, 2005);
+    requestRender("road-overlay");
+  }
+  function setRoadEditorOverlay(state) {
+    roadEditorState = state || null;
+    buildRoadEditorOverlay();
+  }
+  // Wat ligt er onder de muis: { kind: "point", index } of { kind: "link", index }, of null. Punten gaan voor.
+  function pickRoadEditor(clientX, clientY, radiusPx = 14, options = {}) {
+    const exclude = new Set(Array.isArray(options?.exclude) ? options.exclude : []);
+    const data = roadEditorState;
+    const points = Array.isArray(data?.points) ? data.points : [];
+    if (mode !== "editor" || !points.length) return null;
+    const screen = points.map((p, i) => worldToScreen(roadEditorPositions[i] || { x: num(p.x, 0), y: roadOverlayY(p.x, p.z), z: num(p.z, 0) }));
+    let best = null;
+    screen.forEach((s, i) => {
+      if (!s || exclude.has(i)) return;
+      const d = Math.hypot(s.x - clientX, s.y - clientY);
+      if (d <= radiusPx && (!best || d < best.d)) best = { kind: "point", index: i, d };
+    });
+    if (best) return { kind: best.kind, index: best.index };
+    (Array.isArray(data.links) ? data.links : []).forEach(([a, b], k) => {
+      const p = screen[a], q = screen[b];
+      if (!p || !q) return;
+      const dx = q.x - p.x, dy = q.y - p.y, length2 = dx * dx + dy * dy;
+      const t = length2 > 0 ? Math.max(0, Math.min(1, ((clientX - p.x) * dx + (clientY - p.y) * dy) / length2)) : 0;
+      const d = Math.hypot(p.x + dx * t - clientX, p.y + dy * t - clientY);
+      if (d <= radiusPx * 0.7 && (!best || d < best.d)) best = { kind: "link", index: k, d };
+    });
+    return best ? { kind: best.kind, index: best.index } : null;
   }
 
   function setTerrainEditorOverlay(nextOverlay) {
@@ -11448,6 +11557,7 @@ function resolveChunkDebugCenter(policy) {
     const highY = groundY + Math.max(20, Math.max(width, depth));
 
     const hiddenRoots = [];
+    let hideOverlaysForBake = function () {};
     function hideRoot(root) {
       if (root && root.visible !== false) {
         hiddenRoots.push(root);
@@ -11554,6 +11664,21 @@ function resolveChunkDebugCenter(policy) {
         });
       });
       const seenBakeMaterials = new Set();
+      // Kevin 8-11: alle editor-overlays (wegennet, selectie, zone-rand, hulplijnen) horen niet op de kaartfoto,
+      // ook niet als ze tijdens het klaarzetten van de bake opnieuw gemaakt zijn.
+      // Kevin 8-11 (ronde 3): de weg-overlay tekent zichzelf opnieuw (en wordt weer zichtbaar) terwijl de tegels
+      // opgeslagen worden. Daarom vlak voor elke foto opnieuw verbergen.
+      hideOverlaysForBake = function () {
+        const overlayRoots = [];
+        scene.traverse(function (child) {
+          if (child?.userData?.debugOverlayRoot === true && child.visible !== false) overlayRoots.push(child);
+        });
+        for (const root of overlayRoots) hideRoot(root);
+        hideRoot(multiSelectionBoundsHelper);
+        hideRoot(roadEditorOverlay);
+        hideRoot(terrainEditorOverlay);
+      };
+      hideOverlaysForBake();
       scene.traverse(function (child) {
         if (!child?.material) return;
         for (const material of Array.isArray(child.material) ? child.material : [child.material]) {
@@ -11605,6 +11730,7 @@ function resolveChunkDebugCenter(policy) {
             renderer.setClearColor(new THREE.Color(backgroundColor), 1);
             renderer.autoClear = true;
             renderer.clear(true, true, true);
+            hideOverlaysForBake();
             renderer.render(scene, tileCamera);
             renderer.readRenderTargetPixels(tileTarget, 0, 0, tileRes, tileRes, tilePixels);
             for (let y = 0; y < tileRes; y += 1) {
@@ -11625,6 +11751,7 @@ function resolveChunkDebugCenter(policy) {
       renderer.setClearColor(new THREE.Color(backgroundColor), transparentBackground ? 0 : 1);
       renderer.autoClear = true;
       renderer.clear(true, true, true);
+      hideOverlaysForBake();
       renderer.render(scene, bakeCamera);
 
       const pixels = new Uint8Array(resolution * resolution * 4);
@@ -14816,7 +14943,7 @@ function resolveChunkDebugCenter(policy) {
     root.userData.runAnimation = entity.runAnimation || null;
     root.name = entity.id;
     transformObject(root, entity.transform);
-    root.visible = root.userData.runtimeTargetSuppressed !== true;
+    root.visible = root.userData.runtimeTargetSuppressed !== true && !escortHiddenEntityIds.has(String(entity.id || ""));
     entityRoots.set(entity.id, root);
     content.add(root);
     runtimeStats.sceneObjects += 1;
@@ -15746,6 +15873,116 @@ function resolveChunkDebugCenter(policy) {
       : (target?.modelAssetId ? clamp(Math.max(2.65, modelScaleY * 2.9 + 0.7), 2.65, 8) : 2.65);
   }
 
+  function runtimeTargetPresentationConfig() {
+    const raw = world?.gameProject?.ui?.targetPresentation || {};
+    return {
+      hitboxMarginPercent: clamp(num(raw.hitboxMarginPercent, 10), 0, 200),
+      hitboxMarginMeters: clamp(num(raw.hitboxMarginMeters, 0.15), 0, 10),
+      ringsVisible: raw.ringsVisible !== false,
+      labelOffsetMeters: clamp(num(raw.labelOffsetMeters, 0.2), 0, 10),
+      labelFontSizePx: clamp(num(raw.labelFontSizePx, 13), 8, 48)
+    };
+  }
+
+  function fallbackRuntimeVisualMeasurement(target, playerVisual = false) {
+    if (playerVisual) return { centerX: 0, centerY: 1, centerZ: 0, topY: 2, width: 0.9, height: 2, depth: 0.7, resolved: false };
+    const kind = String(target?.entityKind || target?.targetKind || "").toLowerCase();
+    if (kind === "resource") return { centerX: 0, centerY: 0.95, centerZ: 0, topY: 1.9, width: 1.56, height: 1.9, depth: 1.56, resolved: false };
+    if (kind === "pickup") return { centerX: 0, centerY: 0.32, centerZ: 0, topY: 0.64, width: 0.75, height: 0.64, depth: 0.75, resolved: false };
+    if (kind === "zone_link") return { centerX: 0, centerY: 1, centerZ: 0, topY: 1.9, width: 1.75, height: 1.8, depth: 1.75, resolved: false };
+    return { centerX: 0, centerY: 1, centerZ: 0, topY: 2, width: 0.9, height: 2, depth: 0.9, resolved: false };
+  }
+
+  // Meet alleen de zichtbare modeldelen, dus niet de ring, het oude 3D-naambord
+  // of het onzichtbare klikvlak zelf. Het resultaat staat in de lokale ruimte
+  // van ownerRoot en kan daardoor goedkoop met een bewegend doel meeschuiven.
+  function runtimeVisualMeasurement(ownerRoot, visualRoots, cacheKey, fallback) {
+    if (!ownerRoot) return fallback;
+    const roots = (Array.isArray(visualRoots) ? visualRoots : [visualRoots]).filter(Boolean);
+    const signature = roots.map(function (entry) { return entry.uuid || entry.id || entry.name || "visual"; }).join("|");
+    const now = performance.now();
+    const cached = ownerRoot.userData?.[cacheKey] || null;
+    if (cached && cached.signature === signature && (cached.resolved || now < num(cached.retryAt, 0))) return cached;
+    const bounds = new THREE.Box3();
+    bounds.makeEmpty();
+    let meshCount = 0;
+    for (const visual of roots) {
+      visual.updateWorldMatrix(true, true);
+      visual.traverseVisible(function (child) {
+        if (!(child.isMesh || child.isInstancedMesh) || child.material?.visible === false || child.userData?.shadowProxy === true) return;
+        let localBounds = null;
+        if (child.isInstancedMesh) {
+          if (!child.boundingBox && typeof child.computeBoundingBox === "function") child.computeBoundingBox();
+          localBounds = child.boundingBox || null;
+        } else if (child.geometry) {
+          if (!child.geometry.boundingBox && typeof child.geometry.computeBoundingBox === "function") child.geometry.computeBoundingBox();
+          localBounds = child.geometry.boundingBox || null;
+        }
+        if (!localBounds || localBounds.isEmpty()) return;
+        bounds.union(localBounds.clone().applyMatrix4(child.matrixWorld));
+        meshCount += 1;
+      });
+    }
+    if (!meshCount || bounds.isEmpty()) {
+      const pending = Object.assign({ signature, retryAt: now + 250 }, fallback);
+      ownerRoot.userData[cacheKey] = pending;
+      return pending;
+    }
+    ownerRoot.updateWorldMatrix(true, false);
+    const centerWorld = bounds.getCenter(new THREE.Vector3());
+    const sizeWorld = bounds.getSize(new THREE.Vector3());
+    const centerLocal = ownerRoot.worldToLocal(centerWorld.clone());
+    const topLocal = ownerRoot.worldToLocal(new THREE.Vector3(centerWorld.x, bounds.max.y, centerWorld.z));
+    const worldScale = ownerRoot.getWorldScale(new THREE.Vector3());
+    const measured = {
+      signature,
+      retryAt: Infinity,
+      centerX: centerLocal.x,
+      centerY: centerLocal.y,
+      centerZ: centerLocal.z,
+      topY: topLocal.y,
+      width: sizeWorld.x / Math.max(0.0001, Math.abs(worldScale.x)),
+      height: sizeWorld.y / Math.max(0.0001, Math.abs(worldScale.y)),
+      depth: sizeWorld.z / Math.max(0.0001, Math.abs(worldScale.z)),
+      resolved: true
+    };
+    ownerRoot.userData[cacheKey] = measured;
+    return measured;
+  }
+
+  function runtimeTargetVisualMeasurement(root, target) {
+    const attachedEntityId = runtimeTargetAttachedEntityId(target);
+    const attachedCandidate = attachedEntityId ? rootForSelectableId(attachedEntityId) : null;
+    const attachedRoot = attachedCandidate?.userData?.runtimeTarget === true ? null : attachedCandidate;
+    const visuals = attachedRoot ? [attachedRoot] : root?.children?.filter(function (child) {
+      return child?.name === "node03-runtime-target-model" || child?.name === "node03-runtime-target-body";
+    }) || [];
+    return runtimeVisualMeasurement(root, visuals, "runtimeTargetVisualMeasurement", fallbackRuntimeVisualMeasurement(target));
+  }
+
+  function runtimePlayerVisualMeasurement(root) {
+    const visuals = root?.children?.filter(function (child) {
+      return child?.userData?.localPlayerNameplate !== true && child?.userData?.remotePlayerNameplate !== true;
+    }) || [];
+    return runtimeVisualMeasurement(root, visuals, "runtimePlayerVisualMeasurement", fallbackRuntimeVisualMeasurement(null, true));
+  }
+
+  function runtimeTargetLabelPoint(root, target, point) {
+    const measured = runtimeTargetVisualMeasurement(root, target);
+    point.set(measured.centerX, measured.topY, measured.centerZ);
+    root.localToWorld(point);
+    point.y += runtimeTargetPresentationConfig().labelOffsetMeters;
+    return point;
+  }
+
+  function runtimePlayerLabelPoint(root, point) {
+    const measured = runtimePlayerVisualMeasurement(root);
+    point.set(measured.centerX, measured.topY, measured.centerZ);
+    root.localToWorld(point);
+    point.y += runtimeTargetPresentationConfig().labelOffsetMeters;
+    return point;
+  }
+
   // Game (stap 4): de plek op het scherm net boven elk zichtbaar doel, voor de scherpe 2D-naamlabels van de HUD
   // (in plaats van de 3D-bordjes). Dichtstbij eerst, hooguit maxCount.
   // 2D-namen in de HUD: schermplek (pagina-pixels) van NPC's, vijanden, spullen en spelers.
@@ -15756,6 +15993,8 @@ function resolveChunkDebugCenter(policy) {
     const rect = canvas.getBoundingClientRect();
     const point = new THREE.Vector3();
     const origin = player.root ? player.root.position : player.pos;
+    const presentation = runtimeTargetPresentationConfig();
+    const seenWorldLabels = new Set();
     const push = function (id, name, entityKind, extra) {
       const distance = origin ? Math.hypot(point.x - origin.x, point.z - origin.z) : camera.position.distanceTo(point);
       if (!(distance <= maxDistance)) return;
@@ -15765,7 +16004,8 @@ function resolveChunkDebugCenter(policy) {
         id, name, entityKind, action: "", selected: false, available: true,
         x: rect.left + (point.x * 0.5 + 0.5) * rect.width,
         y: rect.top + (-point.y * 0.5 + 0.5) * rect.height,
-        distance
+        distance,
+        fontSizePx: presentation.labelFontSizePx
       }, extra || null));
     };
     for (const [id, root] of runtimeTargetRoots) {
@@ -15773,23 +16013,31 @@ function resolveChunkDebugCenter(policy) {
       const target = root.userData?.runtimeTargetPayload || {};
       const name = String(target.displayName || "").trim().slice(0, 34);
       if (!name) continue;
-      point.set(root.position.x, root.position.y + Math.max(1.6, runtimeTargetNameplateY(target) - 0.45), root.position.z);
+      // Een NPC kan tegelijk een praat-, winkel- en crafting-target zijn. Die
+      // interacties blijven allemaal actief, maar dezelfde mesh krijgt één naam.
+      const attachedEntityId = runtimeTargetAttachedEntityId(target);
+      const placeKey = "place:" + name.toLocaleLowerCase() + ":"
+        + Math.round(num(root.position?.x, 0) * 5) + ":"
+        + Math.round(num(root.position?.z, 0) * 5);
+      const entityKey = attachedEntityId ? "entity:" + attachedEntityId : "";
+      if ((entityKey && seenWorldLabels.has(entityKey)) || seenWorldLabels.has(placeKey)) continue;
+      if (entityKey) seenWorldLabels.add(entityKey);
+      seenWorldLabels.add(placeKey);
+      runtimeTargetLabelPoint(root, target, point);
       push(id, name, String(target.entityKind || target.targetKind || ""), {
-        action: String(target.action || ""), selected: target.selected === true, available: target.available !== false
+        action: String(target.action || ""), selected: target.selected === true, available: target.available !== false,
+        // Stap 8: een begeleide NPC toont zijn levens onder zijn naam.
+        health: target.escort === true && Number(target.healthMax) > 0 ? Math.max(0, Math.min(1, Number(target.healthCurrent) / Number(target.healthMax))) : null
       });
     }
-    // Spelers: de plek van hun (verborgen) 3D-naambordje.
-    const self = player.root?.userData?.localPlayerNameplateRoot || null;
-    if (self && player.displayName) {
-      self.getWorldPosition(point);
-      point.y -= 0.25;
+    // Spelers gebruiken dezelfde regel: hoogste punt van hun eigen mesh + marge.
+    if (player.root && player.displayName) {
+      runtimePlayerLabelPoint(player.root, point);
       push("self", String(player.displayName).trim().slice(0, 32), "self");
     }
     for (const [playerId, record] of remotePlayers) {
-      const plate = record?.root?.userData?.remotePlayerNameplateRoot || null;
-      if (!plate || record.root.visible === false || !record.root.parent) continue;
-      plate.getWorldPosition(point);
-      point.y -= 0.25;
+      if (!record?.root || record.root.visible === false || !record.root.parent) continue;
+      runtimePlayerLabelPoint(record.root, point);
       push("player:" + playerId, String(record.displayName || "").trim().slice(0, 32) || "Speler", "player");
     }
     list.sort(function (a, b) { return a.distance - b.distance; });
@@ -15858,26 +16106,6 @@ function resolveChunkDebugCenter(policy) {
     return sprite;
   }
 
-  function runtimeTargetHitRadius(target) {
-    const kind = String(target?.entityKind || target?.targetKind || "").toLowerCase();
-    if (Number.isFinite(Number(target?.clickRadius))) return clamp(Number(target.clickRadius), 0.4, 8);
-    if (Number.isFinite(Number(target?.hitRadius))) return clamp(Number(target.hitRadius), 0.4, 8);
-    // A solid authored portal cannot be reached at its exact centre. Its click
-    // area therefore includes the physical radius, just like its range check.
-    if (kind === "zone_link" && Number.isFinite(Number(target?.range))) {
-      return clamp(Math.max(0, Number(target.range)) + Math.max(0, num(target?.radius, 0)), 0.4, 8);
-    }
-    if (Number.isFinite(Number(target?.range)) && Number(target.range) > 0) {
-      return clamp(Number(target.range), 0.4, 8);
-    }
-    if (kind === "zone_link") return 4.5;
-    if (kind === "enemy") return 1.35;
-    if (kind === "resource") return 1.55;
-    if (kind === "pickup") return 1.35;
-    if (kind === "quest") return clamp(Number(target?.radius) || 1.8, 1.2, 4);
-    return 1.5;
-  }
-
   function runtimeTargetEditorSelectableId(target) {
     return mode === "editor" ? String(target?.editorSelectableId || runtimeTargetAttachedEntityId(target) || "").trim() : "";
   }
@@ -15888,7 +16116,10 @@ function resolveChunkDebugCenter(policy) {
 
   function runtimeTargetAttachedEntityId(target) {
     const explicit = mode === "editor" ? target?.editorAttachedEntityId : null;
-    return String(explicit || (target?.renderBody === false ? target?.visualEntityId : null) || "").trim();
+    const runtimeAttached = target?.renderBody === false
+      ? (target?.visualEntityId || target?.linkedEntity?.entityId || target?.linkedEntity?.nodeId || target?.linkedEntityId || target?.entityRef)
+      : null;
+    return String(explicit || runtimeAttached || "").trim();
   }
 
   function runtimeTargetControlsAttachedEntity(target) {
@@ -15920,8 +16151,9 @@ function resolveChunkDebugCenter(policy) {
     else runtimeTargetSuppressedEntityIds.delete(id);
     // Zelfde regel als de server (setWorldEntityColliderEnabled): een verborgen target (bijv. verzameld) botst niet.
     for (const solid of predictionSolids) {
-      if (String(solid?.entityId || "") === id && solid.enabled !== !suppressed) {
-        solid.enabled = !suppressed;
+      const enabled = !suppressed && solid?.flagHidden !== true;
+      if (String(solid?.entityId || "") === id && solid.enabled !== enabled) {
+        solid.enabled = enabled;
         playerPathClient?.invalidate();
       }
     }
@@ -15933,7 +16165,7 @@ function resolveChunkDebugCenter(policy) {
     const attachedRoot = rootForSelectableId(id);
     if (attachedRoot && attachedRoot.userData?.runtimeTarget !== true) {
       attachedRoot.userData.runtimeTargetSuppressed = suppressed;
-      attachedRoot.visible = !suppressed && attachedRoot.userData.chunkCulled !== true;
+      attachedRoot.visible = !suppressed && attachedRoot.userData.chunkCulled !== true && !escortHiddenEntityIds.has(id);
     }
     return suppressed;
   }
@@ -15956,10 +16188,42 @@ function resolveChunkDebugCenter(policy) {
     };
   }
 
-  function createRuntimeTargetHitProxy(target) {
-    const radius = runtimeTargetHitRadius(target);
-    const height = clamp(radius * 1.8, 1.8, 5.2);
-    const geometry = new THREE.CylinderGeometry(radius, radius, height, 16, 1);
+  function runtimeTargetHitboxSpec(root, target) {
+    const measured = runtimeTargetVisualMeasurement(root, target);
+    const presentation = runtimeTargetPresentationConfig();
+    const factor = 1 + presentation.hitboxMarginPercent / 100;
+    const extra = presentation.hitboxMarginMeters * 2;
+    return {
+      centerX: measured.centerX,
+      centerY: measured.centerY,
+      centerZ: measured.centerZ,
+      width: Math.max(0.1, measured.width * factor + extra),
+      height: Math.max(0.1, measured.height * factor + extra),
+      depth: Math.max(0.1, measured.depth * factor + extra),
+      resolved: measured.resolved === true
+    };
+  }
+
+  function refreshRuntimeTargetHitProxy(root, target) {
+    if (!root) return null;
+    const mesh = root.children.find(function (child) { return child?.userData?.runtimeTargetHitProxy === true; }) || null;
+    if (!mesh) return null;
+    const spec = runtimeTargetHitboxSpec(root, target);
+    const signature = [spec.centerX, spec.centerY, spec.centerZ, spec.width, spec.height, spec.depth, spec.resolved].map(function (value) {
+      return typeof value === "number" ? Math.round(value * 10000) / 10000 : value;
+    }).join("|");
+    if (mesh.userData.runtimeTargetHitboxSignature !== signature) {
+      mesh.position.set(spec.centerX, spec.centerY, spec.centerZ);
+      mesh.scale.set(spec.width, spec.height, spec.depth);
+      mesh.userData.runtimeTargetHitboxSignature = signature;
+    }
+    return mesh;
+  }
+
+  function createRuntimeTargetHitProxy(target, root = null) {
+    // Een eenheidsbox wordt naar de gemeten mesh-afmetingen geschaald. Anders dan
+    // vroeger komt de praat-/aanval-/opraapafstand hier niet meer in terecht.
+    const geometry = new THREE.BoxGeometry(1, 1, 1);
     const material = new THREE.MeshBasicMaterial({
       transparent: true,
       opacity: 0,
@@ -15968,14 +16232,18 @@ function resolveChunkDebugCenter(policy) {
     material.colorWrite = false;
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = "node03-runtime-target-hit-proxy";
-    mesh.position.y = height / 2;
     mesh.renderOrder = -1;
     mesh.userData.runtimeAlive = true;
     mesh.userData.runtimeTarget = true;
+    mesh.userData.runtimeTargetHitProxy = true;
     mesh.userData.runtimeTargetId = target?.instanceId || null;
     mesh.userData.runtimeTargetPayload = Object.assign({}, target);
     const editorSelectableId = runtimeTargetEditorSelectableId(target);
     if (editorSelectableId) mesh.userData.entityId = editorSelectableId;
+    if (root) {
+      root.add(mesh);
+      refreshRuntimeTargetHitProxy(root, target);
+    }
     return mesh;
   }
 
@@ -16528,6 +16796,11 @@ function resolveChunkDebugCenter(policy) {
       loadModelInto(group, assetId, world, function () {
         if (group.userData.actorAnimation) playAnimationState(group, group.userData.actorAnimation, 0);
         markRuntimeTargetTree(group, target);
+        const targetRoot = group.parent;
+        if (targetRoot?.userData?.runtimeTarget === true) {
+          targetRoot.userData.runtimeTargetVisualMeasurement = null;
+          refreshRuntimeTargetHitProxy(targetRoot, targetRoot.userData.runtimeTargetPayload || target);
+        }
       }, {
         castShadow: false,
         receiveShadow: true
@@ -16584,6 +16857,7 @@ function resolveChunkDebugCenter(policy) {
     });
     const mesh = new THREE.Mesh(new THREE.TorusGeometry(ringRadius, target?.selected ? 0.045 : 0.035, 6, 44), material);
     mesh.name = "node03-runtime-target-ring";
+    mesh.visible = runtimeTargetPresentationConfig().ringsVisible;
     mesh.position.y = 0.055;
     mesh.rotation.x = Math.PI / 2;
     // Terrain/surface layers can be streamed in after the target. Several of
@@ -16613,7 +16887,7 @@ function resolveChunkDebugCenter(policy) {
     }
     root.add(createRuntimeTargetRangeRing(target));
     if (target?.renderBody !== false) root.add(createRuntimeTargetBody(target));
-    root.add(createRuntimeTargetHitProxy(target));
+    createRuntimeTargetHitProxy(target, root);
     const nameplate = createRuntimeTargetNameplate(target);
     if (nameplate) root.add(nameplate);
     markRuntimeTargetTree(root, target);
@@ -16635,6 +16909,7 @@ function resolveChunkDebugCenter(policy) {
       syncRuntimeTargetAttachedEntitySuppression(previousAttachedEntityId);
     }
     if (attachedEntityId) syncRuntimeTargetAttachedEntitySuppression(attachedEntityId);
+    refreshRuntimeTargetHitProxy(root, target);
     const editorSelectableId = runtimeTargetEditorSelectableId(target);
     if (editorSelectableId) {
       root.userData.entityId = editorSelectableId;
@@ -16686,13 +16961,14 @@ function resolveChunkDebugCenter(policy) {
       }
       root.add(createRuntimeTargetRangeRing(target));
       if (!keepBody && target?.renderBody !== false) root.add(createRuntimeTargetBody(target));
-      root.add(createRuntimeTargetHitProxy(target));
+      createRuntimeTargetHitProxy(target, root);
       const nameplate = createRuntimeTargetNameplate(target);
       if (nameplate) root.add(nameplate);
       root.userData.runtimeTargetSignature = signature;
       root.userData.runtimeTargetBodySignature = bodySignature;
     }
     markRuntimeTargetTree(root, target);
+    refreshRuntimeTargetHitProxy(root, target);
   }
 
   // Mixers hangen aan de modelgroep binnen een target; bij weghalen ook de mixer opruimen (anders lekt hij).
@@ -16810,6 +17086,65 @@ function resolveChunkDebugCenter(policy) {
     return true;
   }
 
+  // Stap 8: het vaste model van een NPC verbergen terwijl hij met de speler meeloopt (begeleiden), en daarna terug.
+  function setEntityHidden(entityId, hidden) {
+    const id = String(entityId || "").trim();
+    if (!id) return false;
+    const want = hidden === true;
+    if (want === escortHiddenEntityIds.has(id)) return true;
+    if (want) escortHiddenEntityIds.add(id); else escortHiddenEntityIds.delete(id);
+    const root = rootForSelectableId(id);
+    if (root && root.userData?.runtimeTarget !== true) {
+      root.visible = !want && root.userData.runtimeTargetSuppressed !== true && root.userData.chunkCulled !== true;
+    }
+    requestRender("entity-hidden");
+    return true;
+  }
+
+  // Stap 9: de server zegt welke NPC's en modellen er voor deze speler niet zijn; daar loop je doorheen (zoals op de server).
+  function setFlagHiddenEntities(ids) {
+    const next = new Set((Array.isArray(ids) ? ids : []).map(function (id) { return String(id || "").trim(); }).filter(Boolean));
+    if (next.size === flagHiddenEntityIds.size && Array.from(next).every(function (id) { return flagHiddenEntityIds.has(id); })) return false;
+    flagHiddenEntityIds.clear();
+    for (const id of next) flagHiddenEntityIds.add(id);
+    for (const solid of predictionSolids) {
+      const id = String(solid?.entityId || "");
+      const hide = next.has(id);
+      if (solid.flagHidden === hide) continue;
+      solid.flagHidden = hide;
+      solid.enabled = !hide && !runtimeTargetSuppressedEntityIds.has(id);
+    }
+    playerPathClient?.invalidate();
+    return true;
+  }
+
+  // Kevin 8-11: loopvlakken met "Alleen als vlag" die er voor deze speler niet zijn, uit de (eigen) index halen,
+  // net als de server doet. De volledige lijst blijft bewaard (niet opsomming: gaat niet mee naar de routewerker).
+  function applyWalkableFlags(index) {
+    if (!index || !Array.isArray(index.walkables)) return false;
+    if (!index.allWalkables) {
+      if (!index.walkables.some(function (walkable) { return walkable?.flag; })) return false;
+      Object.defineProperty(index, "allWalkables", { value: index.walkables, writable: true, configurable: true, enumerable: false });
+      Object.defineProperty(index, "allWalls", { value: Array.isArray(index.walls) ? index.walls : [], writable: true, configurable: true, enumerable: false });
+    }
+    const passes = function (entry) { return !entry?.flag || playerFlagsOn.has(entry.flag.id) === (entry.flag.on !== false); };
+    const walkables = index.allWalkables.filter(passes);
+    if (walkables.length === index.walkables.length && walkables.every(function (walkable, i) { return walkable === index.walkables[i]; })) return false;
+    index.walkables = walkables;
+    index.walls = index.allWalls.filter(passes);
+    delete index.edgeField;
+    ensureEdgeField(index);
+    return true;
+  }
+
+  function setPlayerFlags(list) {
+    const next = new Set((Array.isArray(list) ? list : []).map(String));
+    if (next.size === playerFlagsOn.size && Array.from(next).every(function (id) { return playerFlagsOn.has(id); })) return false;
+    playerFlagsOn = next;
+    if (mode === "game" && applyWalkableFlags(resolveWalkabilitySource())) playerPathClient?.invalidate();
+    return true;
+  }
+
   function setRuntimeTargetNameplatesVisible(visible) {
     const nextVisible = visible !== false;
     if (runtimeTargetNameplatesVisible === nextVisible) return runtimeTargetNameplatesVisible;
@@ -16836,6 +17171,11 @@ function resolveChunkDebugCenter(policy) {
 
   function pickRuntimeTargetAt(clientX, clientY) {
     if (mode !== "game" || !runtimeTargetRoots.size) return null;
+    // Modellen kunnen asynchroon klaar zijn. Vlak voor de klik nog één keer meten
+    // voorkomt dat de tijdelijke standaardbox blijft gelden.
+    for (const root of runtimeTargetRoots.values()) {
+      if (root?.visible !== false) refreshRuntimeTargetHitProxy(root, root.userData?.runtimeTargetPayload || {});
+    }
     const rect = canvas.getBoundingClientRect();
     pointer.x = ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
     pointer.y = -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1;
@@ -17112,7 +17452,7 @@ function resolveChunkDebugCenter(policy) {
       index: resolveWalkabilitySource(),
       radius: Math.max(0.05, num(options.radius, player.radius)),
       solids: mode === "game" ? predictionSolids : activeSolids
-    }, { arrivalRadius: options.arrivalRadius || 0 });
+    }, { arrivalRadius: options.arrivalRadius || 0, roads: options.roads !== false });
   }
 
   function setPlayerAnimationState(animationState) {
@@ -17636,6 +17976,15 @@ function resolveChunkDebugCenter(policy) {
     }
   }
 
+  // GPU-belasting voor het Serverstatus-rijtje (8-11): deel van de beeldtijd waarin de grafische kaart bezig is.
+  // null als de browser de GPU-tijd niet kan meten (geen timer-extensie).
+  function getGpuLoad() {
+    const gpuMs = gpuFrameTimer && gpuFrameTimer.emaMs !== null ? gpuFrameTimer.emaMs : null;
+    const frameMs = perfHudFrameMs > 0 ? perfHudFrameMs : null;
+    const percent = gpuMs === null || frameMs === null ? null : Math.max(0, Math.min(100, gpuMs / frameMs * 100));
+    return { gpuMs: gpuMs, frameMs: frameMs, percent: percent };
+  }
+
   function buildPerformanceSnapshot() {
     const info = renderer.info || {};
     const renderInfo = info.render || {};
@@ -17894,6 +18243,15 @@ function resolveChunkDebugCenter(policy) {
       animationActionTime: animationDebug.animationActionTime,
       reconcileActive: player.reconcileActive
     };
+  }
+
+  // Portals (8-11): na een sprong binnen dezelfde wereld eerst het stuk onder je voeten bouwen en daarna steeds verder
+  // (dichtstbij eerst, een paar stukken per frame), net als bij het laden na een zonewissel. Zo is er geen lange hapering.
+  function beginProgressiveStreaming() {
+    if (mode !== "game") return false;
+    residentContentState.progressiveBootstrap = true;
+    residentContentState.progressiveCenterChunkKey = "";
+    return true;
   }
 
   function setPlayerState(nextState, options = {}) {
@@ -18341,6 +18699,8 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function setWorld(nextWorld, options = {}) {
+    // 🛣️ De Weg-punten op de hoogte van het terrein zetten zodra dat geladen is.
+    if (mode === "editor" && roadEditorState) setTimeout(buildRoadEditorOverlay, 1500);
     playerPathClient?.invalidate();
     worldBuildGeneration += 1;
     // In game mode is de server (via game.js) eigenaar van de spelerpositie.
@@ -18396,9 +18756,11 @@ function resolveChunkDebugCenter(policy) {
     // Altijd de hoogte van de terreinlaag als de wereld terrein heeft, ook als de laag nog niet getekend is (game:
     // die komt later via de grondvakken). Anders voorspelt de client zonder hellingen en trekt de server je terug.
     const nextWalkabilityIndex = buildWalkabilityIndex(world, { heightfield: world?.terrain?.heightfield || terrainLayer.active ? terrainLayer.heightfield : null });
+    if (mode === "game") applyWalkableFlags(nextWalkabilityIndex);
     predictionSolids = mode === "game"
       ? solidCollisionEntriesForWorld(world).map(function (solid) {
-        return Object.assign(solid, { enabled: !runtimeTargetSuppressedEntityIds.has(String(solid.entityId || "")) });
+        const flagHidden = flagHiddenEntityIds.has(String(solid.entityId || ""));
+        return Object.assign(solid, { flagHidden, enabled: !flagHidden && !runtimeTargetSuppressedEntityIds.has(String(solid.entityId || "")) });
       })
       : [];
     runtimeCollisionBaseCount = (nextWalkabilityIndex.surfaceBlockers?.length || 0)
@@ -18444,7 +18806,7 @@ function resolveChunkDebugCenter(policy) {
           scatterEntities.push(entity);
           continue;
         }
-        if (canBatchStaticProp(world, entity?.modelAssetId) && !runtimePhysicalEntityIds.has(String(entity?.id || entity?.nodeId || ""))) {
+        if (!entity?.flag && canBatchStaticProp(world, entity?.modelAssetId) && !runtimePhysicalEntityIds.has(String(entity?.id || entity?.nodeId || ""))) {
           addEntity(world, entity, { skipVisual: true });
           queueStaticPropGroup(entity.modelAssetId, {
             kind: "entity",
@@ -18584,6 +18946,11 @@ function resolveChunkDebugCenter(policy) {
       scene.remove(terrainEditorOverlay);
       clearTerrainEditorOverlay();
       terrainEditorOverlay = null;
+    }
+    if (roadEditorOverlay) {
+      scene.remove(roadEditorOverlay);
+      for (const child of Array.from(roadEditorOverlay.children)) disposeObject(child);
+      roadEditorOverlay = null;
     }
     if (scatterEditorOverlay) {
       scene.remove(scatterEditorOverlay);
@@ -18854,6 +19221,9 @@ function resolveChunkDebugCenter(policy) {
     setRuntimeTargetAnimation: setRuntimeTargetAnimation,
     registerRuntimeAssets: registerRuntimeAssets,
     setRuntimeTargetNameplatesVisible: setRuntimeTargetNameplatesVisible,
+    setEntityHidden: setEntityHidden,
+    setFlagHiddenEntities: setFlagHiddenEntities,
+    setPlayerFlags: setPlayerFlags,
     getRuntimeTargetLabelAnchors: getRuntimeTargetLabelAnchors,
     setPerformanceHud: setPerformanceHud,
     getRuntimeTargetNameplatesVisible: getRuntimeTargetNameplatesVisible,
@@ -18865,7 +19235,11 @@ function resolveChunkDebugCenter(policy) {
     debugTeleportPlayer: debugTeleportPlayer,
     debugStepPlayerTo: debugStepPlayerTo,
     setPlayerState: setPlayerState,
+    beginProgressiveStreaming: beginProgressiveStreaming,
+    getGpuLoad: getGpuLoad,
     setTerrainEditorOverlay: setTerrainEditorOverlay,
+    setRoadEditorOverlay: setRoadEditorOverlay,
+    pickRoadEditor: pickRoadEditor,
     clearTerrainEditorOverlay: clearTerrainEditorOverlay,
     setScatterEditorOverlay: setScatterEditorOverlay,
     clearScatterEditorOverlay: clearScatterEditorOverlay,

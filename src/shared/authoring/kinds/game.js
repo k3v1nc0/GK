@@ -3,6 +3,7 @@
 // placed_model blijft het interne document per wereldinstantie, maar staat niet als Bibliotheek-soort in beeld.
 // Speler en Game-scherm (HUD) staan onder Instellingen. De wereldbouwer maakt hieruit de spelwereld.
 import { HELP_ID, HELP_MODEL, HELP_NAME, HELP_SCALE, help, ui } from "./ui.js";
+import { FLAG_SCOPES, QUEST_LIMITS, QUEST_SPAWN_LIMITS } from "../../../../apps/web/public/shared/quest-graph.js";
 
 const idField = (label, wat) => ({ type: "id", required: true, maxLength: 120, audience: "client", label,
   ui: ui("🔖", "id", "werkbank", { more: true }), default: null, help: HELP_ID(wat) });
@@ -12,6 +13,12 @@ const int = (label, icon, def, min, max, place, extra, helpText) => ({ type: "in
   ui: ui(icon, "slider", place, Object.assign({ step: 1 }, extra)), default: def, help: helpText });
 const toggle = (label, icon, def, place, helpText, extra = {}) => ({ type: "boolean", required: false, audience: "client", label,
   ui: ui(icon, "toggle", place, extra), default: def, help: helpText });
+const colorSetting = (label, icon, def, group, helpText) => ({ type: "color", required: false, audience: "client", label,
+  ui: ui(icon, "color", "instellingen", { group, more: true }), default: def, help: helpText });
+const textSetting = (label, icon, def, group, helpText) => ({ type: "text", required: false, maxLength: 40, audience: "client", label,
+  ui: ui(icon, "text", "instellingen", { group, more: true }), default: def, help: helpText });
+const selectSetting = (label, icon, def, options, optionLabels, group, helpText) => ({ type: "select", required: false, options,
+  optionLabels, audience: "client", label, ui: ui(icon, "select", "instellingen", { group, more: true }), default: def, help: helpText });
 const refField = (label, icon, refKind, required, helpText, extra = {}) => ({ type: "ref", refKind, required, audience: "client", label,
   ui: ui(icon, "ref", "werkbank", extra), default: null, help: helpText });
 // Een lijst regels { ref, aantal/prijs }: slepen of kiezen per regel (zie werkbank-docs.js refListControl).
@@ -35,8 +42,65 @@ const clipField = (label, icon) => ({ type: "text", required: false, maxLength: 
   ui: ui(icon, "select", "werkbank", { optionsFrom: "clips:modelAssetId", more: true }), default: null,
   help: help("Welke animatie uit het model speelt als hij stilstaat.", "Kies uit de lijst; die komt uit het model dat je erop sleepte.", "Staat stijf → kies een andere animatie of controleer of het model animaties heeft.") });
 
+// Quest Builder stap 9: een NPC of model staat er alleen als een vlag aan (of uit) staat, per speler (bijv. een poort die opengaat).
+const flagGate = (wat) => ({
+  flagRef: refField("Alleen als vlag", "🚩", "world_flag", false,
+    help("Staat " + wat + " er alleen als een vlag aan (of uit) staat? Per speler: de een ziet hem wel, de ander niet. Ook botsen en praten volgen dit.",
+      "Leeg = altijd. Sleep een 🚩 Vlag uit de Bibliotheek, bijv. Poort open; een quest zet hem aan.", "Niemand ziet " + wat + " → kijk of een quest de vlag wel aanzet."),
+    { more: true }),
+  flagOn: { type: "select", required: false, options: ["on", "off"], optionLabels: { on: "De vlag staat aan", off: "De vlag staat uit" }, audience: "client", label: "Wanneer",
+    ui: ui("🔁", "select", "werkbank", { more: true }), default: "on",
+    help: help("Staat " + wat + " er als de vlag aan is, of juist als hij uit is?", "Aan: verschijnt na de quest. Uit: verdwijnt na de quest (bijv. een dichte poort).", "Het werkt andersom → kies de andere.") }
+});
+
 const CLASS_HEAL_GROUP = "💚 Terugkrijgen en genezen";
 export const STACKING_LABELS = Object.freeze({ refresh: "Opnieuw beginnen", extend: "Tijd erbij", block: "Niet nog eens" });
+
+const MAP_ICON_OPTIONS = Object.freeze(["dot", "diamond", "square", "triangle", "star", "pin", "portal", "cross", "ring", "arrow"]);
+const MAP_ICON_LABELS = Object.freeze({ dot: "Rondje", diamond: "Ruit", square: "Vierkant", triangle: "Driehoek", star: "Ster",
+  pin: "Pin", portal: "Portalring", cross: "Kruis", ring: "Open ring", arrow: "Pijl" });
+const MAP_START_GROUP = "🗺️ Kaart: begin en vorm";
+const MAP_SIZE_GROUP = "📐 Kaart: maten en tekst";
+const MAP_COLOR_GROUP = "🎨 Kaart: algemene kleuren";
+const mapLegendFields = (key, label, color, shape, mini = true, big = true, names = false) => {
+  const group = "📍 Legenda: " + label;
+  const title = label.replace(/:.*$/, "");
+  return {
+    ["map" + key + "Label"]: textSetting("Naam in legenda", "🏷️", label, group,
+      help("De naam van deze soort in de legenda en bij kaartlabels.", label + " is de standaard.", "De kaartnaam is onduidelijk → schrijf hier je eigen naam.")),
+    ["map" + key + "Color"]: colorSetting("Kleur", "🎨", color, group,
+      help("De kleur van het icoon op de kleine kaart, grote kaart en in de legenda.", "Standaard " + color + ".", "Het icoon valt niet op → kies meer contrast.")),
+    ["map" + key + "Icon"]: selectSetting("Icoon", "🔶", shape, MAP_ICON_OPTIONS.slice(), MAP_ICON_LABELS, group,
+      help("De vorm van het icoon voor " + title.toLowerCase() + ". De legenda gebruikt dezelfde vorm.", "Standaard: " + MAP_ICON_LABELS[shape] + ".", "Het lijkt te veel op een ander icoon → kies een andere vorm.")),
+    // Kevin 8-11: elk icoon een eigen grootte (bovenop de algemene icoongrootte van de minimap en de grote kaart).
+    ["map" + key + "SizePct"]: int("Grootte", "📏", 100, 30, 300, "instellingen", { range: [40, 250], unit: "%", group },
+      help("Hoe groot dit icoon is op de minimap en de grote kaart, bovenop de algemene icoongrootte.", "100 % is normaal; 120-150 % voor iets belangrijks zoals portals.", "Het icoon valt weg of bedekt andere iconen → schuif kleiner of groter.")),
+    // Kevin 8-11: per soort de namen naast de iconen aan of uit (bijv. alleen de namen van je teamgenoten).
+    ["map" + key + "NamesMini"]: toggle("Namen op minimap", "🏷️", names, "instellingen",
+      help("Schrijft de naam naast elk icoon van deze soort op de kleine kaart.", names ? "Aan: je ziet meteen wie het is." : "Uit: de kleine kaart blijft rustig.", "De minimap is te vol met tekst → zet uit."), { group }),
+    ["map" + key + "NamesBig"]: toggle("Namen op grote kaart", "🏷️", names, "instellingen",
+      help("Schrijft de naam naast elk icoon van deze soort op de grote kaart.", names ? "Aan: je ziet meteen wie het is." : "Uit: aanwijzen of tikken toont de naam.", "De grote kaart is te vol met tekst → zet uit."), { group }),
+    ["map" + key + "ShowMini"]: toggle("Op minimap bij start", "🧭", mini, "instellingen",
+      help("Toont deze soort standaard op de kleine kaart. Een speler kan dit later zelf wijzigen in de legenda.", mini ? "Aan: meteen te zien." : "Uit: de speler zet het zelf aan.", "De minimap is te druk → zet uit."), { group, more: true }),
+    ["map" + key + "ShowBig"]: toggle("Op grote kaart bij start", "🗺️", big, "instellingen",
+      help("Toont deze soort standaard op de grote kaart. Een speler kan dit later zelf wijzigen in de legenda.", big ? "Aan: meteen te zien." : "Uit: de speler zet het zelf aan.", "De grote kaart is te druk → zet uit."), { group, more: true })
+  };
+};
+const MAP_LEGEND_FIELDS = Object.freeze(Object.assign({},
+  mapLegendFields("Self", "Jij", "#ffffff", "arrow"),
+  mapLegendFields("Npc", "NPC's", "#ffd34d", "diamond"),
+  mapLegendFields("Enemy", "Vijanden", "#ff4b4b", "dot"),
+  mapLegendFields("Resource", "Grondstoffen", "#63d65f", "dot", false),
+  mapLegendFields("Pickup", "Oppakken", "#8fe3ff", "dot", false),
+  mapLegendFields("Player", "Spelers", "#4da3ff", "dot"),
+  mapLegendFields("Party", "Groepsleden", "#5ee07a", "dot", true, true, true),
+  mapLegendFields("Portal", "Portals", "#c77dff", "portal"),
+  mapLegendFields("PortalLocked", "Portal: nog niet vrij", "#8a7d99", "portal"),
+  mapLegendFields("QuestgiverAvailable", "Questgever: quest te halen", "#ffe08a", "star"),
+  mapLegendFields("Questgiver", "Questgever: geen nieuwe quest", "#d4a84a", "star"),
+  mapLegendFields("Quest", "Quest-doel", "#ffb020", "star"),
+  mapLegendFields("Pin", "Jouw pin", "#ff4fd8", "pin")
+));
 
 export const QUEST_GOALS = Object.freeze(["deliver", "visit"]);
 
@@ -87,10 +151,33 @@ export const GAME_KINDS = {
       modelScaleBp: { type: "integer", required: false, min: 100, max: 100000, audience: "client", label: "Modelschaal",
         ui: ui("📏", "slider", "werkbank", { step: 100, unit: "%", scale: 100, range: [1000, 40000], more: true }), default: 10000, help: HELP_SCALE },
       idleClip: clipField("Animatie stilstaan", "🧍"),
+      // Stap 8: een NPC die je begeleidt loopt mee.
+      walkClip: { type: "text", required: false, maxLength: 120, audience: "client", label: "Animatie lopen",
+        ui: ui("🚶", "select", "werkbank", { optionsFrom: "clips:modelAssetId", more: true }), default: null,
+        help: help("Welke animatie uit het model speelt als hij loopt (als je hem begeleidt in een quest).", "Kies uit de lijst; die komt uit het model dat je erop sleepte.", "Hij glijdt over de grond → kies hier een loop-animatie.") },
+      ...flagGate("deze NPC"),
       x: pos("X", "↔️"),
       y: height,
       z: pos("Z", "↕️"),
       rotationY: turn("viewport", true)
+    }
+  },
+  // Quest Builder stap 9: wereldstatus. Een quest zet de vlag aan of uit (⚡ regel of bij een einde);
+  // een NPC of model kan er alleen zijn als de vlag aan (of uit) staat.
+  world_flag: {
+    label: "Vlag",
+    plural: "Vlaggen",
+    icon: "🚩",
+    place: "werkbank",
+    singleton: false,
+    domain: "flags",
+    idField: "flagId",
+    fields: {
+      flagId: idField("Vlag-ID", "deze vlag"),
+      displayName: nameField("deze vlag"),
+      scope: { type: "select", required: false, options: Object.keys(FLAG_SCOPES), optionLabels: Object.fromEntries(Object.entries(FLAG_SCOPES).map(([key, entry]) => [key, entry.icon + " " + entry.label])),
+        audience: "client", label: "Voor wie", ui: ui("👥", "select", "werkbank"), default: "group",
+        help: help("Voor wie de vlag aangaat als een quest hem zet.", "Groep voor een poort die voor jullie opengaat; Iedereen voor iets dat de hele wereld verandert (bijv. na een wereld-event).", "Een ander ziet het ook → kies Alleen voor de speler of Voor de groep.") }
     }
   },
   quest: {
@@ -104,29 +191,66 @@ export const GAME_KINDS = {
     fields: {
       questId: idField("Quest-ID", "deze quest"),
       displayName: nameField("deze quest"),
-      giverRef: refField("Wie geeft hem", "🧑", "npc", true,
-        help("Bij welke NPC je deze quest aanneemt.", "Sleep een NPC uit de Bibliotheek op dit vak.", "Niemand biedt de quest aan → controleer of de NPC in de wereld staat.")),
+      // Quest Builder stap 4: hoe de quest start (NPC, item lezen, gebied, vanzelf) en de voorwaarden (EN/OF).
+      start: { type: "questStart", required: false, audience: "client", label: "Start en voorwaarden",
+        ui: ui("🚪", "questStart", "questbuilder"), default: null,
+        help: help("Hoe de quest begint (bij een NPC, een brief lezen, een gebied in of vanzelf) en wat je nodig hebt (level, item, quest af, klasse).", "Meestal: bij een NPC zonder voorwaarden. Een brief uit een kist met 'Level minstens 10' voor een verborgen quest.", "Niemand kan de quest beginnen → kijk in de Quest Builder (🧪 Testen) wat de quest-check zegt.") },
+      // Alleen nodig als de quest bij een NPC start (stap 4); de quest-check zegt het als hij ontbreekt.
+      giverRef: refField("Wie geeft hem", "🧑", "npc", false,
+        help("Bij welke NPC je deze quest aanneemt.", "Sleep een NPC uit de Bibliotheek op dit vak.", "Niemand biedt de quest aan → controleer of de NPC in de wereld staat."),
+        { place: "questbuilder", when: { key: "start.mode", is: ["npc"], fallback: "npc" } }),
       goal: { type: "select", required: false, options: QUEST_GOALS.slice(), optionIcons: { deliver: "📦", visit: "🚶" },
         optionLabels: { deliver: "Breng spullen", visit: "Ga naar iemand" }, audience: "client", label: "Doel",
-        ui: ui("🎯", "select", "werkbank"), default: "deliver",
-        help: help("Wat de speler moet doen.", "Breng spullen = verzamel items en lever ze in. Ga naar iemand = loop naar een andere NPC.", "Quest wordt nooit klaar → controleer item en aantal, of kies bij 'Ga naar iemand' een NPC onder ⚙️ meer.") },
+        ui: ui("🎯", "select", "questbuilder", { hideWhen: "steps" }), default: "deliver",
+        help: help("Wat de speler moet doen.", "Breng spullen = verzamel items en lever ze in. Ga naar iemand = loop naar een andere NPC.", "Quest wordt nooit klaar → controleer item en aantal, of kies bij 'Ga naar iemand' een NPC bij 🏁 Inleveren bij.") },
       itemRef: refField("Welk item", "🎒", "item_definition", false,
-        help("Welk item de speler moet brengen (alleen bij Breng spullen).", "Sleep een item uit de Bibliotheek; bijv. een item dat vijanden laten vallen.", "Quest wordt nooit klaar → kies een item dat je echt kunt krijgen.")),
-      amount: int("Hoeveel", "🔢", 1, 1, 9999, "werkbank", { range: [1, 50] },
+        help("Welk item de speler moet brengen (alleen bij Breng spullen).", "Sleep een item uit de Bibliotheek; bijv. een item dat vijanden laten vallen.", "Quest wordt nooit klaar → kies een item dat je echt kunt krijgen."), { place: "questbuilder", hideWhen: "steps" }),
+      amount: int("Hoeveel", "🔢", 1, 1, 9999, "questbuilder", { range: [1, 50], hideWhen: "steps" },
         help("Hoeveel van het item de speler moet brengen.", "1 tot 10 voor een eerste quest.", "Duurt te lang → minder.")),
+      // Quest Builder stap 1: de quest als netwerk van stappen. Leeg = de snelle quest hierboven (1 stap + einde).
+      // 5-11: het paneel toont hier één samenvatting (start + stappen) met één knop; de velden met plek questbuilder staan alleen in de Quest Builder.
+      steps: { type: "questSteps", required: false, maxItems: QUEST_LIMITS.steps, audience: "client", label: "Stappen",
+        ui: ui("🪜", "questSteps", "werkbank"), default: null,
+        help: help("De stappen van de quest: doelen per stap en waar de quest daarna heen gaat.", "Begin met de snelle quest (1 doel). Meer nodig? Open de Quest Builder en voeg stappen toe.", "Rode melding in de Quest Builder → klik de stap en los op wat er staat.") },
+      // Quest Builder stap 5: wat de quest laat verschijnen (vijanden met een eigen naam, voor wie, wanneer weg). Een regel bij een stap
+      // (⚡ Als → Dan) laat het verschijnen. Hoort bij de quest, niet bij een stap.
+      spawns: { type: "questSpawns", required: false, maxItems: QUEST_SPAWN_LIMITS.spawns, audience: "client", label: "Verschijnen",
+        ui: ui("👾", "questSpawns", "questbuilder"), default: null,
+        help: help("Vijanden die deze quest laat verschijnen, bijv. een wolvengroep bij het 5e hout.", "Geef ze een naam (Wolvengroep), kies voor wie (meestal de groep) en zet bij een stap (⚡ Wat gebeurt er onderweg) een regel: Dan 👾 laat vijanden verschijnen.", "Ze verschijnen nooit → kijk in de Quest Builder (🧪 Testen) wat de quest-check zegt.") },
       rewards: refList("Beloning", "🎁", ["item_definition", "currency"], [AMOUNT], "werkbank",
         help("Wat de speler krijgt als de quest klaar is.", "Sleep items of valuta uit de Bibliotheek, bijv. 10 goud of een zwaard.", "Spelers worden te snel rijk → minder of goedkopere beloningen.")),
       rewardXp: int("XP", "⭐", 50, 0, 1000000, "werkbank", { range: [0, 1000] },
         help("Hoeveel ervaring de speler krijgt bij het inleveren.", "50-200 voor een eerste quest.", "Spelers stijgen te snel → minder XP.")),
-      description: { type: "text", required: false, maxLength: 300, audience: "client", label: "Wat de NPC vertelt",
-        ui: ui("💬", "text", "werkbank", { more: true }), default: null,
-        help: help("De uitleg die de NPC geeft als hij de quest aanbiedt.", "Eén of twee zinnen: wat en waarom, bijv. \"Breng me 3 appels voor de taart.\"", "Spelers snappen het niet → zeg precies wat en hoeveel.") },
+      // 5-11: het verhaal bij de start, in de Quest Builder (tab 🚪 Start). Bij een NPC vertelt de NPC het; bij een brief,
+      // gebied of vanzelf toont de game een venster met dit verhaal, het plaatje en de doelen.
+      description: { type: "text", required: false, maxLength: 1000, audience: "client", label: "Verhaal bij de start",
+        ui: ui("📖", "text", "questbuilder", { multiline: true }), default: null,
+        help: help("Het verhaal dat de speler leest als de quest begint: wat de NPC vertelt, wat er in de brief staat, wat er in de buurt gebeurt of een heads-up na de vorige quest.", "Twee tot vijf zinnen: wat er aan de hand is en wat de speler moet doen, bijv. \"Soldaat Bart heeft je hard nodig. Reis naar het kamp bij de brug.\"", "Spelers snappen het niet → zeg precies wat, waar en hoeveel.") },
+      imageAssetId: { type: "asset", assetType: "image", required: false, maxLength: 160, audience: "client", label: "Plaatje",
+        ui: ui("🖼️", "asset", "questbuilder"), default: null,
+        help: help("Een plaatje in het startvenster van de quest, bijv. de brief, een kaart of de persoon die je nodig heeft.", "Een vierkant plaatje (PNG of JPG). Leeg = een icoon past bij hoe de quest start.", "Plaatje wazig → gebruik een groter plaatje (minstens 256 × 256).") },
       targetNpcRef: refField("Inleveren bij", "🏁", "npc", false,
-        help("Bij welke NPC je de quest inlevert. Leeg = bij wie hem gaf.", "Bij 'Ga naar iemand' verplicht: de NPC waar de speler heen moet.", "Quest niet in te leveren → controleer of die NPC in de wereld staat."), { more: true }),
+        help("Bij welke NPC je de quest inlevert. Leeg = bij wie hem gaf.", "Bij 'Ga naar iemand' verplicht: de NPC waar de speler heen moet.", "Quest niet in te leveren → controleer of die NPC in de wereld staat."), { place: "questbuilder", hideWhen: "steps" }),
       previousQuestRef: refField("Pas na quest", "⛓️", "quest", false,
-        help("Deze quest komt pas als de speler een andere quest af heeft.", "Gebruik dit om een verhaal in stappen te maken.", "Quest komt nooit → controleer of de vorige quest te doen is."), { more: true }),
-      repeatable: toggle("Herhaalbaar", "🔁", false, "werkbank",
-        help("Mag de speler deze quest vaker doen?", "Uit voor verhaal-quests, aan voor klusjes (bijv. hout brengen).", "Spelers farmen beloningen → zet dit uit."), { more: true })
+        help("Deze quest komt pas als de speler een andere quest af heeft.", "Gebruik dit om een verhaal in stappen te maken.", "Quest komt nooit → controleer of de vorige quest te doen is."), { place: "questbuilder" }),
+      // Quest Builder stap 2: wat er gebeurt als je de groep verlaat (alleen bij Team samen-doelen).
+      partyLeave: { type: "select", required: false, options: ["keep", "wait", "fail"], optionIcons: { keep: "🎒", wait: "⏸️", fail: "❌" },
+        optionLabels: { keep: "Meenemen: alleen verder", wait: "Wachten tot je weer in een groep zit", fail: "Quest mislukt" }, audience: "client", label: "Bij groep verlaten",
+        ui: ui("🚪", "select", "questbuilder"), default: "keep",
+        help: help("Wat er met Team samen-doelen gebeurt als iemand de groep verlaat. Je eigen bijdrage blijft altijd; er worden nooit vijanden of NPC's gekopieerd.", "Meenemen voor zijquests, Wachten voor groepsquests en bosses.", "Spelers verlaten de groep om sneller klaar te zijn → kies Wachten.") },
+      // Oud (voor stap 6): aan = zo vaak als hij wil. Staat niet meer in het paneel; 🔁 Herhalen in de Quest Builder vervangt het.
+      repeatable: toggle("Herhaalbaar", "🔁", false, "questbuilder",
+        help("Mag de speler deze quest vaker doen?", "Uit voor verhaal-quests, aan voor klusjes (bijv. hout brengen).", "Spelers farmen beloningen → zet dit uit.")),
+      // Quest Builder stap 6: hoe vaak (1 keer, altijd, elke dag of week op een vast uur, of na een wachttijd). Tab 🚪 Start.
+      repeat: { type: "select", required: false, options: ["once", "always", "daily", "weekly", "cooldown"],
+        optionIcons: { once: "1️⃣", always: "🔁", daily: "📅", weekly: "🗓️", cooldown: "⏳" },
+        optionLabels: { once: "1 keer", always: "Zo vaak als hij wil", daily: "Elke dag opnieuw", weekly: "Elke week opnieuw (maandag)", cooldown: "Opnieuw na een wachttijd" },
+        audience: "client", label: "Herhalen", ui: ui("🔁", "select", "questbuilder"), default: null,
+        help: help("Hoe vaak een speler deze quest mag doen.", "1 keer voor het verhaal; elke dag voor klusjes; een wachttijd voor een boss.", "Spelers farmen beloningen → kies 1 keer of een langere wachttijd.") },
+      repeatHour: int("Vanaf hoe laat (uur)", "🕕", 6, 0, 23, "questbuilder", { range: [0, 23] },
+        help("Hoe laat de quest elke dag (of maandag) weer te doen is. Tijd van de server.", "6 = vanaf 06:00 's ochtends.", "Spelers klagen dat het te laat is → kies een vroeger uur.")),
+      repeatMinutes: int("Wachttijd (minuten)", "⏳", 60, 1, 43200, "questbuilder", { range: [1, 1440] },
+        help("Hoeveel minuten een speler moet wachten voor hij de quest weer mag doen.", "30-120 minuten voor een boss of een klusje.", "Spelers farmen hem → langer wachten.")),
     }
   },
   recipe: {
@@ -178,6 +302,7 @@ export const GAME_KINDS = {
         help("Legt de onderkant van het model op het hoogste stuk grond eronder, dus bij een brug op de oevers.",
           "Aan voor een brug over een rivier of een plank over een kuil. Na verplaatsen (G), draaien of groter maken zoekt hij opnieuw.",
           "Wil je Hoogte zelf bijstellen → zet dit uit; het model blijft liggen waar het lag.")),
+      ...flagGate("dit model"),
       x: pos("X", "↔️"),
       y: Object.assign({}, height, { ui: ui("↕️", "slider", "werkbank", { step: 0.1, unit: "m", range: [-20, 20] }) }),
       z: pos("Z", "↕️")
@@ -273,10 +398,99 @@ export const GAME_KINDS = {
       showWallet: toggle("Portemonnee", "🪙", true, "instellingen", help("Het tabblad 🪙 Geld: hoeveel van elke valuta de speler heeft.", "Aan als je een winkel hebt.", "Geen geld in je game → zet uit.")),
       showQuests: toggle("Quests", "📜", true, "instellingen", help("Het tabblad 📜 Quests, de quest-regel bij het portret en praten met NPC's.", "Aan als je quests of NPC's hebt.", "Praten werkt niet → zet aan.")),
       showInteractions: toggle("Doen-knop", "🤝", true, "instellingen", help("De knop 🤝 onderin: praten, oppakken of verzamelen bij wat het dichtstbij is.", "Aan; handig op een telefoon of laptop zonder muis.", "Spelers moeten precies op kleine dingen tikken → zet aan."), { more: true }),
+      clickAreaExtraPercent: int("Klikruimte extra", "👆", 10, 0, 200, "instellingen", { range: [0, 100], unit: "%", group: "🎯 Objecten, NPC's en namen", more: true },
+        help("Hoeveel procent extra klikruimte er rondom de echte breedte, hoogte en diepte van iedere mesh komt.", "10 % met 0,15 m extra werkt meestal prettig. De klikruimte volgt automatisch het formaat van NPC's, items en andere doelen.", "Je selecteert iets terwijl je er ruim naast klikt → lager.")),
+      clickAreaExtraMeters: { type: "number", required: false, min: 0, max: 10, audience: "client", label: "Klikruimte extra in meters",
+        ui: ui("📐", "slider", "instellingen", { step: 0.05, unit: "m", range: [0, 2], group: "🎯 Objecten, NPC's en namen", more: true }), default: 0.15,
+        help: help("Hoeveel meter extra klikruimte er aan iedere kant van de mesh komt, boven op het percentage.", "0,10 tot 0,25 m maakt kleine items makkelijker aanklikbaar zonder een groot onzichtbaar vlak te maken.", "De klikruimte is nog te breed of te hoog → lager; kleine items zijn lastig → iets hoger.") },
+      showWorldRings: toggle("Cirkels om doelen", "⭕", true, "instellingen",
+        help("Toont de gekleurde cirkel op de grond rond NPC's, vijanden, items en andere interactieve doelen.", "Zet uit voor een rustiger spelbeeld; aanklikken en de Doen-knop blijven werken.", "Je wilt de doelen weer duidelijk zien → zet aan."),
+        { group: "🎯 Objecten, NPC's en namen", more: true }),
+      worldNameOffsetMeters: { type: "number", required: false, min: 0, max: 10, audience: "client", label: "Namen boven mesh",
+        ui: ui("↕️", "slider", "instellingen", { step: 0.05, unit: "m", range: [0, 3], group: "🎯 Objecten, NPC's en namen", more: true }), default: 0.2,
+        help: help("Hoeveel meter boven het hoogste punt van de echte mesh de 2D-naam staat.", "0,15 tot 0,30 m. De hoogte wordt voor ieder model apart gemeten.", "Naam zit in het model → hoger. Naam zweeft te ver erboven → lager.") },
+      worldNameFontSizePx: int("Tekstgrootte namen", "🔤", 13, 8, 48, "instellingen", { range: [8, 32], unit: "px", group: "🎯 Objecten, NPC's en namen", more: true },
+        help("De grootte van de 2D-namen boven meshes en spelers.", "13 px is de standaard; 16-20 px leest makkelijker op een klein scherm.", "Namen bedekken te veel van het spel → kleiner.")),
       showShop: toggle("Winkel en crafting", "🛒", true, "instellingen", help("Kopen, verkopen en maken bij een NPC: het paneel splitst dan in waren en je tas.", "Aan als een NPC iets verkoopt of maakt.", "Winkel niet te zien → zet aan."), { more: true }),
+      mapMinimapVisible: toggle("Minimap zichtbaar bij start", "🧭", true, "instellingen",
+        help("Of een nieuwe speler begint met de kleine kaart rechtsboven in beeld. De speler kan hem later zelf uitzetten.", "Aan (standaard).", "De kaart mag pas later gebruikt worden → zet uit."), { group: MAP_START_GROUP, more: true }),
+      mapLargeStartOpen: toggle("Start met grote kaart open", "🗺️", false, "instellingen",
+        help("Opent de grote kaart meteen wanneer een nieuwe speler het spel binnenkomt.", "Uit (standaard).", "De kaart moet als beginscherm dienen → zet aan."), { group: MAP_START_GROUP, more: true }),
+      mapShape: selectSetting("Vorm minimap", "🔲", "round", ["round", "square"], { round: "Rond", square: "Vierkant" }, MAP_START_GROUP,
+        help("De vorm van de kleine kaart rechtsboven.", "Rond (standaard).", "Je wilt de hoeken van de kaart gebruiken → kies Vierkant.")),
+      mapRotate: toggle("Minimap draait mee", "🧭", false, "instellingen",
+        help("Aan = de kijkrichting van de speler blijft boven. Uit = het noorden blijft boven.", "Uit: noorden boven.", "De speler raakt de richting kwijt → probeer de andere stand."), { group: MAP_START_GROUP, more: true }),
+      mapAllowPin: toggle("Speler mag een pin plaatsen", "📍", true, "instellingen",
+        help("Laat de speler op een lege plek van de grote kaart klikken om een eigen pin te plaatsen en erheen te lopen.", "Aan (standaard).", "Je wilt geen persoonlijke routepunten → zet uit."), { group: MAP_START_GROUP, more: true }),
+      mapMiniClickToMove: toggle("Klik op minimap = lopen", "👣", true, "instellingen",
+        help("Laat de speler op de kleine kaart klikken of tikken om daarheen te lopen. Dezelfde veilige route via wegen, bruggen en om obstakels heen wordt gebruikt.",
+          "Aan om het uit te proberen.", "Een klik op de minimap mag alleen de kaart bedienen → zet uit."), { group: MAP_START_GROUP }),
+      mapMiniShowRegionName: toggle("Gebiedsnaam onder minimap", "🏷️", true, "instellingen",
+        help("Toont de naam van het huidige gebied onder de kleine kaart.", "Aan (standaard).", "De naam neemt te veel ruimte in → zet uit."), { group: MAP_START_GROUP, more: true }),
+      mapBigShowRegionName: toggle("Gebiedsnaam boven grote kaart", "🏷️", true, "instellingen",
+        help("Toont de naam van het huidige gebied als titel van de grote kaart.", "Aan (standaard).", "Je wilt alleen 'Kaart' als titel → zet uit."), { group: MAP_START_GROUP, more: true }),
+      mapBigShowScale: toggle("Schaalbalk grote kaart", "📏", true, "instellingen",
+        help("Toont linksonder hoeveel meter een lijn op de grote kaart is.", "Aan (standaard).", "Je wilt een rustigere kaart → zet uit."), { group: MAP_START_GROUP, more: true }),
+      mapBigShowCoordinates: toggle("Coördinaten grote kaart", "🔢", true, "instellingen",
+        help("Toont rechtsonder de X- en Z-positie van de speler.", "Aan (standaard).", "Spelers mogen geen coördinaten zien → zet uit."), { group: MAP_START_GROUP, more: true }),
+      mapMiniSizePx: int("Maximumgrootte minimap", "📐", 120, 64, 320, "instellingen", { range: [80, 240], unit: "px", group: MAP_SIZE_GROUP, more: true },
+        help("De maximale breedte en hoogte van de minimap, ook op desktop. Op kleinere schermen bepaalt het schermpercentage de maat.", "120 tot 168 px.", "Te groot op desktop → verlaag dit maximum; te groot op mobiel → verlaag het schermpercentage.")),
+      mapMiniViewportPercent: int("Minimap schermpercentage", "📱", 22, 10, 40, "instellingen", { range: [10, 40], unit: "%", group: MAP_SIZE_GROUP, more: true },
+        help("Percentage van de kortste zijde van het beschikbare spelbeeld. Werkt staand en liggend en houdt rekening met het geopende paneel. De kaart blijft tussen 64 px en de maximumgrootte, met ruimte voor de andere HUD-elementen.", "22 %: circa 79 px op een spelbeeld van 360 px breed.", "Te groot op mobiel → lager; te klein → hoger. Het pixelmaximum blijft de bovengrens.")),
+      mapMiniZoomNearMeters: int("Minimap zoom dichtbij", "➕", 30, 10, 1000, "instellingen", { range: [15, 120], unit: "m", group: MAP_SIZE_GROUP, more: true },
+        help("Hoeveel meter vanaf het midden zichtbaar is in de dichtstbij-stand.", "30 m (standaard).", "Je ziet te weinig vlak om je heen → hoger.")),
+      mapMiniZoomNormalMeters: int("Minimap zoom normaal", "🔍", 60, 10, 2000, "instellingen", { range: [30, 250], unit: "m", group: MAP_SIZE_GROUP, more: true },
+        help("Hoeveel meter vanaf het midden zichtbaar is in de normale stand.", "60 m (standaard).", "De normale kaart staat te ver weg → lager.")),
+      mapMiniZoomFarMeters: int("Minimap zoom ver", "➖", 120, 10, 4000, "instellingen", { range: [60, 500], unit: "m", group: MAP_SIZE_GROUP, more: true },
+        help("Hoeveel meter vanaf het midden zichtbaar is in de verste stand.", "120 m (standaard).", "Je wilt meer van de omgeving zien → hoger.")),
+      mapMiniDefaultZoom: selectSetting("Beginzoom minimap", "🔍", "normal", ["near", "normal", "far"], { near: "Dichtbij", normal: "Normaal", far: "Ver" }, MAP_SIZE_GROUP,
+        help("Met welke van de drie zoomstanden een nieuwe speler begint.", "Normaal.", "Belangrijke dingen zijn buiten beeld → kies Ver.")),
+      mapBigSpanMeters: int("Beginzoom grote kaart", "🗺️", 160, 30, 10000, "instellingen", { step: 10, range: [50, 1000], unit: "m", group: MAP_SIZE_GROUP, more: true },
+        help("Hoeveel meter breed de grote kaart bij het openen begint. De speler kan daarna zelf zoomen.", "160 m (standaard).", "De kaart begint te ver ingezoomd → hoger.")),
+      mapMiniIconScalePct: int("Icoongrootte minimap", "🔶", 100, 40, 250, "instellingen", { range: [50, 200], unit: "%", group: MAP_SIZE_GROUP, more: true },
+        help("Grootte van alle markeringen op de kleine kaart.", "100 % (standaard).", "De icoontjes bedekken elkaar → lager.")),
+      mapBigIconScalePct: int("Icoongrootte grote kaart", "🔶", 80, 40, 250, "instellingen", { range: [50, 200], unit: "%", group: MAP_SIZE_GROUP, more: true },
+        help("Grootte van alle markeringen op de grote kaart.", "80 % (standaard).", "De icoontjes zijn moeilijk te zien → hoger.")),
+      mapMiniFixedIconSize: toggle("Alles boven minimap vast bij zoomen", "📌", true, "instellingen",
+        help("Aan = alle iconen, namen en gebiedsteksten boven op de kaart-bake houden exact dezelfde pixelgrootte bij in- en uitzoomen. Uit = deze lagen schalen mee met de zoom.", "Aan voor altijd even grote en leesbare kaartlagen.", "Iconen of teksten worden groter of kleiner tijdens zoomen → zet aan."), { group: MAP_SIZE_GROUP, more: true }),
+      mapBigFixedIconSize: toggle("Alles boven grote kaart vast bij zoomen", "📌", true, "instellingen",
+        help("Aan = alle iconen, namen en gebiedsteksten boven op de grote kaart-bake houden exact dezelfde pixelgrootte bij in- en uitzoomen. Uit = deze lagen schalen mee met de zoom.", "Aan voor altijd even grote en leesbare kaartlagen.", "Iconen of teksten worden groter of kleiner tijdens zoomen → zet aan."), { group: MAP_SIZE_GROUP, more: true }),
+      mapMiniAreaTextScalePct: int("Gebiedstekst minimap", "🔤", 100, 40, 250, "instellingen", { range: [50, 200], unit: "%", group: MAP_SIZE_GROUP, more: true },
+        help("Grootte van de namen die in de kaart zelf staan.", "100 % (standaard).", "Gebiedsnamen bedekken de kaart → lager.")),
+      mapBigAreaTextScalePct: int("Gebiedstekst grote kaart", "🔤", 100, 40, 250, "instellingen", { range: [50, 200], unit: "%", group: MAP_SIZE_GROUP, more: true },
+        help("Grootte van gebiedsnamen op de grote kaart.", "100 % (standaard).", "Gebiedsnamen zijn onleesbaar → hoger.")),
+      mapMiniShowMarkerNames: toggle("Namen naast minimap-iconen", "🏷️", false, "instellingen",
+        help("Schrijft de naam van NPC's, spelers, vijanden, portals en andere markeringen naast hun icoon op de minimap.", "Uit om de kleine kaart rustig te houden.", "Je wilt direct zien wat ieder punt is → zet aan."), { group: MAP_SIZE_GROUP, more: true }),
+      mapBigShowMarkerNames: toggle("Namen naast grote-kaart-iconen", "🏷️", false, "instellingen",
+        help("Schrijft de naam van iedere markering naast het icoon op de grote kaart.", "Uit; aanwijzen of tikken toont de naam.", "De kaart moet alle namen meteen tonen → zet aan."), { group: MAP_SIZE_GROUP, more: true }),
+      mapMiniMarkerNameSizePx: int("Naamgrootte minimap", "🔤", 10, 6, 32, "instellingen", { range: [7, 20], unit: "px", group: MAP_SIZE_GROUP, more: true },
+        help("Tekstgrootte van namen naast markeringen op de minimap.", "10 px (standaard).", "Namen zijn te klein → hoger.")),
+      mapBigMarkerNameSizePx: int("Naamgrootte grote kaart", "🔤", 12, 6, 40, "instellingen", { range: [8, 28], unit: "px", group: MAP_SIZE_GROUP, more: true },
+        help("Tekstgrootte van namen naast markeringen op de grote kaart.", "12 px (standaard).", "Namen bedekken elkaar → lager.")),
+      mapBackgroundColor: colorSetting("Achtergrond buiten de wereld", "⬛", "#0b1220", MAP_COLOR_GROUP,
+        help("De kleur achter kaarttegels en buiten de rand van de wereld.", "Donkerblauw.", "De lege kaartdelen vallen te veel op → kies een donkerdere kleur.")),
+      mapBorderColor: colorSetting("Randkleur kaarten", "🟨", "#b99446", MAP_COLOR_GROUP,
+        help("De rand om de kleine en grote kaart.", "Goudbruin.", "De rand past niet bij je HUD → kies een andere kleur.")),
+      mapBorderWidthPx: int("Dikte kaartrand", "📏", 3, 0, 12, "instellingen", { range: [0, 8], unit: "px", group: MAP_COLOR_GROUP, more: true },
+        help("De dikte van de rand om de kleine en grote kaart.", "3 px (standaard).", "Geen rand gewenst → 0.")),
+      mapAreaLabel: textSetting("Naam in legenda", "🏷️", "Gebiedsnamen", "📍 Legenda: Gebiedsnamen",
+        help("De naam van de gebiedstekst in de legenda.", "Gebiedsnamen.", "Gebruik een kortere naam als de legenda te breed wordt.")),
+      mapAreaColor: colorSetting("Kleur gebiedsnamen", "🎨", "#f3e2b3", "📍 Legenda: Gebiedsnamen",
+        help("De kleur van gebiedsnamen in de kaart en het voorbeeld in de legenda.", "Licht perkament.", "Tekst heeft te weinig contrast → kies lichter.")),
+      mapAreaShowMini: toggle("Op minimap bij start", "🧭", true, "instellingen",
+        help("Toont gebiedsnamen standaard op de minimap.", "Aan (standaard).", "De minimap is te druk → zet uit."), { group: "📍 Legenda: Gebiedsnamen", more: true }),
+      mapAreaShowBig: toggle("Op grote kaart bij start", "🗺️", true, "instellingen",
+        help("Toont gebiedsnamen standaard op de grote kaart.", "Aan (standaard).", "De grote kaart is te druk → zet uit."), { group: "📍 Legenda: Gebiedsnamen", more: true }),
+      mapMarkerNameColor: colorSetting("Kleur namen bij iconen", "🎨", "#ffffff", MAP_COLOR_GROUP,
+        help("De tekstkleur van namen naast kaarticonen.", "Wit (standaard).", "De namen zijn slecht leesbaar → kies meer contrast.")),
+      mapFogColor: colorSetting("Kleur van de mist", "🌫️", "#05070a", MAP_COLOR_GROUP,
+        help("De kleur waarmee nog niet ontdekte kaartdelen worden bedekt.", "Bijna zwart.", "Je wilt gekleurde mist → kies hier een tint.")),
+      ...MAP_LEGEND_FIELDS,
       fogOfWar: toggle("Mist op de kaart", "🌫️", true, "instellingen", help("Fog of war: op de minimap en de grote kaart is alles donker tot je er geweest bent. Ontdekte plekken blijven bewaard.", "Aan voor een avontuurgevoel.", "Spelers zien meteen de hele kaart → zet aan."), { more: true }),
       fogRevealMeters: int("Zicht in de mist", "👁️", 40, 8, 400, "instellingen", { range: [10, 150], more: true },
         help("Hoe ver om je heen de mist weggaat terwijl je loopt (in meters).", "30-60 m.", "De kaart gaat te langzaam open → hoger.")),
+      questArrowDistanceMeters: int("Questpijl binnen afstand", "⭐", 200, 0, 2000, "instellingen", { step: 10, range: [0, 2000], unit: "m", more: true },
+        help("Binnen deze afstand tot een questgever of quest-doel verschijnt de richtingspijl aan de rand van de minimap of grote kaart als het punt buiten beeld ligt. De queststerren blijven zichtbaar volgens hun eigen mistregels.", "200 m. 0 m = geen questpijlen; de sterren blijven op de kaart.", "Questpijlen verschijnen te vroeg → lager. Je wilt eerder de richting zien → hoger.")),
       fogDarkness: int("Donkerte van de mist", "🌑", 100, 0, 100, "instellingen", { range: [0, 100], more: true },
         help("Hoe donker de mist op de kaart is, in procent. 100 = helemaal dicht, je ziet er niets doorheen.", "90 tot 100.", "Je ziet de kaart door de mist heen → hoger.")),
       // Healing (2-11): effect-icoontjes bij het portret en kleine zwevende getallen (spelers kunnen ze in de game zelf uitzetten).
@@ -285,5 +499,21 @@ export const GAME_KINDS = {
       fogFadeMeters: int("Zachte rand van de mist", "🌗", 8, 0, 64, "instellingen", { range: [0, 32], more: true },
         help("Hoe breed de zachte overgang aan de rand van de mist is, in meters. 0 = een harde rand.", "4 tot 16 m.", "Je ziet te veel door de rand heen → lager. De rand is te hoekig → hoger."))
     }
+  },
+  minimap_settings: {
+    label: "Minimap",
+    icon: "🗺️",
+    place: "instellingen",
+    singleton: true,
+    domain: "project",
+    fields: {}
   }
 };
+
+// De kaartvelden staan hierboven bij elkaar met de andere HUD-presentatievelden,
+// maar vormen in de editor bewust een zelfstandige instellingenpagina.
+for (const key of Object.keys(GAME_KINDS.hud_settings.fields)) {
+  if (!key.startsWith("map") && !["fogOfWar", "fogRevealMeters", "questArrowDistanceMeters", "fogDarkness", "fogFadeMeters"].includes(key)) continue;
+  GAME_KINDS.minimap_settings.fields[key] = GAME_KINDS.hud_settings.fields[key];
+  delete GAME_KINDS.hud_settings.fields[key];
+}

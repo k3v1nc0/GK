@@ -1,11 +1,12 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261103-groep1";
-import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20260730-stop-resync1";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261108-portals3";
+import { nextPlayerRouteWaypoint } from "../shared/player-path-client.js?v=20261108-roads9";
+import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20261106-perf1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
 import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../shared/protocol-v1.js?v=20261025-f2-client1";
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
-import { createActorPresentation } from "./actor-presentation.js?v=20261102-heal1";
-import { createGkHud } from "./hud/gk-hud.js?v=20261103-panel3";
+import { createActorPresentation } from "./actor-presentation.js?v=20261107-escort1";
+import { createGkHud } from "./hud/gk-hud.js?v=20261108-portals3";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -100,6 +101,7 @@ const DEFAULT_MMO_NETWORK_SETTINGS = {
   showHealthTps: true,
   showHealthMspt: true,
   showHealthCpu: true,
+  showHealthGpu: true,
   showHealthPacketLoss: true
 };
 const CLICK_MOVE_START_RADIUS = 0.04;
@@ -297,10 +299,41 @@ function persistNetState() {
 
 const persistedNetState = loadPersistedNetState();
 
+// active/client.json en builds/:id/client.json bevatten voor de actieve build
+// hetzelfde clientpakket. Deel die response tussen minimap/projectmetadata en
+// actor-presentatie; bij een gepinde oudere build valt actor-presentatie terug
+// op de expliciete build-URL.
+let canonicalClientBuildId = null;
+let canonicalClientWorld = null;
+let canonicalClientPayloadPromise = null;
+
+function fetchActiveCanonicalClientPayload() {
+  if (!canonicalClientPayloadPromise) {
+    canonicalClientPayloadPromise = (async function () {
+      const response = await fetch("/api/authoring/active/client.json", { credentials: "same-origin", cache: "no-store" });
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      return response.json();
+    })();
+    canonicalClientPayloadPromise.catch(function () {
+      canonicalClientPayloadPromise = null;
+    });
+  }
+  return canonicalClientPayloadPromise;
+}
+
 // Fase 05: vijanden en grondstoffen uit de canonieke build (server stuurt actor:snapshot / actor:event).
 const actorPresentation = createActorPresentation({
   classId: function () { return state.player?.selectedCharacterId || null; },
   fetchJson: async function (url) {
+    const buildMatch = /^\/api\/authoring\/builds\/(b_[0-9a-f]{24})\/client\.json$/.exec(String(url || ""));
+    if (buildMatch) {
+      try {
+        const activePayload = await fetchActiveCanonicalClientPayload();
+        if (activePayload?.buildId === buildMatch[1]) return activePayload;
+      } catch {
+        // De expliciete build-URL hieronder blijft de veilige fallback.
+      }
+    }
     const response = await gameFetch(url, { credentials: "same-origin", headers: { Accept: "application/json" } });
     if (!response.ok) throw new Error("HTTP " + response.status);
     return response.json();
@@ -315,12 +348,17 @@ function handleActorMessage(message) {
     return true;
   }
   if (message.type !== "actor:event") return false;
+  // Stap 8: een NPC die je begeleidt zegt iets (ballon boven zijn hoofd en een regel in de chat).
+  if (message.e === "say") {
+    if (gkHud && typeof gkHud.npcSay === "function") gkHud.npcSay(String(message.id || ""), String(message.text || ""), String(message.name || "") || actorPresentation.nameOf(message.id));
+    return true;
+  }
   if (actorPresentation.applyEvent(message)) syncRuntimeTargets();
   // Healing (2-11): kleine zwevende getallen boven de vijand (schade rood, genezen groen) en boven andere spelers.
   if (gkHud && Number(message.amount) > 0) {
     if (message.e === "hit" || message.e === "death") gkHud.worldFloat(message.id, "-" + Math.round(Number(message.amount)), "dmg");
     else if (message.e === "heal") gkHud.worldFloat(message.id, "+" + Math.round(Number(message.amount)), "heal");
-    else if (message.e === "attack" && message.target) gkHud.worldFloat(message.target === state.player?.id ? "self" : "player:" + message.target, "-" + Math.round(Number(message.amount)), "dmg");
+    else if (message.e === "attack" && message.target) gkHud.worldFloat(message.target === state.player?.id ? "self" : String(message.target).startsWith("actor:") ? String(message.target) : "player:" + message.target, "-" + Math.round(Number(message.amount)), "dmg");
   }
   // MMO (3-11): een teamlid wordt geraakt: zijn balk linksboven zakt meteen (de server stuurt elke seconde de echte stand).
   if (message.e === "attack" && message.target && Number(message.amount) > 0) nudgePartyHp(message.target, -Number(message.amount));
@@ -446,6 +484,7 @@ const state = {
   sync: {
     inFlight: false,
     lastSilentSyncAt: 0,
+    startupComplete: false,
     zoneRefreshInFlight: false,
     pendingZoneId: null,
     zoneRefreshTimerId: 0
@@ -874,6 +913,7 @@ function mmoNetworkSettings() {
     showHealthTps: values.showHealthTps !== false,
     showHealthMspt: values.showHealthMspt !== false,
     showHealthCpu: values.showHealthCpu !== false,
+    showHealthGpu: values.showHealthGpu !== false,
     showHealthPacketLoss: values.showHealthPacketLoss !== false
   };
 }
@@ -4620,6 +4660,12 @@ function upsertRemotePlayerEntry(payload, options = {}) {
     state.remote.tombstones.delete(sample.playerId);
   }
   let entry = state.remote.players.get(sample.playerId) || null;
+  // Bewegingssnapshots bevatten historisch niet altijd identiteit. Maak daar nooit zelfstandig een
+  // naamloze `player_<uuid>`-avatar van; presence/join (of een nieuw snapshot met naam) moet hem kennen.
+  if (!entry && !sample.displayName && (options.type === "mmo:snapshot" || options.type === "remote_player:state_changed" || options.type === "remote_player:spawn")) {
+    state.remote.droppedStaleUpdates += 1;
+    return null;
+  }
   if (!entry) {
     entry = {
       playerId: sample.playerId,
@@ -5171,7 +5217,6 @@ function startRemoteFrameLoop() {
     state.remote.rafId = window.requestAnimationFrame(tick);
     syncRemotePlayers(now);
     if (actorPresentation.frame(state.runtime, now)) syncRuntimeTargets();
-    if (gkHud) gkHud.frame(now);
   };
   state.remote.rafId = window.requestAnimationFrame(tick);
 }
@@ -7550,6 +7595,8 @@ async function runNode03Action(action, targetId, extra = {}) {
   const normalizedAction = String(action || "").replace(/^node03:/, "").toLowerCase();
   const isTravel = normalizedAction === "travel";
   const isUnstuck = normalizedAction === "unstuck";
+  // Portals (8-11): reizen binnen dezelfde wereld; direct weg en op de nieuwe plek, zonder glijden.
+  const isPortalTravel = normalizedAction === "portal_travel" || normalizedAction === "portal_travel_mate";
   const isRespawn = normalizedAction === "respawn" || normalizedAction === "reset_demo" || normalizedAction === "reset";
   const bypassDefeatState = isRespawn || normalizedAction.startsWith("debug_") || normalizedAction === "inventory_cleanup";
   if (isNode03Defeated() && !bypassDefeatState) {
@@ -7578,7 +7625,7 @@ async function runNode03Action(action, targetId, extra = {}) {
   }
   state.node03.actionInFlight = true;
   state.node03.lastError = "";
-  if (isUnstuck) {
+  if (isUnstuck || isPortalTravel) {
     clearLocalMovementForTeleport();
     if (state.session && isMmoGameplayReady()) sendInputState({ force: true, stop: true });
   }
@@ -7649,7 +7696,8 @@ async function runNode03Action(action, targetId, extra = {}) {
       state.node03.snapshot = data.snapshot;
       syncNode03RuntimeTargets();
     }
-    if ((isRespawn || isUnstuck) && data.position) applyInstantRespawnResponse(data);
+    if ((isPortalTravel || isUnstuck) && data.position && state.runtime && typeof state.runtime.beginProgressiveStreaming === "function") state.runtime.beginProgressiveStreaming();
+    if ((isRespawn || isUnstuck || isPortalTravel) && data.position) applyInstantRespawnResponse(data);
     else if (data.position) applyFallbackPosition({ ok: true, position: data.position });
     renderNode03Hud();
     renderNode04Hud();
@@ -7999,6 +8047,7 @@ function node04RuntimeTargetsForScene() {
 // Een NPC (gesprek of winkel/werkplaats) gaat via de HUD: daar komen gesprek, Handelen en Maken samen.
 function activateRuntimeTarget(target) {
   const action = String(target?.action || "");
+  if (action === "portal_map") { if (gkHud) gkHud.openPortalMap(target.portalId || String(target.instanceId).replace(/^portal_target\./, "")); return; }
   if (gkHud && (action === "node04:start_dialogue" || action === "node05:focus_service")) {
     gkHud.talkTo(target);
     return;
@@ -8009,6 +8058,7 @@ function activateRuntimeTarget(target) {
 function activateRuntimeTargetDirect(target) {
   if (!target?.instanceId || !target.action) return;
   const action = String(target.action);
+  if (action === "portal_map") { if (gkHud) gkHud.openPortalMap(target.portalId || String(target.instanceId).replace(/^portal_target\./, "")); return; }
   if (action.startsWith("node04:")) {
     runNode04Action(action, target.instanceId, { questId: target.questId || null, dialogueId: target.dialogueId || null });
   } else if (action.startsWith("node05:")) {
@@ -8046,15 +8096,93 @@ function collectRuntimeTargets() {
   }));
   if (state.node04.snapshot) addTargets(node04RuntimeTargetsForScene());
   if (state.node05.snapshot) addTargets(node05RuntimeTargetsForScene());
-  return Array.from(byId.values());
+  addTargets(portalRuntimeTargets());
+  return withoutEscortedNpcs(Array.from(byId.values()));
+}
+
+// Kevin 8-11: een portal in de wereld is aanklikbaar; een klik opent de grote kaart om te kiezen waarheen.
+function portalRuntimeTargets() {
+  const list = state.node03.snapshot?.portals?.list;
+  if (!Array.isArray(list) || !list.length) return [];
+  return list.map(function (portal) {
+    const entityId = "portal_entity." + portal.id;
+    return {
+      instanceId: "portal_target." + portal.id, portalId: portal.id, entityKind: "portal_gate", targetKind: "portal_gate",
+      action: "portal_map", prompt: "Reizen", displayName: portal.displayName || "Portal",
+      x: num(portal.x, 0), y: num(portal.y, 0), z: num(portal.z, 0), radius: 1.5, range: 3, available: true,
+      visualEntityId: entityId, linkedEntityId: entityId, entityRef: entityId, linkedEntity: { entityId: entityId, nodeId: entityId },
+      // Kevin 8-11: geen blauw blokje; de portal zelf is het klikvlak (klikvlak meet zich aan het portal-model).
+      renderBody: false
+    };
+  });
+}
+
+// Stap 8: een NPC die met je meeloopt staat niet ook nog op zijn vaste plek: zijn model, naam en praat-/winkelknop zijn daar even weg.
+function withoutEscortedNpcs(list) {
+  const escortHiddenEntities = withoutEscortedNpcs.hidden || (withoutEscortedNpcs.hidden = new Set());
+  const hidden = new Set(Array.from(actorPresentation.escortNpcIds(), function (npcId) { return "npc_entity." + npcId; }));
+  // Stap 9: NPC's en modellen die er voor jou (door een vlag van een quest) niet zijn: weg, en je loopt er doorheen.
+  const flagHidden = Array.isArray(state.node04.snapshot?.world?.hidden) ? state.node04.snapshot.world.hidden : [];
+  for (const id of flagHidden) hidden.add(String(id));
+  if (state.runtime && typeof state.runtime.setFlagHiddenEntities === "function") state.runtime.setFlagHiddenEntities(flagHidden);
+  // Kevin 8-11: en over een loopvlak (brug) met een vlag loop je alleen als die vlag voor jou klopt.
+  if (state.runtime && typeof state.runtime.setPlayerFlags === "function" && state.node04.snapshot?.world) state.runtime.setPlayerFlags(state.node04.snapshot.world.flags || []);
+  if (state.runtime && typeof state.runtime.setEntityHidden === "function") {
+    for (const id of Array.from(escortHiddenEntities)) if (!hidden.has(id)) { state.runtime.setEntityHidden(id, false); escortHiddenEntities.delete(id); }
+    for (const id of hidden) { state.runtime.setEntityHidden(id, true); escortHiddenEntities.add(id); }
+  }
+  if (!hidden.size) return list;
+  return list.filter(function (target) {
+    if (target?.escort) return true;
+    const linked = [target?.entityRef, target?.linkedEntityId, target?.visualEntityId, target?.linkedEntity?.entityId, target?.linkedEntity?.nodeId];
+    return !linked.some(function (id) { return id && hidden.has(String(id)); });
+  });
 }
 
 function refreshNode04ClientRanges(now = performance.now(), options = {}) {
   if (!state.node04.snapshot) return;
   if (now - num(state.node04.lastRangeRenderAt, 0) < 250) return;
   state.node04.lastRangeRenderAt = now;
+  checkNode04QuestAreas();
   if (options.deferRuntimeSync !== true) syncRuntimeTargets();
   return true;
+}
+
+// Quest Builder stap 3: loop je een questgebied in of uit (Ga naar / Verlaat gebied)? Dan meteen de stand opvragen;
+// de server kijkt zelf (met zijn eigen positie) of het doel klaar is.
+function node04PointInArea(points, x, z) {
+  let inside = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i, i += 1) {
+    const a = points[i];
+    const b = points[j];
+    if ((num(a.z) > z) !== (num(b.z) > z) && x < ((num(b.x) - num(a.x)) * (z - num(a.z))) / (num(b.z) - num(a.z)) + num(a.x)) inside = !inside;
+  }
+  return inside;
+}
+function checkNode04QuestAreas() {
+  const position = currentLocalPlayerPosition();
+  if (!position) return;
+  const quests = state.node04.snapshot?.quests?.active || [];
+  const seen = state.node04.areaInside || (state.node04.areaInside = new Map());
+  let changed = false;
+  for (const quest of quests) {
+    for (const area of quest?.activeStep?.watchAreas || []) {
+      if (!Array.isArray(area.points) || area.points.length < 3) continue;
+      const inside = node04PointInArea(area.points, num(position.x), num(position.z));
+      const key = quest.questId + "|" + area.areaId;
+      if (seen.has(key) && seen.get(key) !== inside) changed = true;
+      seen.set(key, inside);
+    }
+  }
+  // Quest Builder stap 4: een quest die start als je een gebied binnenloopt. Erin = meteen de stand opvragen.
+  for (const area of state.node04.snapshot?.startAreas || []) {
+    if (!Array.isArray(area.points) || area.points.length < 3) continue;
+    const inside = node04PointInArea(area.points, num(position.x), num(position.z));
+    const key = "start|" + area.questId + "|" + area.areaId;
+    if (seen.has(key) && seen.get(key) !== inside && inside) changed = true;
+    seen.set(key, inside);
+  }
+  if (changed) loadNode04State().catch(function () {});
 }
 
 function node04PrimaryTarget() {
@@ -9981,7 +10109,7 @@ function gameMinimapAssetById(assetId) {
 
 function gameMinimapIconImage(assetId) {
   const asset = gameMinimapAssetById(assetId);
-  const url = normalizeMinimapImageUrl(asset?.sourcePath || asset?.thumbnailPath || asset?.url || "");
+  const url = normalizeMinimapImageUrl(asset?.thumbnailPath || asset?.url || "");
   if (!url) return null;
   if (!state.minimapHud.images) state.minimapHud.images = new Map();
   const key = "icon:" + url;
@@ -11514,6 +11642,12 @@ function ensureRuntime(world) {
       hudPanelAdapter: createRuntimeHudPanelAdapter(),
       externalPlayerAuthority: true,
       localPlayerDisplayName: state.player?.displayName || state.player?.id || "",
+      // De 2D-namen moeten in exact dezelfde animatiebeurt als de 3D-camera
+      // worden geplaatst. Een losse HUD-loop gaf vooral zijwaarts één frame
+      // verschil, wat eruitzag als tearing/wazige tekst.
+      onRenderFrame: function () {
+        if (gkHud) gkHud.frame(performance.now());
+      },
       onLoadErrors: function (errors) {
         if (errors.length) showHudError("Asset kon niet laden: " + errors[0]);
       }
@@ -11682,9 +11816,7 @@ function clickMoveWaypoint(position = state.predictedPosition) {
   if (isPointerHoldActive()) return state.pointer.target;
   if ((!state.pointer.route || state.pointer.routeWorldKey !== state.runtimeWorldKey) && !prepareClickMoveRoute()) return null;
   if (state.pointer.routePending) return null;
-  const route = state.pointer.route;
-  while (route.length > 1 && Math.hypot(route[0].x - position.x, route[0].z - position.z) <= 0.0001) route.shift();
-  return route[0] || state.pointer.target;
+  return nextPlayerRouteWaypoint(state.pointer.route, position, clickMoveArrivalRadius()) || state.pointer.target;
 }
 
 function targetArrivalRadius(target, includeRadius = false) {
@@ -11901,6 +12033,9 @@ function primeHttpSnapshotState(snapshot) {
   state.worldId = snapshot.worldId || state.worldId;
   state.gameWorld = withOwnCharacterModel(snapshot.gameWorld || state.gameWorld, state.player);
   state.gameProject = snapshot.gameProject || state.gameWorld?.gameProject || state.gameProject;
+  if (gkHud && typeof gkHud.setMapPresentation === "function") {
+    gkHud.setMapPresentation(state.gameWorld?.minimap?.game?.presentation || null);
+  }
   state.remote.interpolationDelayMs = mmoNetworkSettings().remoteInterpolationBaseDelayMs;
   state.remote.remoteRenderDelayMs = state.remote.interpolationDelayMs;
   state.schemaVersion = snapshot.schemaVersion || state.gameWorld?.schemaVersion || state.gameProject?.schemaVersion || state.schemaVersion;
@@ -12123,6 +12258,20 @@ function applyRemotePlayerSpawn(payload) {
   syncRemotePlayers(performance.now());
 }
 
+function scheduleInitialSocketStateFallback(socket) {
+  if (!socket) return;
+  if (socket._gkInitialStateTimer) window.clearTimeout(socket._gkInitialStateTimer);
+  socket._gkInitialStateTimer = window.setTimeout(function () {
+    socket._gkInitialStateTimer = null;
+    if (socket !== state.ws || socket.readyState !== WebSocket.OPEN) return;
+    const missingInitialState = !state.mmoReady.connectionReadyReceived
+      || !state.mmoReady.playerStateReceived
+      || !state.mmoReady.presenceSnapshotReceived;
+    if (!missingInitialState) return;
+    try { socket.send(JSON.stringify({ type: "player:request_state" })); } catch {}
+  }, 750);
+}
+
 async function openWebSocket() {
   if (!state.session || !state.wantReconnect) return;
   if (state.wsTicketInFlight) return;
@@ -12206,7 +12355,7 @@ async function openWebSocket() {
       state.mmoReady.socketOpen = true;
       markWsConnected();
       startPingLoop(socket, socket._gkConnectionAttemptId);
-      try { socket.send(JSON.stringify({ type: "player:request_state" })); } catch {}
+      scheduleInitialSocketStateFallback(socket);
       maybeMarkMmoOnlineReady("legacy_open");
       return;
     }
@@ -12258,6 +12407,7 @@ function closeWebSocket(intentional = true) {
 
 function handleSocketClose(socket, event) {
   if (socket) window.clearTimeout(socket._gkConnectTimer);
+  if (socket?._gkInitialStateTimer) window.clearTimeout(socket._gkInitialStateTimer);
   if (!socket || socket._gkConnectionAttemptId !== state.wsConnectionAttemptId) return;
   if (state.ws === socket) state.ws = null;
   stopPingLoop();
@@ -12330,7 +12480,7 @@ function handleSocketMessage(raw) {
     state.mmoReady.socketOpen = true;
     markWsConnected();
     startPingLoop(socket, socket._gkConnectionAttemptId);
-    try { socket.send(JSON.stringify({ type: "player:request_state" })); } catch {}
+    scheduleInitialSocketStateFallback(socket);
     maybeMarkMmoOnlineReady("auth_ok");
     return;
   }
@@ -12437,6 +12587,23 @@ function handleSocketMessage(raw) {
   // Healing (2-11): levens, mana, effecten en wachttijden van jezelf (1x per seconde als er iets verandert).
   if (message.type === "vitals") {
     applyVitalsMessage(message);
+    return;
+  }
+  // Quest Builder stap 2: een teamgenoot telde mee of deelde een quest; haal de queststand meteen op.
+  if (message.type === "quest:refresh") {
+    loadNode04State().catch(function () {});
+    return;
+  }
+  // Kevin 6-11: quest gehaald = feestelijke melding in beeld (zoals level omhoog).
+  if (message.type === "quest:completed") {
+    if (gkHud?.questDone) gkHud.questDone(message);
+    else showGameHudDialogueNotice("Quest voltooid: " + String(message.title || ""), { title: "Quest" });
+    return;
+  }
+  // Quest Builder stap 5: Als → Dan: Bericht in beeld.
+  if (message.type === "quest:message") {
+    if (gkHud && message.text) gkHud.questBanner(String(message.text), message.title ? String(message.title) : "", message.questId ? String(message.questId) : "");
+    else if (message.text) showGameHudDialogueNotice(String(message.text), { title: message.title || "Quest" });
     return;
   }
   // MMO (3-11): je groep (leden, level, levens, mana, online), uitnodigingen en korte meldingen.
@@ -12615,7 +12782,13 @@ async function loadSessionState(options = {}) {
   const worldChanged = options.forceWorld === true || !state.runtimeWorldKey || state.runtimeWorldKey !== nextWorldKey;
   state.lastPublishedAt = snapshot.worldPublishedAt || snapshot.publishedAt || snapshot.gameWorld?.publishedAt || state.lastPublishedAt;
   primeHttpSnapshotState(snapshot);
-  await loadGameHudDefaultProfiles({ silent: true, force: worldChanged, rerender: false });
+  // Nu pas is de gepubliceerde minimap-presentatie bekend. Voorheen werd de HUD
+  // vóór deze response gemaakt en bleef hij daardoor de ingebouwde defaults tonen.
+  ensureGkHud();
+  // HUD-voorkeuren zijn niet nodig om de wereld te bouwen of de multiplayer-
+  // verbinding te openen. Laat dit kleine request parallel lopen; bij een trage
+  // response mag het de eerste speelbare frame en de join-ticket niet blokkeren.
+  loadGameHudDefaultProfiles({ silent: true, force: worldChanged, rerender: true });
   primeConnectedSocketReadiness();
   if (!state.ws || state.ws.readyState === WebSocket.CLOSED || state.ws.readyState === WebSocket.CLOSING) {
     openWebSocket();
@@ -13575,7 +13748,8 @@ async function runPartyAction(action, payload = {}) {
 
 function partyPlayerPosition(playerId) {
   const entry = state.remote.players.get(String(playerId || ""));
-  const position = entry?.renderState || entry?.position || null;
+  // Kevin 8-11: renderState is { position: {x, z} } (zelfde fout als bij de minimap-stipjes).
+  const position = entry?.renderState?.position || entry?.position || null;
   return position && Number.isFinite(Number(position.x)) && Number.isFinite(Number(position.z)) ? { x: Number(position.x), z: Number(position.z) } : null;
 }
 
@@ -13659,6 +13833,10 @@ function handleVisibilityChange() {
     return;
   }
   state.lastFrameAt = 0;
+  if (!state.sync.startupComplete) {
+    state.sync.hiddenAt = 0;
+    return;
+  }
   if (shouldResyncAfterReturn()) silentResync("visibility-visible");
   state.sync.hiddenAt = 0;
   if (!state.ws || state.ws.readyState === WebSocket.CLOSED) openWebSocket();
@@ -13666,11 +13844,16 @@ function handleVisibilityChange() {
 
 function handleWindowFocus() {
   state.lastFrameAt = 0;
+  // focus/pageshow worden ook tijdens de eerste navigatie afgevuurd. Dan start()
+  // de canonieke sessielaad al; een tweede snapshot bouwt dezelfde wereld en
+  // start alle node-state requests nogmaals.
+  if (!state.sync.startupComplete) return;
   if (!state.ws || state.ws.readyState !== WebSocket.OPEN) silentResync("window-focus");
 }
 
 function handlePageShow(event) {
   state.lastFrameAt = 0;
+  if (!state.sync.startupComplete) return;
   if (event?.persisted || shouldResyncAfterReturn()) silentResync("pageshow");
 }
 
@@ -13729,8 +13912,6 @@ async function pollVersion() {
 
 // Fase 03: clientpakket van de canonieke build. Deze tab houdt de build waarmee hij startte (sessie-pin);
 // komt er een nieuwe build, dan meldt de tab dat je kunt verversen in plaats van midden in het spel te wisselen.
-let canonicalClientBuildId = null;
-let canonicalClientWorld = null;
 function showCanonicalBanner(text, sticky) {
   if (gkHud) {
     gkHud.toast(text, { sticky: sticky === true, icon: sticky ? "info" : "compass", ms: 6000 });
@@ -13751,9 +13932,7 @@ function showCanonicalBanner(text, sticky) {
 
 async function loadCanonicalClientBuild() {
   try {
-    const response = await fetch("/api/authoring/active/client.json", { credentials: "same-origin", cache: "no-store" });
-    if (!response.ok) return;
-    const data = await response.json();
+    const data = await fetchActiveCanonicalClientPayload();
     if (!data?.buildId) return;
     canonicalClientBuildId = data.buildId;
     canonicalClientWorld = data.client?.world || null;
@@ -13846,11 +14025,11 @@ function gkHudAsset(assetId) {
   return assetId ? gkHudCache.assetMap.get(assetId) || null : null;
 }
 
-// Een plaatje voor in de HUD: bij een model de thumbnail, bij een afbeelding het bestand zelf.
+// HUD-afbeeldingen en iconen gebruiken altijd de kleine bibliotheekthumbnail.
+// sourcePath blijft uitsluitend voor echte wereldtextures, audio en 3D-rendering.
 function gkHudAssetUrl(assetId, preferThumb) {
   const asset = gkHudAsset(assetId);
   if (!asset) return null;
-  if (asset.assetType === "image") return asset.sourcePath || asset.thumbnailPath || null;
   return asset.thumbnailPath || null;
 }
 
@@ -13875,10 +14054,16 @@ function gkHudTargets() {
 
 function gkHudRemotes() {
   const list = [];
+  // Kevin 8-11: geen "player_..." op de kaart als de naam (nog) niet binnen is; dan de naam uit je groep, of geen naam.
+  const partyNames = new Map((state.party.view?.members || []).map(function (member) { return [member.id, member.name]; }));
   for (const entry of state.remote.players.values()) {
     if (entry?.isSelfAccount) continue;
-    const position = entry?.renderState || entry?.position;
-    if (position && Number.isFinite(Number(position.x)) && Number.isFinite(Number(position.z))) list.push({ x: Number(position.x), z: Number(position.z) });
+    // Kevin 8-11: renderState is { position: {x, z}, ... }; eerst werd renderState.x gelezen en kwam er nooit een stip.
+    const position = entry?.renderState?.position || entry?.position;
+    if (position && Number.isFinite(Number(position.x)) && Number.isFinite(Number(position.z))) {
+      const known = entry.displayName && entry.displayName !== entry.playerId ? entry.displayName : "";
+      list.push({ id: entry.playerId || null, name: known || partyNames.get(entry.playerId) || "", x: Number(position.x), z: Number(position.z) });
+    }
   }
   return list;
 }
@@ -13899,6 +14084,9 @@ function ensureGkHud() {
   gkHud = createGkHud({
     // Niet in #hud: de wereld-runtime maakt #hud leeg zodra de wereld geladen is.
     mount: hud.parentElement || document.body,
+    mapPresentation: function () {
+      return state.gameWorld?.minimap?.game?.presentation || null;
+    },
     data: function () {
       const network = mmoNetworkSettings();
       return {
@@ -13922,6 +14110,7 @@ function ensureGkHud() {
           tps: network.showHealthTps,
           mspt: network.showHealthMspt,
           cpu: network.showHealthCpu,
+          gpu: network.showHealthGpu,
           packetLoss: network.showHealthPacketLoss
         }
       };
@@ -13954,6 +14143,10 @@ function ensureGkHud() {
       return stationId ? node05CraftingStations().find(function (station) { return station.stationId === stationId; }) || null : null;
     },
     run03: function (action, targetId, extra) { return runNode03Action(action, targetId, extra || {}); },
+    // Portals (8-11): de server kijkt of je dichtbij bent (vrijspelen) en of je mag reizen.
+    portalUnlock: function (portalId) { return runNode03Action("portal_unlock", portalId, { skipMoveToTarget: true }); },
+    portalTravel: function (portalId) { return runNode03Action("portal_travel", portalId, { skipMoveToTarget: true }); },
+    portalTravelMate: function (playerId) { return runNode03Action("portal_travel_mate", playerId, { skipMoveToTarget: true }); },
     run04: function (action, targetId, extra) { return runNode04Action(action, targetId, extra || {}); },
     run05: function (action, payload) { return runNode05Action(action, payload || {}); },
     // MMO (3-11): groep.
@@ -13965,6 +14158,7 @@ function ensureGkHud() {
     playerPosition: partyPlayerPosition,
     activate: activateRuntimeTargetDirect,
     walkTo: function (x, z, target) { return startClickToMoveTarget(num(x, 0), num(z, 0), "hud-talk", { arrivalRadius: targetArrivalRadius(target) }); },
+    walkToMap: function (x, z) { return startClickToMoveTarget(num(x, 0), num(z, 0), "hud-minimap"); },
     isWalkingTo: isWalkingToTarget,
     textureUrl: function (assetId) { return gkHudAsset(assetId)?.sourcePath || null; },
     closeDialogue: function () {
@@ -14051,19 +14245,22 @@ function updateConnectionLight() {
     parts.push("server bevestigt je plek");
   }
   const healthFresh = state.net.lastServerHealthAt > 0 && nowPerf - state.net.lastServerHealthAt < 6000;
+  // GPU komt van dit apparaat zelf (niet van de server), dus altijd vers.
+  const gpuLoad = state.runtime && typeof state.runtime.getGpuLoad === "function" ? state.runtime.getGpuLoad() : null;
   gkHud.setConnection(kind, parts.join(", "), Number.isFinite(ping) ? ping : null, {
     tps: healthFresh ? state.net.serverTps : null,
     targetTps: healthFresh ? state.net.serverTargetTps : null,
     mspt: healthFresh ? state.net.serverMspt : null,
     tickBudgetMs: healthFresh ? state.net.serverTickBudgetMs : null,
     cpuPercent: healthFresh ? state.net.serverCpuPercent : null,
+    gpuPercent: gpuLoad ? gpuLoad.percent : null,
+    gpuMs: gpuLoad ? gpuLoad.gpuMs : null,
     tickStatus: healthFresh ? state.net.serverTickStatus : null,
     packetLossPercent: pingProbeLossPercent()
   });
 }
 
 async function start() {
-  ensureGkHud();
   stepMovement(performance.now());
   startMovementFrameLoop();
   bindKeyboardControls();
@@ -14075,14 +14272,35 @@ async function start() {
   window.addEventListener("beforeunload", function () { clearMovementInput("beforeunload"); });
   window.addEventListener("pagehide", function () { clearMovementInput("pagehide"); });
   try {
-    const loaded = await loadSessionState({ forceWorld: true, showLoading: true });
-    if (loaded) startRemoteFrameLoop();
+    // Een nieuw of volledig gereset account kiest eerst een character. Deze read-only controle
+    // draait vóór /api/game/player, omdat die route anders alvast een leeg profiel zou aanmaken.
+    const charactersResponse = await gameFetch("/api/game/characters", { headers: { Accept: "application/json" } });
+    if (charactersResponse.status === 401) {
+      window.location.href = "/login/?next=%2Fgame%2F";
+      return;
+    }
+    const characters = charactersResponse.ok ? await charactersResponse.json() : null;
+    const classes = Array.isArray(characters?.classes) ? characters.classes : [];
+    const mustChooseCharacter = classes.length > 0 && !classes.some((entry) => entry?.character);
+    if (mustChooseCharacter) {
+      // De characterkeuze is een POST. Haal alleen het CSRF-token op; /api/auth/me maakt geen
+      // spelerprofiel aan en doorbreekt de verplichte keuze dus niet.
+      const authResponse = await gameFetch("/api/auth/me", { headers: { Accept: "application/json" } });
+      const auth = authResponse.ok ? await authResponse.json() : null;
+      state.csrfToken = auth?.csrfToken || "";
+      hideOverlay();
+      ensureGkHud().openCharacters();
+    } else {
+      const loaded = await loadSessionState({ forceWorld: true, showLoading: true });
+      if (loaded) startRemoteFrameLoop();
+    }
   } catch (error) {
     clearMmoReadyTimeout();
     state.debug.lastError = String(error?.message || error || "Kon de game state niet laden.");
     showOverlay("MMO verbinden mislukt: " + (getMmoReadinessBlocker() || "waiting_for_http_snapshot"));
     updateHud();
   }
+  state.sync.startupComplete = true;
   window.setInterval(pollVersion, 2500);
   await loadCanonicalClientBuild();
   window.setInterval(checkCanonicalBuild, 30000);

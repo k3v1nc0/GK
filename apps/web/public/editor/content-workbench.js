@@ -1,4 +1,4 @@
-import { normalizeCanonicalId, normalizeReferenceList } from "../shared/node-contract.js";
+import { normalizeCanonicalId, normalizeReferenceList } from "../shared/node-contract.js?v=20261106-perf1";
 
 // Visual Content Workbench W3: one declarative content spec plus a light derived
 // relation index. These helpers read an ordinary persistent graph and return

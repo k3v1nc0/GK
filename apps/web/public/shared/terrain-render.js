@@ -364,7 +364,10 @@ export function createTerrainLayer(options = {}) {
     const painted = paint.chunks.has(record.key);
     const rock = Boolean(rockInfo());
     if (!painted && !rock) return "";
-    const far = bakeAll || (record.distance || 0) > paintFarRadius;
+    // Bake mode loads every terrain chunk, but a minimap still needs the actual
+    // paint texture. Treating every baked chunk as "far" reduced painted areas
+    // to their average colour, which made the exported map look uniformly brown.
+    const far = !bakeAll && (record.distance || 0) > paintFarRadius;
     return (painted ? "P" : "") + (rock ? "R" : "") + (far ? "F" : "");
   }
 

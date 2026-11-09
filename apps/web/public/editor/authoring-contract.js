@@ -1,4 +1,4 @@
-import { NODE_TYPES } from "../shared/node-types.js?v=20261006-portal-pair2";
+import { NODE_TYPES } from "../shared/node-types.js?v=20261106-perf1";
 
 const GROUP_CLASS_DEFAULTS = Object.freeze({
   world: "viewport_tool",

@@ -3,22 +3,28 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>GK Account</title>
+    <title>GK Game | Inloggen</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-    <link rel="stylesheet" href="./styles.css?v=20261029-klassen2">
+    <link rel="stylesheet" href="./styles.css?v=20261105-game-login1">
   </head>
   <body>
     <main class="login-shell">
       <section class="hero">
-        <p class="eyebrow">MMO-01 account layer</p>
-        <h1>GK account</h1>
-        <p class="lede">
-          Registreer een nieuw speleraccount of log in met een bestaande sessie.
-          De game blijft server-authoritative, ook na refresh en op een tweede device.
-        </p>
+        <p class="eyebrow">Online avontuur</p>
+        <h1><span>GK</span><small>Game</small></h1>
+        <p class="lede">Jouw avontuur begint hier</p>
       </section>
 
-      <section class="panel">
+      <section class="panel" aria-labelledby="loginTitle">
+        <header class="panel-heading">
+          <span class="panel-rune" aria-hidden="true"></span>
+          <div>
+            <p class="panel-kicker">Spelersaccount</p>
+            <h2 id="loginTitle">Welkom, avonturier</h2>
+            <p>Log in om de wereld van GK te betreden.</p>
+          </div>
+        </header>
+
         <div id="sessionCard" class="session-card hidden">
           <div class="session-row">
             <span>Ingelogd als</span>
@@ -29,29 +35,30 @@
             <strong id="currentSessionText">-</strong>
           </div>
           <div class="session-actions">
-            <a id="continueLink" class="primary-link" href="/game/">Open game</a>
-            <button id="logoutButton" type="button" class="secondary-button">Logout</button>
+            <a id="continueLink" class="primary-link" href="/game/">Verder spelen</a>
+            <button id="logoutButton" type="button" class="secondary-button">Uitloggen</button>
           </div>
         </div>
 
         <form id="accountForm" class="account-form">
           <label>
             Gebruikersnaam of e-mail
-            <input name="identifier" autocomplete="username" required placeholder="test_mmo_01 of naam@example.com">
+            <input name="identifier" autocomplete="username" required placeholder="Vul je gebruikersnaam in">
           </label>
           <label>
             Wachtwoord
-            <input name="password" type="password" autocomplete="current-password" minlength="8" required>
+            <input name="password" type="password" autocomplete="current-password" minlength="8" required placeholder="Vul je wachtwoord in">
           </label>
-          <p class="hint">Registreren maakt direct een speleraccount aan en gaat naar de game.</p>
           <div class="button-row">
-            <button type="submit" data-action="login" class="primary-button">Login</button>
-            <button type="submit" data-action="register" class="secondary-button">Registreren</button>
+            <button type="submit" data-action="login" class="primary-button">Inloggen</button>
+            <button type="submit" data-action="register" class="secondary-button">Nieuw account</button>
           </div>
           <p id="statusText" class="status" role="status" aria-live="polite"></p>
         </form>
       </section>
+
+      <p class="world-note"><span aria-hidden="true"></span> De wereld wacht op je</p>
     </main>
-    <script type="module" src="./login.js?v=20261029-klassen2"></script>
+    <script type="module" src="./login.js?v=20261105-game-login1"></script>
   </body>
 </html>

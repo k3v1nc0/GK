@@ -1,4 +1,4 @@
-import { createPlayerNavigator } from "./player-navigation.js?v=20261103-routes3";
+import { createPlayerNavigator } from "./player-navigation.js?v=20261108-roads9";
 
 let navigator = null;
 self.onmessage = function ({ data }) {

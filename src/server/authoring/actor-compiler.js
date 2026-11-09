@@ -156,6 +156,16 @@ export function compileActorSection(documents, options = {}) {
     archetypes.client[doc.body.actorId] = split.client;
   }
 
+  // Stap 8: een NPC die je begeleidt loopt als quest-NPC mee; de game heeft zijn naam, model en animaties nodig.
+  const npcs = {};
+  for (const doc of active.filter((item) => item.kind === "npc").sort((a, b) => a.docKey.localeCompare(b.docKey))) {
+    // Fouten in het model meldt de NPC-kaart zelf al (game-compiler); hier alleen het pad voor de game.
+    const info = doc.body.modelAssetId && assetInfo ? assetInfo.get(doc.body.modelAssetId) : null;
+    if (info && info.assetType === "model" && info.sourcePath) assets[doc.body.modelAssetId] = { assetType: "model", url: info.sourcePath };
+    npcs[doc.body.npcId] = { displayName: doc.body.displayName || doc.body.npcId, modelAssetId: doc.body.modelAssetId || null,
+      modelScaleBp: doc.body.modelScaleBp || 10000, idleClip: doc.body.idleClip || null, walkClip: doc.body.walkClip || null };
+  }
+
   errors.push(...actorSpawnIssues(active).map(({ code, docKey, message }) => ({ code, docKey, message })));
   const spawns = [];
   for (const doc of of("actor_spawn")) {
@@ -183,7 +193,8 @@ export function compileActorSection(documents, options = {}) {
   }
   return {
     server: { schema: ACTOR_SECTION_VERSION, classAbilityIds, classHealAbilityIds, abilities: abilities.server, lootTables, resources: resources.server, archetypes: archetypes.server, spawns, resourceSpawns },
-    client: { schema: ACTOR_SECTION_VERSION, classAbilityIds, classHealAbilityIds, abilities: abilities.client, resources: resources.client, archetypes: archetypes.client, assets },
+    client: { schema: ACTOR_SECTION_VERSION, classAbilityIds, classHealAbilityIds, abilities: abilities.client, resources: resources.client, archetypes: archetypes.client, assets,
+      ...(Object.keys(npcs).length ? { npcs } : {}) },
     errors
   };
 }

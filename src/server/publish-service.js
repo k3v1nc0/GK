@@ -642,7 +642,9 @@ function buildWalkableSurfaceReadModel(node) {
     priority: numberOrNull(node.values.priority),
     points: normalizeWalkablePointList(node.values.points, node.values.y),
     // Dichte randen (onzichtbare muur), zie movement-kernel.
-    closedEdges: Array.isArray(node.values.closedEdges) ? node.values.closedEdges.filter((edge) => Number.isInteger(edge) && edge >= 0) : []
+    closedEdges: Array.isArray(node.values.closedEdges) ? node.values.closedEdges.filter((edge) => Number.isInteger(edge) && edge >= 0) : [],
+    // Kevin 8-11: alleen als een vlag aan (of uit) staat; per speler gefilterd (movement-kernel).
+    ...(node.values.flag?.id ? { flag: { id: String(node.values.flag.id), on: node.values.flag.on !== false } } : {})
   };
 }
 

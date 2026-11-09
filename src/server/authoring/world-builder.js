@@ -7,6 +7,8 @@
 // De uitkomst heeft precies het formaat dat de game (world-runtime.js) en de spelserver (mmo/node03) al lezen.
 import { CANONICAL_KINDS } from "../../shared/authoring/kinds.js";
 import { applyCanonicalBuild, EDITOR_DOC_PREFIX } from "./runtime-overlay.js";
+import { sha256, stableStringify } from "./stable-json.js";
+import { OBJECTIVE_KINDS } from "../../../apps/web/public/shared/quest-graph.js";
 import { settingsValues } from "./game-compiler.js";
 import { partyValues } from "../../shared/authoring/kinds/party.js";
 import { chatValues } from "../../shared/authoring/kinds/chat.js";
@@ -186,6 +188,7 @@ export function liftWorldOntoTerrain(world, heightfield) {
   return Object.assign({}, world, {
     entities: (world.entities || []).map(liftEntity),
     interactables: (world.interactables || []).map(liftPoint),
+    portals: Array.isArray(world.portals) ? world.portals.map(liftPoint) : world.portals,
     spawn,
     zones,
     zonePackage: liftPackage(world.zonePackage),
@@ -361,13 +364,14 @@ const npcTargetId = (npcId) => "target.npc." + npcId;
 const npcDialogueId = (npcId) => "dialogue.npc." + npcId;
 const scaleFromBp = (bp) => Math.max(0.01, (Number(bp) || 10000) / 10000);
 
-function modelEntity({ id, label, modelAssetId, x, y, z, rotationY = 0, scale = 1, solid = false, collisionRadius = 1, idleClip = null }) {
-  return {
+function modelEntity({ id, label, modelAssetId, x, y, z, rotationY = 0, scale = 1, solid = false, collisionRadius = 1, idleClip = null, flagId = null, flagOn = true }) {
+  return Object.assign({
     id, nodeId: id, entityId: id, label, type: "model", modelAssetId: modelAssetId || null,
     animationClip: idleClip || null, idleAnimation: idleClip || null, walkAnimation: null, runAnimation: null,
     solid, walkable: false, collisionRadius,
     transform: { position: { x: Number(x) || 0, y: Number(y) || 0, z: Number(z) || 0 }, rotation: { x: 0, y: Number(rotationY) || 0, z: 0 }, scale: { x: scale, y: scale, z: scale } }
-  };
+  // Stap 9: alleen als een vlag aan (of uit) staat; de server laat hem per speler weg (zien, botsen, praten).
+  }, flagId ? { flag: { id: flagId, on: flagOn !== false } } : {});
 }
 
 // Vaste HUD-modules (zelfde velden als de oude HUD-nodes), aan/uit via de kaart Game-scherm.
@@ -401,55 +405,156 @@ function hudModules(hud, { currencyIds, hasVendor, hasStation }) {
   return modules;
 }
 
-function questRecord(quest, npcsById, itemName) {
-  const turnInNpcId = quest.targetNpcId || quest.giverNpcId;
-  const target = npcTargetId(turnInNpcId);
-  const targetName = npcsById.get(turnInNpcId)?.displayName || turnInNpcId;
-  const step = quest.goal === "visit"
-    ? { id: "step.visit", sequenceIndex: 0, displayName: "Ga naar " + targetName, instruction: "Ga naar " + targetName + ".", stepType: "reach",
-      targetRef: target, zoneRef: WORLD_ZONE_ID, autoAdvance: true, conditions: [], rewards: [],
-      objectives: [{ id: "objective.visit", objectiveType: "reach", targetRef: target, zoneRef: WORLD_ZONE_ID, radius: talkRangeOf(npcsById.get(turnInNpcId)) }] }
-    : { id: "step.deliver", sequenceIndex: 0, displayName: "Breng " + quest.amount + "× " + itemName(quest.itemId) + " naar " + targetName,
-      instruction: "Breng " + quest.amount + "× " + itemName(quest.itemId) + " naar " + targetName + ".", stepType: "deliver",
-      targetRef: target, autoAdvance: true, conditions: [], rewards: [],
-      objectives: [{ id: "objective.deliver", objectiveType: "deliver", itemRef: quest.itemId, requiredAmount: quest.amount, targetRef: target }] };
+// Quest Builder stap 1: een quest is een netwerk van stappen (doelen, overgangen, eindes).
+// De snelle Quest-kaart is al omgezet naar 1 stap + einde (game-compiler). version = vingerafdruk van de inhoud:
+// een speler maakt een lopende quest af op de versie waarmee hij begon (quest-motor, tabel quest_versions).
+function questObjective(objective, names, spawns = new Map()) {
+  const spec = OBJECTIVE_KINDS[objective.type] || {};
+  const record = { id: objective.objectiveId, objectiveType: objective.type, role: objective.role || "required",
+    share: spec.event && objective.share === "team" ? "team" : "personal", requiredAmount: spec.amount ? Math.max(1, objective.amount || 1) : 1 };
+  if (objective.type === "defeat") {
+    record.actorRef = objective.targetId;
+    // Stap 2: alleen opslaan als het afwijkt van de standaard (wie meevocht + groep in de buurt), zo blijft de versie gelijk.
+    if (record.share === "personal" && (objective.credit === "fighters" || objective.credit === "nearby")) record.credit = objective.credit;
+  } else if (objective.type === "gather") record.resourceRef = objective.targetId;
+  else if (spec.refKind === "item_definition") record.itemRef = objective.targetId;
+  // Stap 8: begeleiden heeft geen praat-doel; de NPC loopt mee (zie hieronder).
+  const npcId = spec.npc ? objective.npcId : spec.refKind === "npc" && !spec.escort ? objective.targetId : null;
+  if (npcId) {
+    record.targetRef = npcTargetId(npcId);
+    record.zoneRef = WORLD_ZONE_ID;
+    record.radius = talkRangeOf(names.npcs.get(npcId));
+  }
+  // Stap 3: gebieden. Ga naar / verlaat = het gebied zelf; Alleen in gebied = een gebeurtenis telt alleen daar.
+  if (spec.refKind === "area") record.areaRef = objective.targetId;
+  if (spec.event && objective.areaId) record.inAreaRef = objective.areaId;
+  // Kevin 5-11: ⭐ op de kaart (alleen als het aan staat, zo blijft de versie van bestaande quests gelijk).
+  if (spec.mark && objective.mark === "star") record.mark = "star";
+  // Stap 5: alleen de vijanden van deze verschijning tellen (alleen als gekozen, zo blijft de versie gelijk).
+  const spawn = objective.type === "defeat" && objective.spawnId ? spawns.get(objective.spawnId) : null;
+  if (spawn) record.spawnRef = spawn.spawnId;
+  const what = spawn ? spawn.name || names.actor(objective.targetId) : objective.type === "defeat" ? names.actor(objective.targetId)
+    : objective.type === "gather" ? names.resource(objective.targetId)
+      : spec.refKind === "npc" ? names.npc(objective.targetId) : spec.refKind === "area" ? names.area(objective.targetId) : names.item(objective.targetId);
+  const amount = spec.amount && record.requiredAmount > 1 ? record.requiredAmount + "× " : "";
+  record.displayName = (spec.label || objective.type) + " " + amount + what + (spec.npc ? " naar " + names.npc(objective.npcId) : "")
+    + (spec.escort && objective.areaId ? " naar " + names.area(objective.areaId) : "") + (record.inAreaRef ? " in " + names.area(record.inAreaRef) : "");
+  // Stap 8: wie, waarheen, hoe, levens, wat hij zegt en wat er gebeurt als hij doodgaat (afwijkingen van de standaard alleen als gezet).
+  if (spec.escort) {
+    record.npcRef = objective.targetId;
+    record.npcName = names.npc(objective.targetId);
+    record.areaRef = objective.areaId || null;
+    record.health = Math.max(1, objective.health || 100);
+    if (objective.walk === "lead") record.walk = "lead";
+    if (objective.say) record.say = objective.say;
+    if (objective.death === "fail" || objective.death === "step") record.death = objective.death;
+    if (objective.death === "step") record.deathTo = objective.deathTo || null;
+    // Vecht mee (alleen als aan): schade per klap.
+    if (objective.fight === true) { record.fight = true; record.power = Math.max(1, objective.power || 5); }
+  }
+  // Stap 7: de vraag, de antwoorden en wie kiest (ieder zelf staat er niet bij, dat is de standaard).
+  if (objective.type === "choose") {
+    record.question = objective.question || "";
+    record.options = (objective.options || []).map((option) => ({ id: option.optionId, label: option.label || option.optionId, to: option.to }));
+    if (objective.decide === "leader" || objective.decide === "vote") record.decide = objective.decide;
+  }
+  return record;
+}
+
+// XP + items/geld -> beloningsacties voor de quest-motor.
+function rewardActions(xp, grants) {
   const rewards = [];
-  if (quest.rewardXp > 0) rewards.push({ actionKind: "xp", amount: quest.rewardXp });
-  for (const grant of quest.rewards) {
+  if (xp > 0) rewards.push({ actionKind: "xp", amount: xp });
+  for (const grant of grants) {
     if (grant.currencyId) rewards.push({ actionKind: "currency", currencyRef: grant.currencyId, amountMinor: grant.amount });
     else rewards.push({ actionKind: "item", itemRef: grant.itemId, amount: grant.amount });
   }
-  return {
-    id: quest.questId, displayName: quest.displayName, description: quest.description || step.instruction, summary: step.instruction,
-    steps: [step], stepsById: { [step.id]: step }, startStepRef: step.id, rewards, conditions: [],
-    startDialogueRef: npcDialogueId(quest.giverNpcId), turnInTargetRef: target,
-    prerequisiteQuestRefs: quest.previousQuestId ? [quest.previousQuestId] : [], nextQuestRefs: [],
-    autoTrack: true, repeatMode: quest.repeatable ? "repeatable" : "once_per_character"
-  };
+  return rewards;
 }
 
-// Eén gesprek per NPC: begroeting, dan per quest een keuze (aanbieden, inleveren of klaar melden).
-// De keuzes verschijnen alleen als ze kunnen (voorwaarden quest_available / quest_turn_in / quest_reach_ready).
-function npcDialogue(npc, quests, itemName) {
+const REPEAT_MODES = { once: "once_per_character", always: "repeatable", daily: "daily", weekly: "weekly", cooldown: "cooldown" };
+
+function questRecord(quest, names) {
+  const spawns = new Map((Array.isArray(quest.spawns) ? quest.spawns : []).filter((spawn) => spawn.actorId).map((spawn) => [spawn.spawnId, spawn]));
+  const steps = quest.steps.map((step) => {
+    const objectives = step.kind === "step" ? step.objectives.map((objective) => questObjective(objective, names, spawns)) : [];
+    const summary = objectives.filter((objective) => objective.role !== "hidden").map((objective) => objective.displayName).join(", ");
+    const record = { id: step.stepId, kind: step.kind, displayName: step.title || summary || step.stepId, instruction: step.text || summary || step.title || "",
+      match: step.match, objectives, next: step.kind === "step" ? step.next.map((to) => ({ to })) : [], conditions: [], rewards: [] };
+    // Stap 3: alleen als er een gebied gekozen is (zo blijft de versie van bestaande quests gelijk).
+    if (step.kind === "step" && step.mapAreaId) record.map = { areaRef: step.mapAreaId, show: step.mapShow || "area" };
+    // Stap 5: Als → Dan (alleen als er regels zijn).
+    if (step.kind === "step" && Array.isArray(step.rules) && step.rules.length) {
+      record.rules = step.rules.map((rule) => Object.assign({ id: rule.ruleId, when: rule.when, objectiveRef: rule.objectiveId || null, amount: Math.max(1, rule.amount || 1),
+        then: rule.then, spawnRef: rule.spawnId || null, text: rule.text || "" }, rule.then === "flag" ? { flagRef: rule.flagId || null, on: rule.on !== false } : {}));
+    }
+    // Stap 6: de klok (alleen als er een is).
+    if (step.kind === "step" && step.timer) record.timer = Object.assign({}, step.timer);
+    // Stap 7: de beloning van dit einde (bovenop die van de quest); rewardPick = de speler kiest 1 item/geld.
+    if (step.kind === "end" && (step.xp > 0 || (Array.isArray(step.rewards) && step.rewards.length))) {
+      record.rewards = rewardActions(step.xp, step.rewards || []);
+      if (step.pick === true && (step.rewards || []).length >= 2) record.rewardPick = true;
+    }
+    // Stap 9: de wereld verandert bij dit einde (alleen als er vlaggen zijn).
+    if (step.kind === "end" && Array.isArray(step.flags) && step.flags.length) record.flags = step.flags.map((flag) => ({ flagRef: flag.flagId, on: flag.on !== false }));
+    return record;
+  });
+  const first = steps[0] || null;
+  const giverTarget = quest.giverNpcId ? npcTargetId(quest.giverNpcId) : null;
+  const rewards = rewardActions(quest.rewardXp, quest.rewards);
+  const record = {
+    id: quest.questId, graph: true, displayName: quest.displayName, description: quest.description || first?.instruction || "", summary: first?.instruction || "",
+    steps, stepsById: Object.fromEntries(steps.map((step) => [step.id, step])), startStepRef: first?.id || null, rewards, conditions: [],
+    startDialogueRef: quest.giverNpcId ? npcDialogueId(quest.giverNpcId) : null, turnInTargetRef: giverTarget,
+    prerequisiteQuestRefs: quest.previousQuestId ? [quest.previousQuestId] : [], nextQuestRefs: [],
+    autoTrack: true, repeatMode: REPEAT_MODES[quest.repeat] || (quest.repeatable ? "repeatable" : "once_per_character")
+  };
+  // Stap 6: elke dag/week vanaf een vast uur, of na een wachttijd (alleen dan, zo blijft de versie van andere quests gelijk).
+  if (quest.repeat === "daily" || quest.repeat === "weekly") record.repeatHour = quest.repeatHour;
+  if (quest.repeat === "cooldown") record.repeatMinutes = quest.repeatMinutes;
+  if (quest.partyLeave === "wait" || quest.partyLeave === "fail") record.partyLeave = quest.partyLeave;
+  // 5-11: plaatje in het startvenster (alleen als gekozen, zo blijft de versie gelijk).
+  if (quest.imageAssetId) record.imageAssetId = quest.imageAssetId;
+  // Stap 5: wat de quest laat verschijnen (alleen als er iets is).
+  if (spawns.size) {
+    record.spawns = Array.from(spawns.values()).map((spawn) => ({ id: spawn.spawnId, name: spawn.name || names.actor(spawn.actorId), actorRef: spawn.actorId,
+      count: Math.max(1, Math.min(10, spawn.count || 1)), areaRef: spawn.areaId || null, audience: spawn.audience || "group", despawn: spawn.despawn || "quest" }));
+  }
+  // Stap 4: alleen als het afwijkt van de standaard (bij een NPC, geen voorwaarden), zo blijft de versie gelijk.
+  if (quest.startMode === "item" || quest.startMode === "area" || quest.startMode === "auto" || quest.startMode === "world") {
+    record.startMode = quest.startMode;
+    if (quest.startMode === "item") record.startItemRef = quest.startItemId;
+    if (quest.startMode === "area" || quest.startMode === "world") record.startAreaRef = quest.startAreaId;
+    // Stap 9: wereld-event: elke zoveel minuten, zo lang; iedere keer is een nieuwe run.
+    if (quest.startMode === "world") { record.eventEvery = quest.eventEvery; record.eventLasts = quest.eventLasts; record.repeatMode = "repeatable"; }
+  }
+  const rules = Array.isArray(quest.requirements?.rules) ? quest.requirements.rules : [];
+  if (rules.length) {
+    record.requirements = { match: quest.requirements.match === "any" ? "any" : "all", rules: rules.map((rule) => (rule.type === "level" ? { type: "level", min: rule.min }
+      : rule.type === "item" ? { type: "item", itemRef: rule.id, amount: rule.amount || 1 }
+        : rule.type === "quest" ? { type: "quest", questRef: rule.id }
+          : rule.type === "flag" ? { type: "flag", flagRef: rule.id, on: rule.on !== false } : { type: "class", classRef: rule.id })) };
+  }
+  record.version = sha256(stableStringify(record)).slice(0, 16);
+  return record;
+}
+
+// Eén gesprek per NPC: begroeting, dan per quest de keuze om hem aan te nemen (voorwaarde quest_available).
+// Praten en inleveren voor een queststap zet de quest-motor er zelf bij (per speler en per questversie).
+function npcDialogue(npc, quests, records) {
   const start = { id: "entry.start", entryType: "line", speakerName: npc.displayName, text: npc.greeting || "Hallo!", choices: [] };
   const entries = [start];
   let order = 0;
   for (const quest of quests) {
     if (quest.giverNpcId === npc.npcId) {
       const offerId = "entry.offer." + quest.questId;
-      const ask = quest.goal === "visit" ? "" : "Breng " + quest.amount + "× " + itemName(quest.itemId) + ".";
+      const ask = records.get(quest.questId)?.summary || "";
       start.choices.push({ id: "choice.ask." + quest.questId, label: "📜 " + quest.displayName, order: order++, action: "none", nextEntryRef: offerId,
         conditions: [{ conditionType: "quest_available", questRef: quest.questId }] });
       entries.push({ id: offerId, entryType: "line", speakerName: npc.displayName, text: quest.description || ask || quest.displayName, choices: [
         { id: "choice.accept." + quest.questId, label: "Ja, ik doe het!", order: 0, action: "accept_quest", questRef: quest.questId, closeAfterSelect: true, conditions: [] },
         { id: "choice.later." + quest.questId, label: "Nu niet", order: 1, action: "close", closeAfterSelect: true, conditions: [] }
       ] });
-    }
-    if ((quest.targetNpcId || quest.giverNpcId) === npc.npcId) {
-      const visit = quest.goal === "visit";
-      start.choices.push({ id: "choice.done." + quest.questId, label: "✅ " + (visit ? "Klaar: " : "Inleveren: ") + quest.displayName, order: order++,
-        action: visit ? "complete_quest" : "turn_in_quest", questRef: quest.questId, closeAfterSelect: true,
-        conditions: [{ conditionType: visit ? "quest_reach_ready" : "quest_turn_in", questRef: quest.questId }] });
     }
   }
   start.choices.push({ id: "choice.bye", label: "Tot ziens", order: order++, action: "close", closeAfterSelect: true, conditions: [] });
@@ -473,7 +578,9 @@ function withGame(world, source, options) {
       healthRegenBp: values.healthRegenBp, manaRegenBp: values.manaRegenBp,
       xpPerLevel: project.xpPerLevel, maxLevel: project.maxLevel, startGrants: [], models: [] };
   })();
-  const hud = game?.hud || settingsValues("hud_settings", null);
+  // Ook bij een oudere gepubliceerde game zonder nieuwere HUD-velden blijven de
+  // schema-standaarden gelden.
+  const hud = Object.assign(settingsValues("hud_settings", null), settingsValues("minimap_settings", null), game?.hud || {}, game?.minimap || {});
   const combat = game?.combat || settingsValues("combat_settings", null);
   const npcs = game?.npcs || [];
   const quests = game?.quests || [];
@@ -540,11 +647,14 @@ function withGame(world, source, options) {
   const zoneEntities = [];
   const questTargets = [];
   const entities = [];
+  // Stap 9: NPC's en modellen die er alleen zijn als een vlag aan (of uit) staat.
+  const flagGates = [];
   for (const npc of npcs) {
     const id = npcEntityId(npc.npcId, editor);
     const scale = scaleFromBp(npc.modelScaleBp);
     entities.push(modelEntity({ id, label: npc.displayName, modelAssetId: npc.modelAssetId, x: npc.x, y: npc.y, z: npc.z, rotationY: npc.rotationY,
-      scale, solid: true, collisionRadius: 0.6, idleClip: npc.idleClip }));
+      scale, solid: true, collisionRadius: 0.6, idleClip: npc.idleClip, flagId: editor ? null : npc.flagId, flagOn: npc.flagOn }));
+    if (!editor && npc.flagId) flagGates.push({ entityId: id, npcId: npc.npcId, flagId: npc.flagId, on: npc.flagOn !== false });
     const components = [{ nodeType: "npc_component", componentId: "npc." + npc.npcId, npcRef: npc.npcId, linkedEntityId: id }];
     if (npc.shopOffers.length) components.push({ nodeType: "vendor_component", componentId: "vendor." + npc.npcId, linkedEntityId: id, vendorId: "vendor." + npc.npcId,
       vendorCatalogRef: "vendor_catalog." + npc.npcId, interactionPrompt: "Handelen", range: talkRangeOf(npc) + 0.5 });
@@ -560,7 +670,19 @@ function withGame(world, source, options) {
   for (const model of game?.placedModels || []) {
     entities.push(modelEntity({ id: editor ? EDITOR_DOC_PREFIX + "placed_model:" + model.placedModelId : "placed." + model.placedModelId, label: model.displayName,
       modelAssetId: model.modelAssetId, x: model.x, y: model.y, z: model.z, rotationY: model.rotationY, scale: model.scale,
-      solid: model.solid, collisionRadius: model.collisionRadius, idleClip: model.idleClip }));
+      solid: model.solid, collisionRadius: model.collisionRadius, idleClip: model.idleClip, flagId: editor ? null : model.flagId, flagOn: model.flagOn }));
+    if (!editor && model.flagId) flagGates.push({ entityId: "placed." + model.placedModelId, npcId: null, flagId: model.flagId, on: model.flagOn !== false });
+  }
+  // Portals (8-11): een model in de wereld; de server onthoudt per speler welke vrij zijn (zie runtime/portal-runtime.js).
+  const portals = [];
+  for (const portal of game?.portals || []) {
+    const entityId = editor ? EDITOR_DOC_PREFIX + "portal:" + portal.portalId : "portal_entity." + portal.portalId;
+    entities.push(modelEntity({ id: entityId, label: portal.displayName, modelAssetId: portal.modelAssetId, x: portal.x, y: portal.y, z: portal.z,
+      rotationY: portal.rotationY, scale: portal.scale, flagId: editor ? null : portal.flagId, flagOn: portal.flagOn }));
+    if (!editor && portal.flagId) flagGates.push({ entityId, npcId: null, flagId: portal.flagId, on: portal.flagOn !== false });
+    portals.push(Object.assign({ id: portal.portalId, displayName: portal.displayName, x: Number(portal.x) || 0, y: Number(portal.y) || 0, z: Number(portal.z) || 0,
+      rotationY: portal.rotationY, unlockMeters: portal.unlockMeters, arriveMeters: portal.arriveMeters, startUnlocked: portal.startUnlocked === true,
+      respawnHere: portal.respawnHere !== false }, portal.flagId ? { flag: { id: portal.flagId, on: portal.flagOn !== false } } : {}));
   }
   // In de editor: vijand- en grondstofplekken als model (de game toont ze via de vijandenserver).
   if (editor && source.actors) {
@@ -578,12 +700,35 @@ function withGame(world, source, options) {
 
   // Quests en gesprekken.
   const npcsById = new Map(npcs.map((npc) => [npc.npcId, npc]));
-  const questRecords = quests.filter((quest) => npcsById.has(quest.giverNpcId) && npcsById.has(quest.targetNpcId || quest.giverNpcId))
-    .map((quest) => questRecord(quest, npcsById, itemName));
-  const usable = quests.filter((quest) => questRecords.some((record) => record.id === quest.questId));
-  const dialogues = npcs.map((npc) => npcDialogue(npc, usable, itemName));
-  const campaigns = Object.assign({}, gameProject.campaigns, { quests: listOf(questRecords), dialogues: listOf(dialogues),
+  // Stap 3: Questgebieden (punten in meters + midden en straal voor de kaart).
+  const questAreas = (Array.isArray(game?.questAreas) ? game.questAreas : []).map((area) => {
+    const points = Array.isArray(area.points) ? area.points.map((point) => ({ x: Number(point.x), z: Number(point.z) })) : [];
+    const cx = points.length ? points.reduce((sum, point) => sum + point.x, 0) / points.length : 0;
+    const cz = points.length ? points.reduce((sum, point) => sum + point.z, 0) / points.length : 0;
+    const radius = points.length ? Math.max(...points.map((point) => Math.hypot(point.x - cx, point.z - cz))) : 0;
+    return { id: area.areaId, displayName: area.displayName || area.areaId, points, center: { x: cx, z: cz }, radius };
+  });
+  const areasById = new Map(questAreas.map((area) => [area.id, area]));
+  const names = { npcs: npcsById, npc: (id) => npcsById.get(id)?.displayName || id, item: itemName, area: (id) => areasById.get(id)?.displayName || id,
+    actor: (id) => source.actors?.archetypes?.[id]?.displayName || id, resource: (id) => source.actors?.resources?.[id]?.displayName || id };
+  // Oudere builds hebben nog geen stappen in de sectie: die quests worden 1 stap + einde zoals vroeger.
+  const legacySteps = (quest) => (quest.goal === "visit"
+    ? [{ stepId: "step.visit", kind: "step", title: "", text: "", match: "all", next: ["end"], objectives: [{ objectiveId: "objective.visit", type: "talk", targetId: quest.targetNpcId, npcId: null, amount: 1, role: "required" }] }]
+    : [{ stepId: "step.deliver", kind: "step", title: "", text: "", match: "all", next: ["end"], objectives: [{ objectiveId: "objective.deliver", type: "deliver", targetId: quest.itemId, npcId: quest.targetNpcId || quest.giverNpcId, amount: quest.amount || 1, role: "required" }] }])
+    .concat([{ stepId: "end", kind: "end", title: "Klaar", text: "", match: "all", next: [], objectives: [] }]);
+  // Stap 4: een quest die niet bij een NPC start (item lezen, gebied, vanzelf) heeft geen NPC nodig.
+  const questRecords = quests.filter((quest) => (quest.startMode && quest.startMode !== "npc") || npcsById.has(quest.giverNpcId))
+    .map((quest) => questRecord(Array.isArray(quest.steps) ? quest : Object.assign({}, quest, { steps: legacySteps(quest) }), names));
+  const recordsById = new Map(questRecords.map((record) => [record.id, record]));
+  const usable = quests.filter((quest) => recordsById.has(quest.questId));
+  const dialogues = npcs.map((npc) => npcDialogue(npc, usable, recordsById));
+  const campaigns = Object.assign({}, gameProject.campaigns, { quests: listOf(questRecords), dialogues: listOf(dialogues), questAreas: listOf(questAreas),
     questCount: questRecords.length, dialogueCount: dialogues.length });
+  // Stap 9: vlaggen (voor wie) en wat er alleen met een vlag staat. Alleen als er vlaggen zijn.
+  const flagList = Array.isArray(game?.flags) ? game.flags : [];
+  if (flagList.length || flagGates.length) {
+    campaigns.flags = { byId: Object.fromEntries(flagList.map((flag) => [flag.flagId, { id: flag.flagId, displayName: flag.displayName, scope: flag.scope }])), gates: flagGates };
+  }
 
   const playerRules = { id: "player_rules.main", policies: [], byType: {
     player_progression_rules: [{ id: "rules.progression", maxLevel: player.maxLevel, xpCurveRef: PLAYER_XP_CURVE_ID, baseStatBlockRef: PLAYER_STAT_BLOCK_ID }],
@@ -607,7 +752,93 @@ function withGame(world, source, options) {
     packages: (zones.packages || []).map(patchZone),
     byId: Object.fromEntries(Object.entries(zones.byId || {}).map(([id, pkg]) => [id, patchZone(pkg)]))
   });
-  const ui = Object.assign({}, gameProject.ui, { modules });
+  // Algemene presentatie van interactieve doelen. De runtime meet per doel de echte mesh
+  // en telt alleen deze ingestelde marge op; interactieafstand is dus geen klikvlak meer.
+  const targetPresentation = {
+    hitboxMarginPercent: Math.max(0, Math.min(200, Number(hud.clickAreaExtraPercent) || 0)),
+    hitboxMarginMeters: Math.max(0, Math.min(10, Number(hud.clickAreaExtraMeters) || 0)),
+    ringsVisible: hud.showWorldRings !== false,
+    labelOffsetMeters: Math.max(0, Math.min(10, Number(hud.worldNameOffsetMeters) || 0)),
+    labelFontSizePx: Math.max(8, Math.min(48, Number(hud.worldNameFontSizePx) || 13))
+  };
+  const mapNumber = (value, fallback, min, max) => Math.max(min, Math.min(max, Number.isFinite(Number(value)) ? Number(value) : fallback));
+  const mapColor = (value, fallback) => /^#[0-9a-f]{6}$/i.test(String(value || "")) ? String(value) : fallback;
+  const mapShapes = new Set(["dot", "diamond", "square", "triangle", "star", "pin", "portal", "cross", "ring", "arrow"]);
+  const mapStyle = (key, fallback) => {
+    const shape = String(hud["map" + key + "Icon"] || fallback.shape);
+    return {
+      label: String(hud["map" + key + "Label"] || fallback.label).slice(0, 40),
+      color: mapColor(hud["map" + key + "Color"], fallback.color),
+      shape: mapShapes.has(shape) ? shape : fallback.shape,
+      showMini: hud["map" + key + "ShowMini"] !== false,
+      showBig: hud["map" + key + "ShowBig"] !== false,
+      // Kevin 8-11: eigen grootte per icoon (1 = normaal).
+      size: mapNumber(hud["map" + key + "SizePct"], 100, 30, 300) / 100,
+      // Kevin 8-11: namen naast de iconen per soort (de oude schakelaar "alle namen" blijft ook werken).
+      namesMini: hud["map" + key + "NamesMini"] === true,
+      namesBig: hud["map" + key + "NamesBig"] === true
+    };
+  };
+  const mapStyles = {
+    self: mapStyle("Self", { label: "Jij", color: "#ffffff", shape: "arrow" }),
+    npc: mapStyle("Npc", { label: "NPC's", color: "#ffd34d", shape: "diamond" }),
+    enemy: mapStyle("Enemy", { label: "Vijanden", color: "#ff4b4b", shape: "dot" }),
+    resource: mapStyle("Resource", { label: "Grondstoffen", color: "#63d65f", shape: "dot" }),
+    pickup: mapStyle("Pickup", { label: "Oppakken", color: "#8fe3ff", shape: "dot" }),
+    player: mapStyle("Player", { label: "Spelers", color: "#4da3ff", shape: "dot" }),
+    party: mapStyle("Party", { label: "Groepsleden", color: "#5ee07a", shape: "dot" }),
+    portal: mapStyle("Portal", { label: "Portals", color: "#c77dff", shape: "portal" }),
+    portal_locked: mapStyle("PortalLocked", { label: "Portal: nog niet vrij", color: "#8a7d99", shape: "portal" }),
+    questgiver_available: mapStyle("QuestgiverAvailable", { label: "Questgever: quest te halen", color: "#ffe08a", shape: "star" }),
+    questgiver: mapStyle("Questgiver", { label: "Questgever: geen nieuwe quest", color: "#d4a84a", shape: "star" }),
+    quest: mapStyle("Quest", { label: "Quest-doel", color: "#ffb020", shape: "star" }),
+    pin: mapStyle("Pin", { label: "Jouw pin", color: "#ff4fd8", shape: "pin" })
+  };
+  const mapDefaultZoom = { near: 0, normal: 1, far: 2 }[hud.mapMiniDefaultZoom] ?? 1;
+  const mapPresentation = {
+    minimapVisible: hud.mapMinimapVisible !== false,
+    largeStartOpen: hud.mapLargeStartOpen === true,
+    shape: hud.mapShape === "square" ? "square" : "round",
+    rotate: hud.mapRotate === true,
+    allowPin: hud.mapAllowPin !== false,
+    clickToMove: hud.mapMiniClickToMove !== false,
+    miniShowRegionName: hud.mapMiniShowRegionName !== false,
+    bigShowRegionName: hud.mapBigShowRegionName !== false,
+    bigShowScale: hud.mapBigShowScale !== false,
+    bigShowCoordinates: hud.mapBigShowCoordinates !== false,
+    miniSizePx: mapNumber(hud.mapMiniSizePx, 120, 64, 320),
+    miniViewportPercent: mapNumber(hud.mapMiniViewportPercent, 22, 10, 40),
+    zoomLevels: [
+      mapNumber(hud.mapMiniZoomNearMeters, 30, 10, 1000),
+      mapNumber(hud.mapMiniZoomNormalMeters, 60, 10, 2000),
+      mapNumber(hud.mapMiniZoomFarMeters, 120, 10, 4000)
+    ],
+    defaultZoomIndex: mapDefaultZoom,
+    bigSpanMeters: mapNumber(hud.mapBigSpanMeters, 160, 30, 10000),
+    miniIconScale: mapNumber(hud.mapMiniIconScalePct, 100, 40, 250) / 100,
+    bigIconScale: mapNumber(hud.mapBigIconScalePct, 80, 40, 250) / 100,
+    miniFixedIconSize: hud.mapMiniFixedIconSize !== false,
+    bigFixedIconSize: hud.mapBigFixedIconSize !== false,
+    miniAreaTextScale: mapNumber(hud.mapMiniAreaTextScalePct, 100, 40, 250) / 100,
+    bigAreaTextScale: mapNumber(hud.mapBigAreaTextScalePct, 100, 40, 250) / 100,
+    miniShowMarkerNames: hud.mapMiniShowMarkerNames === true,
+    bigShowMarkerNames: hud.mapBigShowMarkerNames === true,
+    miniMarkerNameSizePx: mapNumber(hud.mapMiniMarkerNameSizePx, 10, 6, 32),
+    bigMarkerNameSizePx: mapNumber(hud.mapBigMarkerNameSizePx, 12, 6, 40),
+    backgroundColor: mapColor(hud.mapBackgroundColor, "#0b1220"),
+    borderColor: mapColor(hud.mapBorderColor, "#b99446"),
+    borderWidthPx: mapNumber(hud.mapBorderWidthPx, 3, 0, 12),
+    area: {
+      label: String(hud.mapAreaLabel || "Gebiedsnamen").slice(0, 40),
+      color: mapColor(hud.mapAreaColor, "#f3e2b3"),
+      showMini: hud.mapAreaShowMini !== false,
+      showBig: hud.mapAreaShowBig !== false
+    },
+    markerNameColor: mapColor(hud.mapMarkerNameColor, "#ffffff"),
+    fogColor: mapColor(hud.mapFogColor, "#05070a"),
+    styles: mapStyles
+  };
+  const ui = Object.assign({}, gameProject.ui, { modules, targetPresentation });
   const nextProject = Object.assign({}, gameProject, { catalogs, campaigns, playerRules, ui, zones: nextZones });
 
   // Itemmeshes zijn zelfstandige assetgebruikers. Een pickup mag niet afhankelijk zijn van
@@ -621,10 +852,17 @@ function withGame(world, source, options) {
     .concat(Object.values(items).map((item) => item?.effectIconAssetId))
     .concat(Object.values(source.actors?.abilities || {}).map((ability) => ability?.effectIconAssetId))
     .concat(currencyList.map((currency) => currency.iconAssetId))
+    // 5-11: plaatjes in het startvenster van quests.
+    .concat(quests.map((quest) => quest?.imageAssetId))
     .concat((player.classes || []).flatMap((entry) => entry.models || [])).filter(Boolean)));
   const known = new Map((world.assets || []).map((asset) => [asset.id, asset]));
-  const missing = modelIds.filter((id) => !known.has(id));
-  if (missing.length && options.assetService) for (const asset of options.assetService.manifestForIds(missing)) known.set(asset.id, asset);
+  // Paden van thumbnails kunnen na een import/migratie wijzigen zonder dat de
+  // game opnieuw gepubliceerd hoeft te worden. Ververs daarom alle gebruikte
+  // assets uit de bibliotheek; de originele sourcePath blijft de renderbron.
+  const usedAssetIds = Array.from(new Set(Array.from(known.keys()).concat(modelIds)));
+  if (usedAssetIds.length && options.assetService) {
+    for (const asset of options.assetService.manifestForIds(usedAssetIds)) known.set(asset.id, asset);
+  }
   const worldMusic = source.worldMusic || null;
   return Object.assign({}, world, {
     gameProject: nextProject,
@@ -633,6 +871,9 @@ function withGame(world, source, options) {
     entities: (world.entities || []).concat(entities),
     assets: Array.from(known.values()),
     worldMusic: worldMusic && worldMusic.url ? { assetId: worldMusic.assetId, url: worldMusic.url } : null,
+    // Portals (8-11): plekken en regels (Instellingen > Portals). Zonder portals: lege lijst en de standaardregels.
+    portals,
+    portalRules: game?.portalRules || null,
     // Verbinding (3-11): Instellingen > Verbinding (MMO). Zonder kaart: null = de standaard van game en server.
     mmo: Object.assign({}, world.mmo || {}, { network: game?.network || null }),
     // Water (lopen) (3-11): Instellingen > Water (lopen). Zonder kaart: null = de standaard van de loopregels.
@@ -640,8 +881,11 @@ function withGame(world, source, options) {
     // Stap 4 (HUD): fog of war op de minimap. De server onthoudt per speler welke vakjes van 8 m ontdekt zijn.
     minimap: editor ? world.minimap : Object.assign({}, world.minimap || {}, { game: Object.assign({}, world.minimap?.game || {}, {
       enabled: true, sourceMinimapId: "world", areaLabels: areaLabels(source.world),
+      clickToMove: hud.mapMiniClickToMove !== false,
+      questArrowDistanceMeters: fogPercent(hud.questArrowDistanceMeters, 200, 2000),
+      presentation: mapPresentation,
       fogOfWar: { enabled: hud.fogOfWar !== false, cellSize: FOG_CELL_M, revealRadius: Math.max(1, Math.min(64, Math.round((Number(hud.fogRevealMeters) || 40) / FOG_CELL_M))),
-        fogColor: "#05070a", fogOpacity: fogPercent(hud.fogDarkness, 100) / 100, fogFeatherRadius: fogPercent(hud.fogFadeMeters, 8, 64) / FOG_CELL_M,
+        fogColor: mapPresentation.fogColor, fogOpacity: fogPercent(hud.fogDarkness, 100) / 100, fogFeatherRadius: fogPercent(hud.fogFadeMeters, 8, 64) / FOG_CELL_M,
         revealShape: "circle", saveIntervalMs: 1000, movementThreshold: 1 }
     }) })
   });

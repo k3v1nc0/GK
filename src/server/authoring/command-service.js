@@ -4,6 +4,7 @@ import { DocumentRepository } from "./document-repository.js";
 import { authoringError, sha256, stableStringify } from "./stable-json.js";
 import { spatialIssuesFor } from "./world-compiler.js";
 import { actorSpawnIssues, lootGraphIssues } from "./actor-compiler.js";
+import { AREA_SOORTEN, areaSoort } from "../../shared/authoring/kinds/area.js";
 
 const SPATIAL_KINDS = new Set(["region", "area", "collider"]);
 // Fase 05: vijand- en grondstofplekken moeten (met patrouille) binnen hun Region blijven.
@@ -126,6 +127,13 @@ export class CommandService {
 
   update(current, payload, actor, stamp) {
     if (current.archived) throw authoringError(409, "DOC_ARCHIVED", "Gearchiveerd document kan niet worden gewijzigd.");
+    if (current.kind === "area") {
+      const currentType = AREA_SOORTEN[areaSoort(current.body)];
+      const nextType = AREA_SOORTEN[areaSoort(payload.body)];
+      if (currentType?.road && !nextType?.road) {
+        throw authoringError(422, "ROAD_KIND_IMMUTABLE", "Een Weg is een vast wegennet en kan geen ander vlak worden.");
+      }
+    }
     const { refs } = this.validated(current.kind, payload.body);
     if (docKeyFor(current.kind, payload.body) !== current.docKey) throw authoringError(422, "ID_IMMUTABLE", "De ID kan niet worden gewijzigd.");
     this.checkRefs(refs);
