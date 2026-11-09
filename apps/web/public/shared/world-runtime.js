@@ -16722,7 +16722,9 @@ function resolveChunkDebugCenter(policy) {
               definitionId,
               modelAssetId: item.worldModelAssetId || spawn.worldModelAssetId || null,
               modelScale: num(item.worldModelScale || spawn.worldModelScale, 0.45),
+              editorRotationX: num(spawn.rotationX, 0),
               editorRotationY: num(spawn.rotationY, 0),
+              editorRotationZ: num(spawn.rotationZ, 0),
               x: num(spawn.x, 0),
               y: num(spawn.y, num(worldData?.ground?.y, 0)),
               z: num(spawn.z, 0)
@@ -16901,7 +16903,9 @@ function resolveChunkDebugCenter(policy) {
     const targetPosition = runtimeTargetPosition(target);
     root.position.set(targetPosition.x, targetPosition.y, targetPosition.z);
     // Pickups (9-11): in de editor draait de hele plek, zodat R verder draait vanaf de opgeslagen hoek.
-    if (mode === "editor" && Number.isFinite(Number(target?.editorRotationY))) root.rotation.y = Number(target.editorRotationY) * DEG_TO_RAD;
+    if (mode === "editor" && Number.isFinite(Number(target?.editorRotationY))) {
+      root.rotation.set(num(target.editorRotationX, 0) * DEG_TO_RAD, num(target.editorRotationY, 0) * DEG_TO_RAD, num(target.editorRotationZ, 0) * DEG_TO_RAD);
+    }
     root.visible = runtimeTargetVisible(target);
     root.userData.runtimeTargetPayload = Object.assign({}, target);
     root.userData.runtimeTargetAttachedEntityId = runtimeTargetAttachedEntityId(target) || null;

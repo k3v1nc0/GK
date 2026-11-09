@@ -364,12 +364,12 @@ const npcTargetId = (npcId) => "target.npc." + npcId;
 const npcDialogueId = (npcId) => "dialogue.npc." + npcId;
 const scaleFromBp = (bp) => Math.max(0.01, (Number(bp) || 10000) / 10000);
 
-function modelEntity({ id, label, modelAssetId, x, y, z, rotationY = 0, scale = 1, solid = false, collisionRadius = 1, idleClip = null, flagId = null, flagOn = true }) {
+function modelEntity({ id, label, modelAssetId, x, y, z, rotationX = 0, rotationY = 0, rotationZ = 0, scale = 1, solid = false, collisionRadius = 1, idleClip = null, flagId = null, flagOn = true }) {
   return Object.assign({
     id, nodeId: id, entityId: id, label, type: "model", modelAssetId: modelAssetId || null,
     animationClip: idleClip || null, idleAnimation: idleClip || null, walkAnimation: null, runAnimation: null,
     solid, walkable: false, collisionRadius,
-    transform: { position: { x: Number(x) || 0, y: Number(y) || 0, z: Number(z) || 0 }, rotation: { x: 0, y: Number(rotationY) || 0, z: 0 }, scale: { x: scale, y: scale, z: scale } }
+    transform: { position: { x: Number(x) || 0, y: Number(y) || 0, z: Number(z) || 0 }, rotation: { x: Number(rotationX) || 0, y: Number(rotationY) || 0, z: Number(rotationZ) || 0 }, scale: { x: scale, y: scale, z: scale } }
   // Stap 9: alleen als een vlag aan (of uit) staat; de server laat hem per speler weg (zien, botsen, praten).
   }, flagId ? { flag: { id: flagId, on: flagOn !== false } } : {});
 }
@@ -669,7 +669,7 @@ function withGame(world, source, options) {
   // Losse modellen.
   for (const model of game?.placedModels || []) {
     entities.push(modelEntity({ id: editor ? EDITOR_DOC_PREFIX + "placed_model:" + model.placedModelId : "placed." + model.placedModelId, label: model.displayName,
-      modelAssetId: model.modelAssetId, x: model.x, y: model.y, z: model.z, rotationY: model.rotationY, scale: model.scale,
+      modelAssetId: model.modelAssetId, x: model.x, y: model.y, z: model.z, rotationX: model.rotationX, rotationY: model.rotationY, rotationZ: model.rotationZ, scale: model.scale,
       solid: model.solid, collisionRadius: model.collisionRadius, idleClip: model.idleClip, flagId: editor ? null : model.flagId, flagOn: model.flagOn }));
     if (!editor && model.flagId) flagGates.push({ entityId: "placed." + model.placedModelId, npcId: null, flagId: model.flagId, on: model.flagOn !== false });
   }

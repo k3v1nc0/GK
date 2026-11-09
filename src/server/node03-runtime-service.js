@@ -1216,9 +1216,10 @@ export class Node03RuntimeService {
       interaction: { action: "pickup", prompt: "Pick up", range: 3 },
       updatedAt: now()
     };
-    // 9-11: draaien per pickup (alleen als hij gedraaid is, zodat oude pickups gelijk blijven).
-    const rotationY = safeNumber(spawn.rotationY, 0);
-    if (rotationY) state.modelRotationY = rotationY;
+    // 9-11: draaien en kantelen per pickup. null (niet weglaten) zodat terugdraaien naar 0 ook de opgeslagen stand overschrijft.
+    state.modelRotationX = safeNumber(spawn.rotationX, 0) || null;
+    state.modelRotationY = safeNumber(spawn.rotationY, 0) || null;
+    state.modelRotationZ = safeNumber(spawn.rotationZ, 0) || null;
     return state;
   }
 

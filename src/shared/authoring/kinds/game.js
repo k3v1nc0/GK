@@ -291,6 +291,13 @@ export const GAME_KINDS = {
       scale: { type: "number", required: false, min: 0.01, max: 100, audience: "client", label: "Grootte",
         ui: ui("📏", "slider", "werkbank", { step: 0.05, unit: "×", range: [0.1, 5] }), default: 1, help: HELP_SCALE },
       rotationY: turn("werkbank", false),
+      // Kevin 9-11: kantelen om de X- en Y-as van de 3D-view (R en dan X of Y). In three.js heet jouw Y-as Z.
+      rotationX: { type: "number", required: false, min: 0, max: 359, audience: "client", label: "Kantelen (X)",
+        ui: ui("↪️", "slider", "werkbank", { step: 1, unit: "°", more: true }), default: 0,
+        help: help("Kantelt het model om de rode X-as.", "Klik het in de 3D-view, druk R en dan X. 0 = rechtop.", "Staat scheef → zet op 0.") },
+      rotationZ: { type: "number", required: false, min: 0, max: 359, audience: "client", label: "Kantelen (Y)",
+        ui: ui("↩️", "slider", "werkbank", { step: 1, unit: "°", more: true }), default: 0,
+        help: help("Kantelt het model om de groene Y-as.", "Klik het in de 3D-view, druk R en dan Y. 0 = rechtop.", "Staat scheef → zet op 0.") },
       solid: toggle("Er niet doorheen lopen", "🧱", false, "werkbank",
         help("Botst de speler tegen dit model?", "Aan voor huizen, rotsen en bomen. Uit voor gras en bloemen.", "Spelers blijven haken → zet uit of maak de botsstraal kleiner.")),
       collisionRadius: { type: "number", required: false, min: 0.1, max: 50, audience: "client", label: "Botsstraal",

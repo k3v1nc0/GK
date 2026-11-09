@@ -98,9 +98,11 @@ export function runtimeSpawnFromCanonical(pickup, legacySpawn = null, options = 
   // Quest Builder stap 4: per speler oppakken (Ieder zijn eigen / Ieder 1×).
   if (pickup.claimMode === "personal" || pickup.claimMode === "once") spawn.claimMode = pickup.claimMode;
   else delete spawn.claimMode;
-  // 9-11: draaien per pickup.
-  if (Number(pickup.rotationY)) spawn.rotationY = Number(pickup.rotationY);
-  else delete spawn.rotationY;
+  // 9-11: draaien en kantelen per pickup.
+  for (const key of ["rotationX", "rotationY", "rotationZ"]) {
+    if (Number(pickup[key])) spawn[key] = Number(pickup[key]);
+    else delete spawn[key];
+  }
   if (options.editor) spawn.nodeId = EDITOR_DOC_PREFIX + "pickup:" + pickup.pickupId;
   return spawn;
 }

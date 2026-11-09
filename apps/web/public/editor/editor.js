@@ -1,4 +1,4 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261109-pickup-draai1";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261109-kantelen1";
 import { edgeBetweenPoints, editClosedEdges } from "./walkable-edge-tools.js?v=20261031-randen1";
 import { createTerrainEditor } from "./terrain-editor.js?v=20261102-terrein10";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261106-perf1";
@@ -11,7 +11,7 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261106-perf1";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261106-perf1";
-import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261109-pickup-draai1";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261109-kantelen1";
 import { createAssetPicker } from "./mini-asset-picker.js?v=20261106-thumbs150";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
 import { createDocDrop, docKeyFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261108-portals1";
@@ -984,7 +984,7 @@ function placedDocLabel(docKey) {
 
 function placedDocHint(kind) {
   const can = PLACED_KINDS[kind] || { move: true };
-  return ["G = verplaatsen", can.rotate ? "R = draaien" : "", can.scale ? "T = groter/kleiner" : ""].filter(Boolean).join(", ");
+  return ["G = verplaatsen", can.rotate ? (can.tilt ? "R = draaien (R en dan X of Y = kantelen)" : "R = draaien") : "", can.scale ? "T = groter/kleiner" : ""].filter(Boolean).join(", ");
 }
 
 // Na elke documentwijziging: de 3D-view opnieuw laden, zodat hij toont wat er is opgeslagen.
@@ -1077,6 +1077,14 @@ async function commitDocTransform(docKey, transform) {
   }
   const can = PLACED_KINDS[doc.kind] || {};
   if (can.rotate && Number.isFinite(Number(transform?.rotationY))) body.rotationY = Math.round(((Number(transform.rotationY) % 360) + 360) % 360) % 360;
+  // Kevin 9-11: kantelen (R en dan X of Y) voor pickups en modellen; 0 = rechtop (veld weg).
+  if (can.tilt) {
+    for (const key of ["rotationX", "rotationZ"]) {
+      if (!Number.isFinite(Number(transform?.[key]))) continue;
+      const degrees = Math.round(((Number(transform[key]) % 360) + 360) % 360) % 360;
+      if (degrees) body[key] = degrees; else delete body[key];
+    }
+  }
   if (can.scale && Number.isFinite(Number(transform?.scaleX)) && Number(transform.scaleX) > 0) body.scale = Math.min(100, Math.max(0.01, round2(transform.scaleX)));
   try {
     await docBench.saveDoc(doc.kind, doc, body, placedDocLabel(docKey) + " aangepast");

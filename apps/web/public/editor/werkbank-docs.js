@@ -20,12 +20,13 @@ const DOC_MIME = "application/x-gk-doc";
 const LIBRARY_KINDS = ["item_definition", "currency", "ability", "loot_table", "resource_definition", "actor_archetype", "npc", "portal", "quest", "recipe", "world_flag"];
 // Kaarten met een plek in de wereld: klik in de 3D-view, G = verplaatsen (R = draaien, T = groter/kleiner waar het kan).
 // Een pickup draait per plek; zijn grootte komt van het item (Grootte op de grond).
+// tilt = kantelen (R en dan X of Y); NPC's en portals blijven rechtop staan.
 export const PLACED_KINDS = Object.freeze({
-  pickup: { move: true, rotate: true },
+  pickup: { move: true, rotate: true, tilt: true },
   npc: { move: true, rotate: true },
   // Portals (8-11): sleep de kaart op de wereld; G, R en T zoals bij een model.
   portal: { move: true, rotate: true, scale: true },
-  placed_model: { move: true, rotate: true, scale: true },
+  placed_model: { move: true, rotate: true, scale: true, tilt: true },
   actor_spawn: { move: true },
   resource_spawn: { move: true }
 });

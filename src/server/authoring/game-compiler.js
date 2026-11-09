@@ -257,6 +257,7 @@ export function compileGameSection(documents, options = {}) {
     return {
       placedModelId: doc.body.placedModelId, displayName: doc.body.displayName, modelAssetId: doc.body.modelAssetId,
       scale: Number(doc.body.scale) || 1, rotationY: Number(doc.body.rotationY) || 0, solid: doc.body.solid === true,
+      rotationX: Number(doc.body.rotationX) || 0, rotationZ: Number(doc.body.rotationZ) || 0,
       collisionRadius: Number(doc.body.collisionRadius) || 1, idleClip: doc.body.idleClip || null,
       x: doc.body.x, y: Number(doc.body.y) || 0, z: doc.body.z, ...flagGateOf(doc.body)
     };

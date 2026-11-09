@@ -183,6 +183,13 @@ export const CANONICAL_KINDS = {
       rotationY: { type: "number", required: false, min: 0, max: 359, audience: "client", label: "Draaien",
         ui: ui("🔄", "slider", "viewport", { step: 1, unit: "°", more: true }), default: 0,
         help: help("Welke kant de pickup op ligt.", "Klik hem in de 3D-view en druk R, of schuif hier.", "Ligt de verkeerde kant op → draai hem.") },
+      // Kevin 9-11: kantelen om de X- en Y-as van de 3D-view (R en dan X of Y). In three.js heet jouw Y-as Z.
+      rotationX: { type: "number", required: false, min: 0, max: 359, audience: "client", label: "Kantelen (X)",
+        ui: ui("↪️", "slider", "viewport", { step: 1, unit: "°", more: true }), default: 0,
+        help: help("Kantelt de pickup om de rode X-as.", "Klik hem in de 3D-view, druk R en dan X. 0 = rechtop; 90 = op zijn kant.", "Staat scheef → zet op 0.") },
+      rotationZ: { type: "number", required: false, min: 0, max: 359, audience: "client", label: "Kantelen (Y)",
+        ui: ui("↩️", "slider", "viewport", { step: 1, unit: "°", more: true }), default: 0,
+        help: help("Kantelt de pickup om de groene Y-as.", "Klik hem in de 3D-view, druk R en dan Y. 0 = rechtop; 90 = op zijn kant.", "Staat scheef → zet op 0.") },
       amount: { type: "integer", required: true, min: 1, max: 9999, audience: "server", label: "Aantal",
         ui: ui("🔢", "slider", "werkbank", { step: 1, range: [1, 50] }), default: 1,
         help: help("Hoeveel je krijgt als je hem oppakt.", "1 tot 5 stuks.", "Spelers hebben te snel genoeg → lager.") },
