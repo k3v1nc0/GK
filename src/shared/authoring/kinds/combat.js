@@ -9,6 +9,8 @@ export const ABILITY_KINDS = Object.freeze(["damage", "heal"]);
 const HEAL_GROUP = "💚 Genezen en mana";
 const EFFECT_GROUP = "✨ Effect op het doel";
 const HEAL_ONLY = Object.freeze({ key: "abilityKind", is: ["heal"] });
+const RING_GROUP = "💥 Ring om je heen";
+const RING_ONLY = Object.freeze({ key: "hitsAll", is: [true] });
 
 const PCT = { unit: "%", scale: 100 };
 
@@ -66,6 +68,13 @@ export const COMBAT_KINDS = {
       manaCost: { type: "integer", required: false, min: 0, max: 1000000, audience: "client", label: "Kost mana",
         ui: ui("🔵", "slider", "werkbank", { step: 1, range: [0, 200], group: HEAL_GROUP }), default: 0,
         help: help("Hoeveel mana een speler kwijt is als hij deze aanval of spreuk doet. 0 = gratis.", "10-25 voor een genees-spreuk.", "Mana is meteen op → lager. Spelers genezen eindeloos → hoger.") },
+      // Kevin 10-11: raakt iedereen in de ring om je heen (je bereik); de gekozen vijand krijgt de volle schade.
+      hitsAll: { type: "boolean", required: false, audience: "client", label: "Raakt iedereen binnen bereik",
+        ui: ui("💥", "toggle", "werkbank", { group: RING_GROUP }), default: false,
+        help: help("Raakt deze aanval alle vijanden in de ring om je heen (zo ver als het Bereik), in plaats van alleen het doel? De vijand die je koos krijgt de volle schade, de rest minder.", "Aan voor een zwaai of een vuurring; ook fijn op vak 1 als je vaak tegen groepjes vecht.", "Je moet in een groepje steeds de goede vijand zoeken → zet dit aan.") },
+      othersPct: { type: "integer", required: false, min: 0, max: 100, audience: "server", label: "Schade aan de anderen",
+        ui: ui("➗", "slider", "werkbank", Object.assign({ step: 5, range: [0, 100], group: RING_GROUP, when: RING_ONLY }, { unit: "%" })), default: 50,
+        help: help("Hoeveel van de schade de andere vijanden in de ring krijgen (de gekozen vijand krijgt altijd 100 %).", "30-60 %.", "Groepjes gaan te snel neer → lager. Te traag → hoger.") },
       // Fase 5: vrij vanaf level of via een quest, hoe het eruitziet en het icoon op de knop (vak 2 en 3).
       unlockLevel: { type: "integer", required: false, min: 1, max: 1000, audience: "client", label: "Vrij vanaf level",
         ui: ui("🔓", "slider", "werkbank", { step: 1, range: [1, 50], group: PLAYER_GROUP }), default: 1,

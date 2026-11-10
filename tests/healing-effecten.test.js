@@ -210,3 +210,14 @@ test("vijand-healer geneest een gewonde vechtende vijand; regeneratie telt op", 
   runtime.regenActors();
   assert.equal(troll.hp, 52, "2 %/s van 100, ook in gevecht");
 });
+
+test("Kevin 10-11: levens en mana terug in gevecht volgens de eigen schuifjes van de klasse", () => {
+  const { vitals, stat, db } = setup({ health: 50, mana: 10 });
+  void db;
+  const character = { id: "class.healer", healthRegenBp: 100, manaRegenBp: 200, healthRegenCombatBp: 0, manaRegenCombatBp: 400 };
+  vitals.classOf = () => character;
+  vitals.markCombat("p1", 10000);
+  vitals.tick("world.main", 11000);
+  assert.equal(stat("p1", "stat.health"), 50, "levens in gevecht: 0 %/s");
+  assert.equal(stat("p1", "stat.mana"), 12, "mana in gevecht: 4 %/s van 50");
+});

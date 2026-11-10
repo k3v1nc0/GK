@@ -66,13 +66,14 @@ export function createActorPresentation(options = {}) {
       let record = records.get(entry.id);
       if (!record) {
         record = { id: entry.id, k: entry.k, d: entry.d, samples: [], hp: entry.hp, hm: entry.hm, s: entry.s, dyingUntil: 0, tx: Number(entry.tx) || 0, tz: Number(entry.tz) || 0,
-          el: entry.el === 1, sh: entry.sh === 1 };
+          el: entry.el === 1, sh: entry.sh === 1, st: Number(entry.st) || 100 };
         records.set(entry.id, record);
         changed = true;
       }
       if (record.hp !== entry.hp || record.s !== entry.s || record.hm !== entry.hm) changed = true;
       // Fase 5: een sterkere (el) en zijn schild (sh).
-      if (record.el !== (entry.el === 1) || record.sh !== (entry.sh === 1)) { record.el = entry.el === 1; record.sh = entry.sh === 1; changed = true; }
+      const st = Number(entry.st) || 100;
+      if (record.el !== (entry.el === 1) || record.sh !== (entry.sh === 1) || record.st !== st) { record.el = entry.el === 1; record.sh = entry.sh === 1; record.st = st; changed = true; }
       // Kevin 10-11: kanteling van een grondstof (verandert alleen na een nieuwe build).
       const tx = Number(entry.tx) || 0;
       const tz = Number(entry.tz) || 0;
@@ -186,6 +187,8 @@ export function createActorPresentation(options = {}) {
       // Fase 5: een sterkere heet "Sterke …", is iets groter en heeft (zolang het staat) een schild boven zijn naam.
       displayName: (record.el ? "Sterke " : "") + def.displayName, x: pose.x, y: pose.y, z: pose.z,
       elite: record.el === true, shield: record.sh === true && status === "alive",
+      // Kevin 10-11: sterkte-cijfer voor de naam (1 = gewoon, 200 % = 2, 500 % = 5).
+      strength: Math.max(1, Math.round((Number(record.st) || 100) / 100)),
       range: ability ? ability.rangeMm / 1000 : 2.8, radius: def.radiusMm / 1000,
       // "dying" blijft zichtbaar (neervalanimatie); pas "dead" verbergt de vijand.
       available: status !== "dead", alive: status !== "dead", status,

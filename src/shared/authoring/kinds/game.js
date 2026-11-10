@@ -355,6 +355,11 @@ export const GAME_KINDS = {
         help("Hoeveel procent van je levens je per seconde vanzelf terugkrijgt, buiten een gevecht. 0 % = niets.", "0,5-2 %/s. Bij 1 %/s ben je in 100 seconden weer vol.", "Spelers moeten te lang wachten → hoger. Gevechten voelen zonder risico → lager.")),
       manaRegenBp: int("Mana terug", "🔵", 200, 0, 10000, "instellingen", { step: 10, range: [0, 1000], unit: "%/s", scale: 100, group: CLASS_HEAL_GROUP },
         help("Hoeveel procent van je mana je per seconde vanzelf terugkrijgt, buiten een gevecht. 0 % = niets.", "1-3 %/s; meer voor de Healer.", "Mana is te lang op → hoger.")),
+      // Kevin 10-11: ook tijdens een gevecht iets terug (voor een vaste rotatie: je weet wanneer je mana weer genoeg is).
+      healthRegenCombatBp: int("Levens terug in gevecht", "💓", 0, 0, 10000, "instellingen", { step: 10, range: [0, 1000], unit: "%/s", scale: 100, group: CLASS_HEAL_GROUP },
+        help("Hoeveel procent van je levens je per seconde terugkrijgt TIJDENS een gevecht. 0 % = niets (alleen buiten gevecht).", "0-0,5 %/s; hoger voor een Tank.", "Spelers gaan te snel neer in lange gevechten → iets hoger.")),
+      manaRegenCombatBp: int("Mana terug in gevecht", "🌀", 0, 0, 10000, "instellingen", { step: 10, range: [0, 1000], unit: "%/s", scale: 100, group: CLASS_HEAL_GROUP },
+        help("Hoeveel procent van je mana je per seconde terugkrijgt TIJDENS een gevecht. Zo kun je een vaste volgorde (rotatie) spelen zonder dat je mana steeds op is.", "0,5-2 %/s. Reken: kost je vaardigheid 10 mana en is je mana 100, dan geeft 1 %/s elke 10 s genoeg voor één keer.", "Mana is in een gevecht steeds op → hoger. Spelers spammen eindeloos → lager.")),
       manaMax: int("Mana", "🔵", 50, 0, 1000000, "instellingen", { range: [0, 1000], more: true },
         help("Hoeveel mana deze klasse heeft (blauwe balk onder de levens).", "Healer 100, DPS 50, Tank 30. 0 = geen manabalk.", "Spreuken raken te snel op → hoger.")),
       startItems: refList("Start-spullen", "🎒", ["item_definition", "currency"], [AMOUNT], "instellingen",

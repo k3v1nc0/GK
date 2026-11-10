@@ -1,12 +1,12 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261110-fase5";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261110-fase5b";
 import { nextPlayerRouteWaypoint } from "../shared/player-path-client.js?v=20261108-roads9";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20261106-perf1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
 import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../shared/protocol-v1.js?v=20261025-f2-client1";
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
-import { createActorPresentation } from "./actor-presentation.js?v=20261110-fase5";
-import { createGkHud } from "./hud/gk-hud.js?v=20261110-fase5";
+import { createActorPresentation } from "./actor-presentation.js?v=20261110-fase5b";
+import { createGkHud } from "./hud/gk-hud.js?v=20261110-fase5b";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -356,11 +356,15 @@ function handleActorMessage(message) {
   if (actorPresentation.applyEvent(message)) syncRuntimeTargets();
   // Fase 5: de animatie van een klap (speler op vijand, of vijand op speler).
   if ((message.e === "hit" || message.e === "death") && message.by && !String(message.by).startsWith("actor:")) {
-    playCombatFxFor(String(message.by), String(message.id), message.ab || null, message.sk === 1, message.sb === 1, "damage");
+    // Kevin 10-11: geraakt door de ring van een aanval = alleen een flits bij die vijand.
+    if (message.sp === 1) { if (state.runtime && typeof state.runtime.playCombatFx === "function") state.runtime.playCombatFx({ from: String(message.id), to: String(message.id), tone: "damage" }); }
+    else playCombatFxFor(String(message.by), String(message.id), message.ab || null, message.sk === 1, message.sb === 1, "damage");
   } else if (message.e === "attack" && message.target && state.runtime && typeof state.runtime.playCombatFx === "function") {
     const target = String(message.target);
     state.runtime.playCombatFx({ from: String(message.id), to: target === state.player?.id ? "self" : target.startsWith("actor:") ? target : "player:" + target, style: "slash", tone: "damage" });
   }
+  // Kevin 10-11: word je aangevallen en sla je zelf nog niemand, dan sla je vanzelf terug.
+  if (message.e === "attack" && message.target && message.target === state.player?.id && !message.defeated) retaliateAgainst(String(message.id));
   // Healing (2-11): kleine zwevende getallen boven de vijand (schade rood, genezen groen) en boven andere spelers.
   if (gkHud && Number(message.amount) > 0) {
     if (message.e === "hit" || message.e === "death") gkHud.worldFloat(message.id, "-" + Math.round(Number(message.amount)), "dmg");
@@ -7616,8 +7620,14 @@ async function runNode03Action(action, targetId, extra = {}) {
       showGameHudDialogueNotice(state.node03.lastActionMessage, { title: "Melding" });
     }
     if (normalizedAction === "attack") {
+      // Kevin 10-11: knop 1 laat zijn wachttijd zien.
+      if (data.performed === true && gkHud && typeof gkHud.autoSwung === "function") gkHud.autoSwung(num(data.cooldownMs, 1500));
       if (data.stop === true) stopAutoAttack();
       else scheduleAutoAttack(num(data.cooldownMs, 0) || num(state.node03.snapshot?.skills?.auto?.cooldownMs, 1500));
+    }
+    if (normalizedAction === "skill" && data.performed === true && data.action !== "heal" && data.targetId && String(data.targetId).startsWith("actor:")) {
+      // Een vaardigheid op een vijand zet ook de auto-aanval op hem (zoals in andere MMO's).
+      if (!state.node03.autoAttack.targetId && !data.stop) { startAutoAttack(String(data.targetId)); scheduleAutoAttack(num(state.node03.snapshot?.skills?.auto?.cooldownMs, 1500)); }
     }
     if (normalizedAction === "skill" && data.performed !== true && num(data.cooldownMs, 0) > 0 && gkHud && typeof gkHud.skillFailed === "function") gkHud.skillFailed(Number(extra.slot));
     if (isTravel) {
@@ -7656,6 +7666,25 @@ async function runNode03Action(action, targetId, extra = {}) {
 // De client vraagt alleen; de server controleert bereik, muur, wachttijd en schade (zie node03 attack/skill).
 const NODE03_SNAPSHOT_ACTIONS = new Set(["attack", "skill", "loadout_set", "maker_level", "maker_xp"]);
 const AUTO_ATTACK_SLACK_M = 1.0;
+
+// Kevin 10-11: terugslaan op wie jou aanvalt, als je nog geen doel hebt en hij binnen bereik staat.
+function retaliateAgainst(actorId) {
+  if (!actorId || !actorId.startsWith("actor:") || state.node03.autoAttack.targetId || isNode03Defeated()) return;
+  const target = node03TargetWithClientRange(node03TargetById(actorId));
+  if (!target || target.available === false || target.action !== "attack") return;
+  const position = state.predictedPosition || state.position;
+  const reach = Math.max(0, num(target.range, 0)) + Math.max(0, num(target.radius, 0)) + AUTO_ATTACK_SLACK_M;
+  if (!position || Math.hypot(num(position.x, 0) - num(target.x, 0), num(position.z, 0) - num(target.z, 0)) > reach) return;
+  if (!state.node03.selectedTargetId) selectNode03Target(actorId);
+  startAutoAttack(actorId);
+  scheduleAutoAttack(0);
+}
+
+// Kevin 10-11: een aanval zonder doel in bereik laat toch de animatie zien (oefenen, of een groepje overvallen).
+function playWhiff(style) {
+  if (!state.runtime || typeof state.runtime.playCombatFx !== "function") return false;
+  return state.runtime.playCombatFx({ from: "self", ahead: style === "slash" ? 2 : 7, style: style || "slash", tone: "damage" });
+}
 
 function autoAttackTarget() {
   const id = String(state.node03.autoAttack.targetId || "");
@@ -7707,17 +7736,27 @@ function autoAttackSwing() {
 
 // Vak 2 of 3: bij schade gaat de vaardigheid naar je auto-aanval-doel of de aangeklikte vijand (anders kiest de server);
 // bij genezen naar het gekozen teamlid (of de server kiest de meest gewonde).
-function useSkillSlot(slot, targetId, kind) {
+function useSkillSlot(slot, targetId, kind, info = {}) {
   let target = targetId || null;
   if (kind !== "heal" && !target) {
     const selected = String(state.node03.selectedTargetId || "");
     target = state.node03.autoAttack.targetId || (selected.startsWith("actor:") ? selected : null);
+    // Geen doel en niemand binnen bereik: alleen de animatie (de server hoeft niets te doen).
+    if (!target && !enemyWithin(num(info.rangeM, 2) + 1)) { playWhiff(info.animStyle || "slash"); return "whiff"; }
   }
   if (state.node03.actionInFlight) {
     state.node03.queuedSkill = { slot: Number(slot), targetId: target, at: performance.now() };
     return;
   }
   runNode03Action("skill", target, { slot: Number(slot), skipMoveToTarget: true });
+}
+
+function enemyWithin(rangeM) {
+  const position = state.predictedPosition || state.position;
+  if (!position) return false;
+  return actorPresentation.targets(state.runtime).some(function (target) {
+    return target.entityKind === "enemy" && target.available !== false && Math.hypot(num(position.x, 0) - num(target.x, 0), num(position.z, 0) - num(target.z, 0)) <= rangeM + num(target.radius, 0);
+  });
 }
 
 function runQueuedSkill() {
@@ -14173,7 +14212,9 @@ function ensureGkHud() {
     },
     run03: function (action, targetId, extra) { return runNode03Action(action, targetId, extra || {}); },
     // Fase 5: vak 2 en 3.
-    useSkill: function (slot, targetId, kind) { return useSkillSlot(slot, targetId, kind); },
+    useSkill: function (slot, targetId, kind, info) { return useSkillSlot(slot, targetId, kind, info || {}); },
+    // Kevin 10-11: vak 1 zonder vijand in de buurt = alleen de uithaal.
+    whiff: function (style) { return playWhiff(style); },
     // Portals (8-11): de server kijkt of je dichtbij bent (vrijspelen) en of je mag reizen.
     portalUnlock: function (portalId) { return runNode03Action("portal_unlock", portalId, { skipMoveToTarget: true }); },
     portalTravel: function (portalId) { return runNode03Action("portal_travel", portalId, { skipMoveToTarget: true }); },

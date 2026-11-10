@@ -577,6 +577,7 @@ function withGame(world, source, options) {
     const project = settingsValues("project_settings", null);
     return { healthMax: values.healthMax, attackPower: values.attackPower, armor: values.armor, healPower: values.healPower, manaMax: values.manaMax,
       healthRegenBp: values.healthRegenBp, manaRegenBp: values.manaRegenBp,
+      healthRegenCombatBp: values.healthRegenCombatBp, manaRegenCombatBp: values.manaRegenCombatBp,
       xpPerLevel: project.xpPerLevel, maxLevel: project.maxLevel, startGrants: [], models: [] };
   })();
   // Ook bij een oudere gepubliceerde game zonder nieuwere HUD-velden blijven de
@@ -607,6 +608,8 @@ function withGame(world, source, options) {
   const character = (id, displayName, statBlockRef, values, extra = {}) => Object.assign({
     id, displayName, statBlockRef, startingAbilityRefs: [], defaultLoadoutId: "loadout.main",
     healthRegenBp: regenBp(values.healthRegenBp, 0), manaRegenBp: regenBp(values.manaRegenBp, 0),
+    // Kevin 10-11: ook tijdens een gevecht (eigen schuifjes, standaard 0 = zoals het was).
+    healthRegenCombatBp: regenBp(values.healthRegenCombatBp, 0), manaRegenCombatBp: regenBp(values.manaRegenCombatBp, 0),
     startingItemGrants: values.startGrants.filter((grant) => grant.itemId).map((grant) => ({ itemRef: grant.itemId, amount: grant.amount })),
     startingCurrencyGrants: values.startGrants.filter((grant) => grant.currencyId).map((grant) => ({ currencyRef: grant.currencyId, amountMinor: grant.amount }))
   }, extra);

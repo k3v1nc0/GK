@@ -2268,34 +2268,12 @@ export class Node03RuntimeService {
     if (planned.result) return planned.result;
     const plan = planned.plan;
     if (manaCost > 0) this.spendMana(ctx.profile.id, manaBefore, manaCost, operationId, "ability_used", ability.abilityId);
-    const events = [{ type: "damage", amount: plan.damage, targetId: plan.instanceId, label: plan.label }];
-    if (manaCost > 0) events.push({ type: "mana", amount: -manaCost });
+    const events = [];
+    // Kevin 10-11: de hoofdvijand plus (bij "Raakt iedereen binnen bereik") de rest in de ring; elk met eigen buit en quest-telling.
+    const hits = [plan].concat(Array.isArray(plan.splash) ? plan.splash : []);
     let grants = [];
-    if (plan.killed) {
-      events.push({ type: "defeated", targetId: plan.instanceId, label: plan.label });
-      // Persoonlijke loot voor iedereen die meevocht: één claim per vijand-leven per speler (UNIQUE claim_key).
-      for (const reward of plan.rewards) {
-        const rewardCtx = reward.playerId === ctx.profile.id ? ctx : Object.assign({}, ctx, { profile: { id: reward.playerId } });
-        if (!this.claimActorReward(ctx, reward.claimKey, plan.instanceId, reward.playerId, operationId, plan.buildId)) continue;
-        const given = [];
-        for (const item of reward.items) given.push(...this.grantItem(rewardCtx, item.itemId, item.quantity, "actor_defeated", plan.instanceId, operationId));
-        const xp = reward.xp > 0 ? this.grantXpAmount(rewardCtx, reward.xp, "actor_defeated", plan.instanceId, operationId) : null;
-        if (xp) given.push(xp);
-        this.db.prepare("UPDATE actor_loot_claims SET grants_json = ? WHERE claim_key = ?").run(stableJson(given), reward.claimKey);
-        if (reward.playerId === ctx.profile.id) grants = given;
-      }
-      // Een quest-vijand (stap 5) komt niet terug; die bewaart de vijandenserver zelf.
-      if (!plan.questSpawn) this.saveActorSpawnState(ctx, plan.spawnKey, plan.occurrence, "dead", plan.respawnAtMs, plan.buildId);
-      this.recordGameplayEvent(ctx, "actor_defeated", "player", plan.instanceId, { damage: plan.damage, grants });
-      // Quest Builder: de kill telt voor iedereen die meevocht (1x per vijand-leven per speler).
-      // Stap 5: bij een quest-vijand welke verschijning het was, en alleen wie hem mag zien telt mee.
-      const spawn = plan.questSpawn || null;
-      this.questEvents?.(ctx, plan.rewards.map((reward) => reward.playerId),
-        { type: "defeat", refId: plan.actorId, eventKey: "defeat:" + plan.instanceId, operationId, at: { x: plan.x, z: plan.z },
-          spawn, canSee: spawn ? (playerId) => runtime.canSeeGroupId(spawn.groupId, playerId) : null });
-    } else {
-      this.recordGameplayEvent(ctx, "actor_hit", "player", plan.instanceId, { damage: plan.damage, healthAfter: plan.hpAfter });
-    }
+    for (const hit of hits) grants = grants.concat(this.settleActorHit(ctx, runtime, hit, operationId, events));
+    if (manaCost > 0) events.push({ type: "mana", amount: -manaCost });
     const what = skill ? (skill.displayName || "Vaardigheid") + ": " : "";
     return {
       action: skill ? "skill" : "attack",
@@ -2305,10 +2283,45 @@ export class Node03RuntimeService {
       cooldownMs: Math.max(100, safeInteger(ability.cooldownMs, 1500)),
       stop: plan.killed,
       message: what + (plan.killed ? plan.label + " verslagen." : plan.label + " geraakt voor " + plan.damage + "."
-        + (plan.shieldBreak ? " Schild gebroken!" : plan.shieldUp ? " (schild)" : "")),
+        + (plan.shieldBreak ? " Schild gebroken!" : plan.shieldUp ? " (schild)" : ""))
+        + (hits.length > 1 ? " +" + (hits.length - 1) + " in de buurt geraakt." : ""),
+      hitCount: hits.length,
       events,
       grants
     };
+  }
+
+  // Eén geraakte vijand afhandelen: verslagen = buit en XP voor wie meevocht (1x per vijand-leven), plek opslaan, quests tellen.
+  // Geeft wat deze speler kreeg terug.
+  settleActorHit(ctx, runtime, plan, operationId, events) {
+    events.push({ type: "damage", amount: plan.damage, targetId: plan.instanceId, label: plan.label });
+    if (!plan.killed) {
+      this.recordGameplayEvent(ctx, "actor_hit", "player", plan.instanceId, { damage: plan.damage, healthAfter: plan.hpAfter });
+      return [];
+    }
+    let grants = [];
+    events.push({ type: "defeated", targetId: plan.instanceId, label: plan.label });
+    // Persoonlijke loot voor iedereen die meevocht: één claim per vijand-leven per speler (UNIQUE claim_key).
+    for (const reward of plan.rewards) {
+      const rewardCtx = reward.playerId === ctx.profile.id ? ctx : Object.assign({}, ctx, { profile: { id: reward.playerId } });
+      if (!this.claimActorReward(ctx, reward.claimKey, plan.instanceId, reward.playerId, operationId, plan.buildId)) continue;
+      const given = [];
+      for (const item of reward.items) given.push(...this.grantItem(rewardCtx, item.itemId, item.quantity, "actor_defeated", plan.instanceId, operationId));
+      const xp = reward.xp > 0 ? this.grantXpAmount(rewardCtx, reward.xp, "actor_defeated", plan.instanceId, operationId) : null;
+      if (xp) given.push(xp);
+      this.db.prepare("UPDATE actor_loot_claims SET grants_json = ? WHERE claim_key = ?").run(stableJson(given), reward.claimKey);
+      if (reward.playerId === ctx.profile.id) grants = given;
+    }
+    // Een quest-vijand (stap 5) komt niet terug; die bewaart de vijandenserver zelf.
+    if (!plan.questSpawn) this.saveActorSpawnState(ctx, plan.spawnKey, plan.occurrence, "dead", plan.respawnAtMs, plan.buildId);
+    this.recordGameplayEvent(ctx, "actor_defeated", "player", plan.instanceId, { damage: plan.damage, grants });
+    // Quest Builder: de kill telt voor iedereen die meevocht (1x per vijand-leven per speler).
+    // Stap 5: bij een quest-vijand welke verschijning het was, en alleen wie hem mag zien telt mee.
+    const spawn = plan.questSpawn || null;
+    this.questEvents?.(ctx, plan.rewards.map((reward) => reward.playerId),
+      { type: "defeat", refId: plan.actorId, eventKey: "defeat:" + plan.instanceId, operationId, at: { x: plan.x, z: plan.z },
+        spawn, canSee: spawn ? (playerId) => runtime.canSeeGroupId(spawn.groupId, playerId) : null });
+    return grants;
   }
 
   gatherResource(ctx, targetId, operationId) {

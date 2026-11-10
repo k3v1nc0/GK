@@ -5,7 +5,7 @@
 // - Praten, handelen en maken zijn tijdelijke standen bovenop het paneel. Daarna (en na een gevecht of een
 //   herlaad) sta je weer precies waar je was: zelfde paneel, tabblad, filter, item en scrollplek.
 // Dit bestand tekent alleen. Alle spelregels blijven op de server; game.js geeft de data en de acties (api).
-import { ICON_PATHS } from "./gk-icon-paths.js?v=20261110-fase5";
+import { ICON_PATHS } from "./gk-icon-paths.js?v=20261110-fase5b";
 import { createHudMinimap } from "./gk-minimap.js?v=20261108-portals3";
 import { formatDuration } from "../../shared/effect-math.js?v=20261102-heal2";
 
@@ -477,7 +477,9 @@ export function createGkHud(api) {
   const attackLabel = h("span", { class: "gkActLabel" });
   // Fase 5: vak 1 = de auto-aanval van je klasse (slaat vanzelf door zolang je een doel hebt).
   const attackIcon = h("span", { style: "display:contents" }, [ico("crossed-swords")]);
-  const attackBtn = h("button", { type: "button", class: "gkAct gkAct--attack", "data-act": "attack", title: "Aanvallen (1)" }, [attackIcon, attackLabel, h("span", { class: "gkKey", text: "1" })]);
+  // Kevin 10-11: ook knop 1 laat zijn wachttijd zien.
+  const attackCd = h("em", { class: "gkActCd", hidden: true });
+  const attackBtn = h("button", { type: "button", class: "gkAct gkAct--attack", "data-act": "attack", title: "Aanvallen (1)" }, [attackIcon, attackLabel, attackCd, h("span", { class: "gkKey", text: "1" })]);
   const doLabel = h("span", { class: "gkActLabel" });
   const doIcon = h("span", { style: "display:contents" }, [ico("hand")]);
   const doBtn = h("button", { type: "button", class: "gkAct gkAct--do", "data-act": "do", title: "Doen: praten, oppakken of verzamelen (E)" }, [doIcon, doLabel, h("span", { class: "gkKey", text: "E" })]);
@@ -1401,7 +1403,8 @@ export function createGkHud(api) {
     const low = lowLeft.getBoundingClientRect();
     const above = low.width > 0 && low.height > 0 ? area.bottom - low.top + 6 : edge;
     const besideRoom = hasActions ? act.left - area.left - 2 * edge : area.width - 2 * edge;
-    const beside = besideRoom >= 300;
+    // Kevin 10-11: op de telefoon liever smal naast de knoppen dan over de hele breedte erboven.
+    const beside = besideRoom >= (coarsePointer() ? 150 : 300);
     // De tekst boven de actieknoppen steekt ook buiten hun rechthoek uit.
     const bottom = beside || !hasActions ? above : Math.max(above, area.bottom - act.top + 30);
     return { edge, area, bottom, beside, besideRoom };
@@ -1420,7 +1423,9 @@ export function createGkHud(api) {
       // blijft erboven staan en schuift niet over spelersbalken of minimap heen.
       const crossesMap = area.left + space.edge + width > mapWrap.getBoundingClientRect().left - 8;
       const top = Math.max(statusRect.bottom, crossesMap ? mapBottom : area.top) + 12;
-      feedStack.style.maxHeight = Math.max(0, Math.floor(area.bottom - space.bottom - top)) + "px";
+      // Kevin 10-11: op de telefoon hooguit 40 % van het scherm, zodat je de game blijft zien (de rest kun je scrollen).
+      const room = Math.floor(area.bottom - space.bottom - top);
+      feedStack.style.maxHeight = Math.max(0, coarsePointer() ? Math.min(room, Math.floor(area.height * 0.4)) : room) + "px";
     }
     const typing = chatShown() && coarsePointer() && document.activeElement === chatInput;
     chatBox.classList.toggle("gkChatTop", typing);
@@ -1899,7 +1904,7 @@ export function createGkHud(api) {
       const serverReady = entry && num(entry.readyInMs) > 0 ? num(ui.skillSnapAt) + num(entry.readyInMs) : 0;
       const left = entry ? Math.max(0, Math.max(num(ui.skillReadyAt[entry.abilityId]), serverReady) - now) : 0;
       u.cd.hidden = left <= 0;
-      if (left > 0) u.cd.textContent = String(Math.ceil(left / 1000));
+      if (left > 0) u.cd.textContent = cdText(left);
       u.btn.classList.toggle("gkIdle", !entry || left > 0 || (num(entry?.manaCost) > 0 && mana.cur < num(entry.manaCost)));
     }
     const auto = sk?.auto || null;
@@ -1907,6 +1912,16 @@ export function createGkHud(api) {
     if (ui.autoIconSig !== autoIcon) { ui.autoIconSig = autoIcon; attackIcon.replaceChildren(ico(autoIcon)); }
     attackBtn.title = (auto?.displayName || "Aanvallen") + ": auto-aanval (1)";
     attackBtn.classList.toggle("gkAuto", Boolean(data().autoAttack));
+    const autoLeft = Math.max(0, num(ui.autoReadyAt) - now);
+    attackCd.hidden = autoLeft <= 0;
+    if (autoLeft > 0) attackCd.textContent = cdText(autoLeft);
+  }
+  // Onder 3 s met één cijfer achter de komma (1.2), daarboven hele seconden.
+  function cdText(ms) {
+    return ms < 3000 ? (Math.ceil(ms / 100) / 10).toFixed(1) : String(Math.ceil(ms / 1000));
+  }
+  function autoSwung(cooldownMs) {
+    ui.autoReadyAt = performance.now() + Math.max(0, num(cooldownMs, 1500));
   }
   function useSlot(slot) {
     const sk = skillsData();
@@ -1927,7 +1942,7 @@ export function createGkHud(api) {
       const mate = partyMates().find(function (m) { return m.id === ui.healTarget && m.online; });
       targetId = mate ? "player:" + mate.id : null;
     }
-    api.useSkill(slot, targetId, entry.kind);
+    api.useSkill(slot, targetId, entry.kind, { rangeM: entry.rangeM, animStyle: entry.animStyle });
   }
   // De server weigerde (te ver, muur, vergrendeld): de wachttijd op de knop mag weg.
   function skillFailed(slot) {
@@ -3009,17 +3024,24 @@ export function createGkHud(api) {
         labels.append(el);
         labelPool.set(anchor.id, el);
       }
-      if (el.textContent !== anchor.name) el.textContent = anchor.name;
+      // Kevin 10-11: een vijand krijgt zijn sterkte-cijfer voor de naam (1 = gewoon, 2 = twee keer zo sterk).
+      const nameSig = anchor.strength ? anchor.strength + "|" + anchor.name : anchor.name;
+      if (el.dataset.sig !== nameSig) {
+        el.dataset.sig = nameSig;
+        if (anchor.strength) el.replaceChildren(h("span", { class: "gkLvl" + (anchor.strength > 1 ? " gkLvlUp" : ""), text: String(anchor.strength) }), document.createTextNode(anchor.name));
+        else el.textContent = anchor.name;
+      }
       const fontSize = Math.max(8, Math.min(48, num(anchor.fontSizePx, 13)));
       const fontSizeCss = fontSize + "px";
       if (el.style.fontSize !== fontSizeCss) el.style.fontSize = fontSizeCss;
       // Naam-tags niet verbergen bij overlap met de HUD; ze horen altijd zichtbaar te blijven.
       if (el.style.visibility) el.style.visibility = "";
       const kind = own || (anchor.entityKind === "escort" ? "escort" : markerKind(anchor)) || "other";
-      const className = "gkLabel gkLabel--" + kind + (anchor.selected ? " gkOn" : "") + (anchor.available === false ? " gkDim" : "") + (anchor.shield ? " gkShield" : "");
+      const hasHp = anchor.health !== null && anchor.health !== undefined;
+      const className = "gkLabel gkLabel--" + kind + (anchor.selected ? " gkOn" : "") + (anchor.available === false ? " gkDim" : "") + (anchor.shield ? " gkShield" : "") + (hasHp ? " gkHp" : "");
       if (el.className !== className) el.className = className;
-      // Stap 8: levensbalk onder de naam van een NPC die je begeleidt.
-      if (anchor.health !== null && anchor.health !== undefined) {
+      // Stap 8: levensbalk onder de naam van een NPC die je begeleidt (Kevin 10-11: en van elke vijand).
+      if (hasHp) {
         const hp = Math.round(anchor.health * 100) + "%";
         if (el.style.getPropertyValue("--gk-hp") !== hp) el.style.setProperty("--gk-hp", hp);
       }
@@ -3703,7 +3725,14 @@ export function createGkHud(api) {
     const selectedId = String(api.live().selectedTargetId || "");
     const candidates = liveTargets();
     ui.attackTarget = nearestAttackTarget(candidates.filter(function (target) { return String(target.instanceId) === selectedId; })) || nearestAttackTarget(candidates);
-    if (!ui.attackTarget) { toast("Geen vijand in de buurt.", { icon: "crossed-swords", ms: 2000 }); return; }
+    // Kevin 10-11: geen vijand in de buurt = toch de uithaal (oefenen); knop 1 telt dan ook af.
+    if (!ui.attackTarget) {
+      const auto = skillsData()?.auto || null;
+      if (performance.now() < num(ui.autoReadyAt)) return;
+      if (typeof api.whiff === "function" && api.whiff(auto?.animStyle || "slash")) autoSwung(num(auto?.cooldownMs, 1500));
+      else toast("Geen vijand in de buurt.", { icon: "crossed-swords", ms: 2000 });
+      return;
+    }
     api.activate(ui.attackTarget);
   }
   function interact() {
@@ -4108,6 +4137,7 @@ export function createGkHud(api) {
     handleKey,
     toast,
     skillFailed,
+    autoSwung,
     questBanner,
     questDone,
     npcSay,

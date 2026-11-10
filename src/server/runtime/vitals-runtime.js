@@ -120,18 +120,22 @@ export class VitalsRuntime {
         }
       }
       for (const key of Object.keys(carry.fx)) if (!effects.some((entry) => key.startsWith(entry.key + "|"))) delete carry.fx[key];
-      if (!this.inCombat(playerId, nowMs, rules)) {
+      // Kevin 10-11: in een gevecht gelden de schuifjes "… terug in gevecht" van de klasse (standaard 0).
+      {
         const character = this.classOf(playerId, catalogs, nowMs);
-        if (hp < health.max) {
-          const step = regenStep(health.max, character.healthRegenBp, carry.hp, seconds);
+        const fighting = this.inCombat(playerId, nowMs, rules);
+        const hpBp = fighting ? num(character.healthRegenCombatBp) : num(character.healthRegenBp);
+        const mpBp = fighting ? num(character.manaRegenCombatBp) : num(character.manaRegenBp);
+        if (hp < health.max && hpBp > 0) {
+          const step = regenStep(health.max, hpBp, carry.hp, seconds);
           dHp += step.amount;
           carry.hp = step.carry;
-        } else carry.hp = 0;
-        if (mp < mana.max) {
-          const step = regenStep(mana.max, character.manaRegenBp, carry.mp, seconds);
+        } else if (hp >= health.max) carry.hp = 0;
+        if (mp < mana.max && mpBp > 0) {
+          const step = regenStep(mana.max, mpBp, carry.mp, seconds);
           dMp += step.amount;
           carry.mp = step.carry;
-        } else carry.mp = 0;
+        } else if (mp >= mana.max) carry.mp = 0;
       }
       this.carry.set(playerId, carry);
       const nextHp = Math.max(0, Math.min(health.max, hp + dHp));

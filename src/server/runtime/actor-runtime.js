@@ -36,6 +36,18 @@ const PATROL_PAUSE_MS = 2000;
 const HOME_REACHED_M = 0.6;
 const PLAYER_RADIUS_MM = 500;
 const RANGE_SLACK_MM = 300;
+// Kevin 10-11: een aanval die iedereen binnen bereik raakt, raakt er hooguit zoveel extra (licht voor de server).
+const SPLASH_MAX = 8;
+// Kevin 10-11: vechtende vijanden houden zoveel ruimte tussen hun botsrand, en schuiven per stap hooguit zoveel opzij.
+const SEPARATION_GAP_M = 0.25;
+const SEPARATION_STEP_M = 0.12;
+
+// Vaste richting voor twee vijanden die precies op elkaar staan (altijd dezelfde, geen toeval).
+function hashText(text) {
+  let hash = 0;
+  for (let i = 0; i < text.length; i += 1) hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+  return hash;
+}
 const ATTACK_ANIM_MS = 600;
 const REGEN_STEP_MS = 1000;
 const HEAL_BELOW = 0.75; // een vijand-healer geneest pas onder 75 % levens
@@ -115,7 +127,7 @@ export class ActorRuntime {
     this.questEscortDown = null;
     this.escortNews = [];
     // Fase 5: zichtlijn-controle bij elke aanval of vaardigheid (gemeten, zodat hij licht blijft).
-    this.perf = { steps: 0, maxStepMs: 0, avgStepMs: 0, pathQueries: 0, pathBudgetHits: 0, snapshotsSent: 0, losChecks: 0, losBlocked: 0, losMaxMs: 0, losAvgMs: 0 };
+    this.perf = { steps: 0, maxStepMs: 0, avgStepMs: 0, pathQueries: 0, pathBudgetHits: 0, snapshotsSent: 0, losChecks: 0, losBlocked: 0, losMaxMs: 0, losAvgMs: 0, separations: 0 };
     this.combatSettings = null;
   }
 
@@ -395,7 +407,65 @@ export class ActorRuntime {
       if (actor.state !== "return" && actor.state !== "engage" && !near(actor.x, actor.z, WAKE_M) && !near(actor.home.x, actor.home.z, WAKE_M)) continue;
       this.stepActor(actor, nowMs, players, playerList, budget, escorts);
     }
+    this.separateActors(players);
     this.flushEscortNews();
+  }
+
+  // Kevin 10-11: vijanden die vechten lopen niet door elkaar heen. Wie te dicht op een ander staat, schuift een stukje opzij
+  // (rond zijn doel, niet van hem weg), zodat ze in een kring om je heen staan en je de sterke ertussenuit kunt kiezen.
+  separateActors(players) {
+    const list = [];
+    for (const actor of this.actors.values()) if (!actor.escort && actor.state === "engage") list.push(actor);
+    if (list.length < 2) return;
+    const context = this.worldContextRef;
+    for (let i = 0; i < list.length; i += 1) {
+      const a = list[i];
+      for (let j = i + 1; j < list.length; j += 1) {
+        const b = list[j];
+        const minD = meters(a.def.radiusMm + b.def.radiusMm) + SEPARATION_GAP_M;
+        let dx = b.x - a.x;
+        let dz = b.z - a.z;
+        if (Math.abs(dx) >= minD || Math.abs(dz) >= minD) continue;
+        let d = Math.hypot(dx, dz);
+        if (d >= minD) continue;
+        if (d < 0.001) {
+          const angle = (hashText(a.id + "|" + b.id) % 628) / 100;
+          dx = Math.cos(angle); dz = Math.sin(angle); d = 1;
+        }
+        const push = Math.min(SEPARATION_STEP_M, (minD - Math.min(d, minD)) / 2);
+        this.nudgeActor(a, -dx / d * push, -dz / d * push, players, context, -1);
+        this.nudgeActor(b, dx / d * push, dz / d * push, players, context, 1);
+      }
+    }
+  }
+
+  nudgeActor(actor, px, pz, players, context, side) {
+    // Staat hij al binnen bereik van zijn doel, dan alleen opzij schuiven langs de kring (niet verder weg of erop),
+    // anders loopt hij steeds heen en weer. side (-1/+1) kiest de kant als ze precies achter elkaar staan.
+    const target = this.targetOf(actor, players);
+    const ability = this.section?.abilities?.[actor.def.abilityId];
+    if (target && ability) {
+      const rx = actor.x - target.x;
+      const rz = actor.z - target.z;
+      const rl = Math.hypot(rx, rz);
+      const reach = meters(ability.rangeMm + actor.def.radiusMm + PLAYER_RADIUS_MM);
+      if (rl > 0.001 && rl <= reach) {
+        const tx = -rz / rl;
+        const tz = rx / rl;
+        const size = Math.hypot(px, pz);
+        let along = px * tx + pz * tz;
+        if (Math.abs(along) < size * 0.3) along = size * side;
+        px = tx * along; pz = tz * along;
+      }
+    }
+    if (Math.hypot(px, pz) < 0.005) return;
+    const result = resolveMovement({ x: actor.x, y: actor.y, z: actor.z }, { x: actor.x + px, y: actor.y, z: actor.z + pz },
+      { radius: meters(actor.def.radiusMm), index: context?.walkabilityIndex || null, solids: context?.solidColliders || [] });
+    if (Math.hypot(result.x - actor.x, result.z - actor.z) < 0.005) return;
+    actor.x = result.x; actor.z = result.z;
+    if (Number.isFinite(result.y)) actor.y = result.y;
+    actor.rev += 1;
+    this.perf.separations += 1;
   }
 
   // Healing (2-11): vijanden met Regeneratie aan krijgen elke seconde levens terug, ook tijdens het gevecht.
@@ -780,7 +850,17 @@ export class ActorRuntime {
     if (this.lineBlocked(ctx.x, ctx.z, actor.x, actor.z, Number.isFinite(Number(ctx.y)) ? Number(ctx.y) : null)) {
       throw httpError(409, "Er zit iets tussen jou en " + label + ".", "NO_LINE_OF_SIGHT");
     }
+    const plan = this.hitPlan(ctx, section, actor, ability, auto, 100);
+    // Kevin 10-11: een vaardigheid met "Raakt iedereen binnen bereik" raakt ook de rest in de ring om je heen (minder schade).
+    if (ability.hitsAll === true) plan.splash = this.splashPlans(ctx, section, actor, ability, auto);
+    this.pending.set(ctx.operationId, plan);
+    return { plan, result: null };
+  }
+
+  // Eén geraakte vijand: schade (factorPct van de volle schade), schild, buit en XP. Puur: verandert het geheugen niet.
+  hitPlan(ctx, section, actor, ability, auto, factorPct) {
     let damage = computeDamage(ability, ctx.attackPower, actor.def.armor);
+    if (factorPct !== 100) damage = Math.max(1, Math.round(damage * factorPct / 100));
     const shieldUp = this.shieldUp(actor, ctx.nowMs);
     const rules = this.shieldRules();
     // Schild: de auto-aanval doet maar een deel; een vaardigheid (vak 2/3) breekt het.
@@ -800,14 +880,36 @@ export class ActorRuntime {
         });
       }
     }
-    const plan = {
+    return {
       kind: "attack", instanceId: actor.id, actorId: actor.def.actorId, x: actor.x, z: actor.z, spawnKey: actor.spawnKey, occurrence: actor.occurrence, playerId: ctx.playerId,
-      damage, hpAfter, killed, respawnAtMs: killed ? ctx.nowMs + (actor.group ? QUEST_CORPSE_MS : actor.def.respawnMs) : null, rewards, buildId: this.buildId, label,
+      damage, hpAfter, killed, respawnAtMs: killed ? ctx.nowMs + (actor.group ? QUEST_CORPSE_MS : actor.def.respawnMs) : null, rewards, buildId: this.buildId, label: this.labelOf(actor),
       auto, abilityId: ability.abilityId || null, shieldUp, shieldBreak, shieldBackMs: rules.backMs,
       questSpawn: actor.group ? { groupId: actor.group.id, questId: actor.group.questId, spawnId: actor.group.spawnId } : null
     };
-    this.pending.set(ctx.operationId, plan);
-    return { plan, result: null };
+  }
+
+  // Kevin 10-11: de andere vijanden binnen bereik van de speler (dichtstbij eerst, hooguit SPLASH_MAX), niet achter een muur.
+  splashPlans(ctx, section, main, ability, auto) {
+    const pct = Number.isFinite(Number(ability.othersPct)) ? Math.max(0, Math.min(100, Number(ability.othersPct))) : 50;
+    if (pct <= 0) return [];
+    const y = Number.isFinite(Number(ctx.y)) ? Number(ctx.y) : null;
+    const near = [];
+    for (const actor of this.actors.values()) {
+      if (actor === main || actor.escort || actor.state === "dead") continue;
+      if (actor.group && !this.canSeeGroup(actor.group, ctx.playerId)) continue;
+      const reachMm = ability.rangeMm + actor.def.radiusMm + RANGE_SLACK_MM;
+      if (!withinRangeMm(mm(ctx.x), mm(ctx.z), mm(actor.x), mm(actor.z), reachMm)) continue;
+      if (this.pointIsSafe(actor.x, actor.z)) continue;
+      near.push({ actor, d: Math.hypot(actor.x - ctx.x, actor.z - ctx.z) });
+    }
+    near.sort((a, b) => a.d - b.d || a.actor.id.localeCompare(b.actor.id));
+    const plans = [];
+    for (const { actor } of near) {
+      if (plans.length >= SPLASH_MAX) break;
+      if (this.lineBlocked(ctx.x, ctx.z, actor.x, actor.z, y)) continue;
+      plans.push(this.hitPlan(ctx, section, actor, ability, auto, pct));
+    }
+    return plans;
   }
 
   // Fase 5: de naam zoals spelers hem zien (een sterkere heet "Sterke …").
@@ -880,9 +982,15 @@ export class ActorRuntime {
       this.emitEvent({ e: "gathered", id: resource.id, by: plan.playerId }, resource.x, resource.z, resource);
       return;
     }
-    const actor = this.actors.get(plan.spawnKey);
     if (plan.auto !== false) this.playerAttackAtMs.set(plan.playerId, nowMs);
-    if (!actor || actor.occurrence !== plan.occurrence) return;
+    this.applyHit(plan, nowMs, false);
+    // Kevin 10-11: de andere vijanden in de ring (sp = geraakt door de ring, de game toont daar alleen een flits).
+    for (const hit of Array.isArray(plan.splash) ? plan.splash : []) this.applyHit(hit, nowMs, true);
+  }
+
+  applyHit(plan, nowMs, splash) {
+    const actor = this.actors.get(plan.spawnKey);
+    if (!actor || actor.occurrence !== plan.occurrence || actor.state === "dead") return;
     actor.hp = plan.hpAfter;
     // Fase 5: een vaardigheid brak het schild; het komt na een tijdje terug (step).
     if (plan.shieldBreak && !plan.killed) actor.shieldDownUntilMs = nowMs + plan.shieldBackMs;
@@ -899,11 +1007,11 @@ export class ActorRuntime {
         if (spec) spec.dead = true;
         this.persistQuestGroup(actor.group);
       }
-      this.emitEvent({ e: "death", id: actor.id, by: plan.playerId, amount: plan.damage, ab: plan.abilityId, sk: plan.auto === false ? 1 : 0 }, actor.x, actor.z, actor);
+      this.emitEvent(Object.assign({ e: "death", id: actor.id, by: plan.playerId, amount: plan.damage, ab: plan.abilityId, sk: plan.auto === false ? 1 : 0 }, splash ? { sp: 1 } : null), actor.x, actor.z, actor);
       return;
     }
-    this.emitEvent({ e: "hit", id: actor.id, by: plan.playerId, amount: plan.damage, hp: actor.hp, ab: plan.abilityId, sk: plan.auto === false ? 1 : 0,
-      sh: plan.shieldUp && !plan.shieldBreak ? 1 : 0, sb: plan.shieldBreak ? 1 : 0 }, actor.x, actor.z, actor);
+    this.emitEvent(Object.assign({ e: "hit", id: actor.id, by: plan.playerId, amount: plan.damage, hp: actor.hp, ab: plan.abilityId, sk: plan.auto === false ? 1 : 0,
+      sh: plan.shieldUp && !plan.shieldBreak ? 1 : 0, sb: plan.shieldBreak ? 1 : 0 }, splash ? { sp: 1 } : null), actor.x, actor.z, actor);
     // Stap 8: wie een vijand slaat die de begeleide NPC aanvalt, trekt hem naar zich toe (zo bescherm je hem).
     if (actor.state !== "return" && (actor.state !== "engage" || actor.targetEscort)) this.engage(actor, plan.playerId);
   }
@@ -930,6 +1038,8 @@ export class ActorRuntime {
     const out = { id: entry.id, k: "a", d: entry.def.actorId, x: r2(entry.x), y: r2(entry.y), z: r2(entry.z), r: Math.round(entry.ry * 100) / 100, hp: entry.hp, hm: entry.hpMax, s };
     // Fase 5: een sterkere (el) en of zijn schild nu staat (sh). Alleen meesturen als het zo is.
     if (entry.elite) out.el = 1;
+    // Kevin 10-11: hoeveel sterker (x100), voor het cijfer voor de naam (200 % = 2).
+    if ((entry.strength || 1) !== 1) out.st = Math.round(entry.strength * 100);
     if (entry.state !== "dead" && this.shieldUp(entry, nowMs)) out.sh = 1;
     return out;
   }

@@ -16033,8 +16033,9 @@ function resolveChunkDebugCenter(policy) {
         action: String(target.action || ""), selected: target.selected === true, available: target.available !== false,
         // Fase 5: schild-icoon boven de naam van een sterkere vijand of baas.
         shield: target.shield === true,
-        // Stap 8: een begeleide NPC toont zijn levens onder zijn naam.
-        health: target.escort === true && Number(target.healthMax) > 0 ? Math.max(0, Math.min(1, Number(target.healthCurrent) / Number(target.healthMax))) : null
+        // Stap 8: een begeleide NPC toont zijn levens onder zijn naam. Kevin 10-11: elke vijand ook, met zijn sterkte-cijfer ervoor.
+        health: (target.escort === true || target.entityKind === "enemy") && Number(target.healthMax) > 0 ? Math.max(0, Math.min(1, Number(target.healthCurrent) / Number(target.healthMax))) : null,
+        strength: target.entityKind === "enemy" ? Math.max(1, Math.round(Number(target.strength) || 1)) : null
       });
     }
     // Spelers gebruiken dezelfde regel: hoogste punt van hun eigen mesh + marge.
@@ -17087,11 +17088,17 @@ function resolveChunkDebugCenter(policy) {
     fx.material.dispose();
     combatFx.splice(index, 1);
   }
-  // options: { from: "self" | "player:<id>" | actor-id, to: idem, style: "slash" | "cast" | "shot", tone: "damage" | "heal" }
+  // options: { from: "self" | "player:<id>" | actor-id, to: idem, ahead?: meters (zonder doel), style: "slash" | "cast" | "shot", tone: "damage" | "heal" }
   function playCombatFx(options = {}) {
     if (mode !== "game" || !scene) return false;
     const from = combatFxPoint(options.from);
-    const to = combatFxPoint(options.to) || from;
+    let to = combatFxPoint(options.to);
+    // Kevin 10-11: een uithaal of schot in de lucht (geen doel): een punt voor de speler uit.
+    if (!to && from && options.from === "self" && Number(options.ahead) > 0) {
+      const facing = Number(player.facing) || 0;
+      to = new THREE.Vector3(from.x + Math.sin(facing) * Number(options.ahead), from.y, from.z + Math.cos(facing) * Number(options.ahead));
+    }
+    if (!to) to = from;
     if (!from && !to) return false;
     const shapes = combatFxShapesOnce();
     const color = options.tone === "heal" ? 0x6ee77a : 0xffa53a;

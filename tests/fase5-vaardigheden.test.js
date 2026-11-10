@@ -201,3 +201,35 @@ test("sterkere vijand na respawn opnieuw gegooid; quest-vijand nooit sterker", (
   runtime.rollElite(actor);
   assert.equal(actor.elite, false, "quest-vijand blijft gewoon");
 });
+
+test("Kevin 10-11: raakt iedereen binnen bereik: de gekozen vijand volle schade, de rest de helft; sterkte-cijfer gaat mee", () => {
+  const { runtime, actor } = shieldRuntime();
+  actor.spawn.eliteChancePct = 0;
+  runtime.rollElite(actor);
+  actor.hp = actor.hpMax;
+  const other = Object.assign({}, actor, { id: "actor:wolf2:1", spawnKey: "actor:wolf2", x: 1.5, z: 0.5, contributors: new Set(), spawn: { eliteChancePct: 100, eliteStrengthPct: 300 } });
+  runtime.rollElite(other);
+  other.hp = other.hpMax;
+  const far = Object.assign({}, actor, { id: "actor:wolf3:1", spawnKey: "actor:wolf3", x: 30, z: 0, contributors: new Set() });
+  runtime.actors.set(other.spawnKey, other);
+  runtime.actors.set(far.spawnKey, far);
+  const ring = { abilityId: "zwaai", baseDamage: 40, powerScalingBp: 0, armorFactorBp: 0, rangeMm: 2500, cooldownMs: 4000, hitsAll: true, othersPct: 50 };
+  const plan = runtime.planPlayerAttack({ playerId: "p1", classId: null, targetId: actor.id, x: 0, z: 0, attackPower: 0, safe: false, nowMs: 1000, operationId: "r1", ability: ring }).plan;
+  assert.equal(plan.damage, 40);
+  assert.equal(plan.splash.length, 1, "de verre vijand telt niet mee");
+  assert.equal(plan.splash[0].instanceId, other.id);
+  assert.equal(plan.splash[0].damage, 20, "de rest: 50 %");
+  runtime.applyPending("r1", 1000);
+  assert.equal(other.hp, other.hpMax - 20);
+  assert.equal(runtime.encode(other, "p1", 1000).st, 300, "sterkte gaat mee voor het cijfer voor de naam");
+  assert.equal(runtime.encode(actor, "p1", 1000).st, undefined, "gewoon = niets extra meesturen");
+});
+
+test("Kevin 10-11: vechtende vijanden lopen niet door elkaar heen", () => {
+  const { runtime, actor } = shieldRuntime();
+  const other = Object.assign({}, actor, { id: "actor:wolf2:1", spawnKey: "actor:wolf2", x: actor.x, z: actor.z, contributors: new Set() });
+  runtime.actors.set(other.spawnKey, other);
+  for (let step = 0; step < 20; step += 1) runtime.separateActors(new Map());
+  const gap = Math.hypot(other.x - actor.x, other.z - actor.z);
+  assert.ok(gap >= 1.2, "twee botsrandjes van 0,5 m plus ruimte (" + gap.toFixed(2) + ")");
+});
