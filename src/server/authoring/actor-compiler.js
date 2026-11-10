@@ -172,12 +172,15 @@ export function compileActorSection(documents, options = {}) {
     needRef(doc, doc.body.archetypeRef, "actor_archetype", "Vijand-plek " + doc.body.spawnId);
     const spawn = { spawnId: doc.body.spawnId, actorId: idFromRef(doc.body.archetypeRef), regionId: doc.body.regionRef ? idFromRef(doc.body.regionRef) : null, xMm: doc.body.xMm, zMm: doc.body.zMm, cellKey: cellKeyForPointMm(doc.body.xMm, doc.body.zMm) };
     if (Array.isArray(doc.body.patrolPointsMm) && doc.body.patrolPointsMm.length) spawn.patrolPointsMm = doc.body.patrolPointsMm;
+    if (Number(doc.body.rotationY)) spawn.rotationY = Number(doc.body.rotationY);
     spawns.push(spawn);
   }
   const resourceSpawns = [];
   for (const doc of of("resource_spawn")) {
     needRef(doc, doc.body.resourceRef, "resource_definition", "Grondstof-plek " + doc.body.resourceSpawnId);
-    resourceSpawns.push({ resourceSpawnId: doc.body.resourceSpawnId, resourceId: idFromRef(doc.body.resourceRef), regionId: doc.body.regionRef ? idFromRef(doc.body.regionRef) : null, xMm: doc.body.xMm, zMm: doc.body.zMm, cellKey: cellKeyForPointMm(doc.body.xMm, doc.body.zMm) });
+    const resourceSpawn = { resourceSpawnId: doc.body.resourceSpawnId, resourceId: idFromRef(doc.body.resourceRef), regionId: doc.body.regionRef ? idFromRef(doc.body.regionRef) : null, xMm: doc.body.xMm, zMm: doc.body.zMm, cellKey: cellKeyForPointMm(doc.body.xMm, doc.body.zMm) };
+    for (const key of ["rotationX", "rotationY", "rotationZ"]) if (Number(doc.body[key])) resourceSpawn[key] = Number(doc.body[key]);
+    resourceSpawns.push(resourceSpawn);
   }
 
   // Klassen: per klasse een eigen aanval (klasse-ID -> ability-ID). Zonder aanval de ingebouwde standaardklap.

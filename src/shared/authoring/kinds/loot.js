@@ -85,7 +85,17 @@ export const LOOT_KINDS = {
         ui: ui("🗺️", "ref", "viewport", { more: true }), default: null,
         help: help("In welk gebied deze plek ligt (leeg = gewoon in de wereld).", "Wordt vanzelf gekozen als je de plek in een gebied zet; leeg mag ook.", "Melding 'buiten gebied' → sleep de plek binnen het gebied of maak dit vak leeg.") },
       xMm: mmField("X", "↔️"),
-      zMm: mmField("Z", "↕️")
+      zMm: mmField("Z", "↕️"),
+      // Kevin 10-11: draaien (R) en kantelen (R en dan X of Y). In three.js heet jouw Y-as Z.
+      rotationY: { type: "number", required: false, min: 0, max: 359, audience: "server", label: "Draaien",
+        ui: ui("🔄", "slider", "viewport", { step: 1, unit: "°", more: true }), default: 0,
+        help: help("Welke kant de grondstof op staat.", "Klik hem in de 3D-view en druk R, of schuif hier.", "Alle bomen staan precies gelijk → draai ze een beetje.") },
+      rotationX: { type: "number", required: false, min: 0, max: 359, audience: "server", label: "Kantelen (X)",
+        ui: ui("↪️", "slider", "viewport", { step: 1, unit: "°", more: true }), default: 0,
+        help: help("Kantelt de grondstof om de rode X-as.", "Klik hem in de 3D-view, druk R en dan X. 0 = rechtop.", "Staat scheef → zet op 0.") },
+      rotationZ: { type: "number", required: false, min: 0, max: 359, audience: "server", label: "Kantelen (Y)",
+        ui: ui("↩️", "slider", "viewport", { step: 1, unit: "°", more: true }), default: 0,
+        help: help("Kantelt de grondstof om de groene Y-as.", "Klik hem in de 3D-view, druk R en dan Y. 0 = rechtop.", "Staat scheef → zet op 0.") }
     }
   }
 };

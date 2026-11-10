@@ -27,8 +27,8 @@ export const PLACED_KINDS = Object.freeze({
   // Portals (8-11): sleep de kaart op de wereld; G, R en T zoals bij een model.
   portal: { move: true, rotate: true, scale: true },
   placed_model: { move: true, rotate: true, scale: true, tilt: true },
-  actor_spawn: { move: true },
-  resource_spawn: { move: true }
+  actor_spawn: { move: true, rotate: true },
+  resource_spawn: { move: true, rotate: true, tilt: true }
 });
 
 function emptyValue(value) {

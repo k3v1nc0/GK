@@ -65,11 +65,15 @@ export function createActorPresentation(options = {}) {
       seen.add(entry.id);
       let record = records.get(entry.id);
       if (!record) {
-        record = { id: entry.id, k: entry.k, d: entry.d, samples: [], hp: entry.hp, hm: entry.hm, s: entry.s, dyingUntil: 0 };
+        record = { id: entry.id, k: entry.k, d: entry.d, samples: [], hp: entry.hp, hm: entry.hm, s: entry.s, dyingUntil: 0, tx: Number(entry.tx) || 0, tz: Number(entry.tz) || 0 };
         records.set(entry.id, record);
         changed = true;
       }
       if (record.hp !== entry.hp || record.s !== entry.s || record.hm !== entry.hm) changed = true;
+      // Kevin 10-11: kanteling van een grondstof (verandert alleen na een nieuwe build).
+      const tx = Number(entry.tx) || 0;
+      const tz = Number(entry.tz) || 0;
+      if (record.tx !== tx || record.tz !== tz) { record.tx = tx; record.tz = tz; changed = true; }
       if (record.s !== "d" && entry.s === "d" && record.k === "a") record.dyingUntil = now + DYING_MS;
       record.hp = entry.hp;
       record.hm = entry.hm;
@@ -146,6 +150,7 @@ export function createActorPresentation(options = {}) {
         range: def.gatherRangeMm / 1000, radius: def.radiusMm / 1000,
         available: record.s !== "d", status,
         modelAssetId: def.modelAssetId || "", modelScale: def.modelScaleBp ? def.modelScaleBp / 10000 : 1,
+        modelRotationX: record.tx || null, modelRotationZ: record.tz || null,
         actorTarget: true
       };
     }

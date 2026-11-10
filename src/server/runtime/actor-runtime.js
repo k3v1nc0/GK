@@ -62,6 +62,8 @@ const ESCORT_REACH_M = 2.2;       // Vecht mee: zo dichtbij moet hij staan
 const mm = (meters) => Math.round(Number(meters) * 1000);
 const meters = (millimeters) => Number(millimeters) / 1000;
 const r2 = (value) => Math.round(Number(value) * 100) / 100;
+// Kevin 10-11: draaiing van een plek (graden in de kaart) als hoek voor het model (radialen).
+const homeAngle = (degrees) => (Number(degrees) || 0) * Math.PI / 180;
 
 function httpError(status, message, code) {
   const error = new Error(message);
@@ -185,6 +187,11 @@ export class ActorRuntime {
       actor.hp = Math.min(actor.hp, actor.hpMax);
       if (actor !== old) actor.y = this.groundYAt(actor.x, actor.z);
       actor.patrol = Array.isArray(spawn.patrolPointsMm) ? spawn.patrolPointsMm.map(([x, z]) => ({ x: meters(x), z: meters(z) })) : [];
+      const homeRy = homeAngle(spawn.rotationY);
+      if (actor.homeRy !== homeRy) {
+        actor.homeRy = homeRy;
+        if (actor.state === "idle" && !actor.patrol.length) { actor.ry = homeRy; actor.rev += 1; }
+      }
       this.actors.set(spawnKey, actor);
     }
     for (const spawn of section.resourceSpawns || []) {
@@ -197,6 +204,11 @@ export class ActorRuntime {
       resource.x = meters(spawn.xMm);
       resource.z = meters(spawn.zMm);
       resource.y = this.groundYAt(resource.x, resource.z);
+      const turn = [homeAngle(spawn.rotationY), Number(spawn.rotationX) || 0, Number(spawn.rotationZ) || 0];
+      if (resource.ry !== turn[0] || resource.tx !== turn[1] || resource.tz !== turn[2]) {
+        [resource.ry, resource.tx, resource.tz] = turn;
+        resource.rev = (resource.rev || 0) + 1;
+      }
       this.resources.set(spawnKey, resource);
     }
     // Stap 5: quest-vijanden blijven bij een nieuwe build; na een herstart komen ze uit de database.
@@ -213,7 +225,7 @@ export class ActorRuntime {
     const deadUntil = row && row.state === "dead" ? Number(row.respawn_at_ms) || 0 : 0;
     const actor = {
       kind: "actor", spawnKey: ACTOR_INSTANCE_PREFIX + spawn.spawnId, occurrence, def, spawn,
-      x: meters(spawn.xMm), z: meters(spawn.zMm), y: 0, ry: 0,
+      x: meters(spawn.xMm), z: meters(spawn.zMm), y: 0, ry: homeAngle(spawn.rotationY), homeRy: homeAngle(spawn.rotationY),
       hp: def.healthMax, hpMax: def.healthMax, state: "idle", anim: "idle", animUntilMs: 0,
       targetPlayerId: null, path: [], pathGoal: null, pathFails: 0, patrolIndex: 0, pauseUntilMs: 0, stuck: 0,
       nextAttackAtMs: 0, contributors: new Set(), respawnAtMs: 0, rev: 1
@@ -514,6 +526,7 @@ export class ActorRuntime {
         actor.hp = actor.hpMax; // terug thuis = weer heel (geen "aan de lijn trekken"-exploit)
         actor.contributors.clear();
         actor.path = [];
+        if (!actor.patrol.length && Number.isFinite(actor.homeRy)) { actor.ry = actor.homeRy; actor.rev += 1; }
         this.setAnim(actor, "idle");
         return;
       }
@@ -663,6 +676,7 @@ export class ActorRuntime {
     actor.state = "idle";
     actor.hp = actor.hpMax;
     actor.x = actor.home.x; actor.z = actor.home.z; actor.y = this.groundYAt(actor.x, actor.z);
+    if (Number.isFinite(actor.homeRy)) actor.ry = actor.homeRy;
     actor.path = []; actor.pathGoal = null; actor.targetPlayerId = null; actor.patrolIndex = 0; actor.pauseUntilMs = 0;
     actor.nextPathAtMs = 0;
     actor.contributors = new Set();
@@ -814,7 +828,12 @@ export class ActorRuntime {
 
   encode(entry, viewerId = null, nowMs = this.lastStepAtMs) {
     if (entry.kind === "resource") {
-      return { id: entry.id, k: "r", d: entry.def.resourceId, x: r2(entry.x), y: r2(entry.y), z: r2(entry.z), s: entry.available && !this.takenFor(entry, viewerId, nowMs) ? "i" : "d" };
+      const out = { id: entry.id, k: "r", d: entry.def.resourceId, x: r2(entry.x), y: r2(entry.y), z: r2(entry.z), s: entry.available && !this.takenFor(entry, viewerId, nowMs) ? "i" : "d" };
+      // Kevin 10-11: alleen meesturen als de grondstof gedraaid of gekanteld is (r in radialen, tx/tz in graden).
+      if (entry.ry) out.r = Math.round(entry.ry * 100) / 100;
+      if (entry.tx) out.tx = entry.tx;
+      if (entry.tz) out.tz = entry.tz;
+      return out;
     }
     const s = entry.state === "dead" ? "d" : entry.anim === "attack" ? "a" : entry.anim === "walk" ? "w" : "i";
     // Stap 8: een begeleide NPC (d = NPC-ID; de game toont zijn eigen model en verbergt hem op zijn vaste plek).

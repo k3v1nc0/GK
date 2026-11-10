@@ -121,6 +121,10 @@ export const ACTOR_KINDS = {
         help: help("In welk gebied deze plek ligt (leeg = gewoon in de wereld).", "Wordt vanzelf gekozen als je de plek in een gebied zet; leeg mag ook.", "Melding 'buiten gebied' → sleep de plek binnen het gebied of maak dit vak leeg.") },
       xMm: mmField("X", "↔️"),
       zMm: mmField("Z", "↕️"),
+      // Kevin 10-11: welke kant de vijand op kijkt als hij thuis staat (R in de 3D-view).
+      rotationY: { type: "number", required: false, min: 0, max: 359, audience: "server", label: "Draaien",
+        ui: ui("🔄", "slider", "viewport", { step: 1, unit: "°", more: true }), default: 0,
+        help: help("Welke kant de vijand op kijkt als hij op zijn plek staat.", "Klik hem in de 3D-view en druk R, of schuif hier.", "Staat met zijn rug naar het pad → draai hem.") },
       patrolPointsMm: { type: "pointList", required: false, minItems: 2, maxItems: 16, min: -MAX_WORLD_MM, max: MAX_WORLD_MM, audience: "server", label: "Looproute",
         ui: ui("🧭", "points", "viewport"), default: null,
         help: help("De punten waar de vijand langs loopt als hij niet vecht.", "2-5 punten dicht bij de plek; teken ze in de 3D-view.", "Vijand loopt door muren → zet de punten op een open pad.") }

@@ -689,12 +689,12 @@ function withGame(world, source, options) {
     for (const spawn of source.actors.spawns || []) {
       const def = source.actors.archetypes?.[spawn.actorId] || {};
       entities.push(modelEntity({ id: EDITOR_DOC_PREFIX + "actor_spawn:" + spawn.spawnId, label: def.displayName || spawn.actorId, modelAssetId: def.modelAssetId,
-        x: spawn.xMm / 1000, z: spawn.zMm / 1000, scale: scaleFromBp(def.modelScaleBp), idleClip: def.idleClip || null }));
+        x: spawn.xMm / 1000, z: spawn.zMm / 1000, rotationY: spawn.rotationY, scale: scaleFromBp(def.modelScaleBp), idleClip: def.idleClip || null }));
     }
     for (const spawn of source.actors.resourceSpawns || []) {
       const def = source.actors.resources?.[spawn.resourceId] || {};
       entities.push(modelEntity({ id: EDITOR_DOC_PREFIX + "resource_spawn:" + spawn.resourceSpawnId, label: def.displayName || spawn.resourceId, modelAssetId: def.modelAssetId,
-        x: spawn.xMm / 1000, z: spawn.zMm / 1000, scale: scaleFromBp(def.modelScaleBp) }));
+        x: spawn.xMm / 1000, z: spawn.zMm / 1000, rotationX: spawn.rotationX, rotationY: spawn.rotationY, rotationZ: spawn.rotationZ, scale: scaleFromBp(def.modelScaleBp) }));
     }
   }
 
