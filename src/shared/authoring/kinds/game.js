@@ -418,6 +418,10 @@ export const GAME_KINDS = {
         help: help("Hoeveel meter boven het hoogste punt van de echte mesh de 2D-naam staat.", "0,15 tot 0,30 m. De hoogte wordt voor ieder model apart gemeten.", "Naam zit in het model → hoger. Naam zweeft te ver erboven → lager.") },
       worldNameFontSizePx: int("Tekstgrootte namen", "🔤", 13, 8, 48, "instellingen", { range: [8, 32], unit: "px", group: "🎯 Objecten, NPC's en namen", more: true },
         help("De grootte van de 2D-namen boven meshes en spelers.", "13 px is de standaard; 16-20 px leest makkelijker op een klein scherm.", "Namen bedekken te veel van het spel → kleiner.")),
+      // Kevin 10-11: in de editor onder elke naam waar het ding in de Werkbank aan vastzit (winkel, quests, loot ...).
+      editorInfo: { type: "boolean", required: false, audience: "client", label: "Editor: extra info onder namen",
+        ui: ui("🔗", "toggle", "instellingen", { group: "🎯 Objecten, NPC's en namen", more: true }), default: true,
+        help: help("Alleen in de editor: onder de naam van een NPC, vijand, grondstof, pickup, portal of model een regel met waar hij aan vastzit (winkel, maakt, quests, loot, vlag ...). De game ziet dit nooit.", "Aan tijdens het bouwen; uit als je de wereld wilt zien zoals een speler.", "Te druk in beeld → zet dit uit of maak de tekst kleiner.") },
       showShop: toggle("Winkel en crafting", "🛒", true, "instellingen", help("Kopen, verkopen en maken bij een NPC: het paneel splitst dan in waren en je tas.", "Aan als een NPC iets verkoopt of maakt.", "Winkel niet te zien → zet aan."), { more: true }),
       mapMinimapVisible: toggle("Minimap zichtbaar bij start", "🧭", true, "instellingen",
         help("Of een nieuwe speler begint met de kleine kaart rechtsboven in beeld. De speler kan hem later zelf uitzetten.", "Aan (standaard).", "De kaart mag pas later gebruikt worden → zet uit."), { group: MAP_START_GROUP, more: true }),

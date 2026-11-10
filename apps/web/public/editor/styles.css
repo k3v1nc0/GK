@@ -3881,3 +3881,17 @@ body.editorFullscreen {
 .terreinSave { flex: 1; padding: 7px; border-radius: 6px; border: 0; background: #ffb454; color: #251707; font-weight: 700; cursor: pointer; }
 .terreinCancel { padding: 7px 10px; border-radius: 6px; border: 1px solid #2c3a48; background: #151f29; color: #dbe5ee; cursor: pointer; }
 body.terreinMode #viewportCanvas { cursor: crosshair; }
+
+/* Kevin 10-11: namen in de 3D-view zoals in de game (gk-hud.css .gkLabel), plus een regel extra info. */
+.viewportLabels { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 5; }
+.viewportLabels[hidden] { display: none; }
+.edLabel { position: absolute; left: 0; top: 0; padding: 0 2px 4px; white-space: nowrap; font-size: 13px; font-weight: 700; letter-spacing: 0.01em;
+  color: #e6edf5; text-align: center; text-shadow: 0 0 2px #000, 0 1px 2px #000, 0 0 4px rgba(0, 0, 0, 0.8); transform: translate(-50%, -100%); }
+.edLabel--npc { color: #ffd34d; }
+.edLabel--enemy { color: #ff7a7a; }
+.edLabel--resource { color: #a7e98a; }
+.edLabel--pickup { color: #9fe8ff; }
+.edLabel--portal { color: #d6a4ff; }
+.edLabel--model { color: #e6edf5; }
+.edLabel.edOn { color: #ffffff; text-decoration: underline; text-underline-offset: 3px; }
+.edLabelInfo { display: block; margin-top: 1px; font-size: 0.78em; font-weight: 600; color: #d7e0ea; text-decoration: none; }

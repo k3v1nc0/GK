@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>GK Game Editor</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-    <link rel="stylesheet" href="./styles.css?v=20261108-save-errors1">
+    <link rel="stylesheet" href="./styles.css?v=20261110-namen1">
     <link rel="stylesheet" href="./werkbank-docs.css?v=20261108-save-errors1">
     <link rel="stylesheet" href="./mini-asset-picker.css?v=20261028-picker1">
     <script type="importmap">
@@ -118,7 +118,7 @@
             <div class="viewportChromeBar">
               <div class="viewportStatus" id="viewportStatus">Draft viewport</div>
               <button id="viewportAuthoringIndicatorToggle" type="button" class="viewportNavButton" aria-pressed="false" title="Authoring-indicatoren">A</button>
-              <button id="viewportRuntimeNameplateToggle" type="button" class="viewportNavButton active" aria-pressed="true" title="Gameplayballonnen verbergen" aria-label="Gameplayballonnen tonen of verbergen">
+              <button id="viewportRuntimeNameplateToggle" type="button" class="viewportNavButton active" aria-pressed="true" title="Namen verbergen" aria-label="Namen tonen of verbergen">
                 <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 4.5h16v11H9l-5 4v-15Z"></path><path d="M8 9h8M8 12h5"></path></svg>
               </button>
               <button id="viewportFocusButton" type="button" class="viewportNavButton" title="Focus selectie" aria-label="Focus selectie">F</button>
@@ -214,6 +214,7 @@
           <div class="viewportTransformPanel" id="viewportTransformPanel" hidden></div>
           <canvas id="viewportCanvas"></canvas>
           <div id="viewportAuthoringIndicators" class="viewportAuthoringIndicators" hidden></div>
+          <div id="viewportLabels" class="viewportLabels" aria-hidden="true"></div>
           <div id="viewportSelectionBox" class="selectionBox" hidden></div>
           <div class="editorMinimapRoot" id="editorMinimapRoot" hidden>
             <canvas id="editorMinimapCanvas"></canvas>
@@ -279,6 +280,6 @@
       <div id="allLayoutRoot" class="allLayoutRoot"></div>
       <div id="allLayoutOverflow" hidden></div>
     </main>
-    <script type="module" src="./editor.js?v=20261110-draaien1"></script>
+    <script type="module" src="./editor.js?v=20261110-namen1"></script>
   </body>
 </html>

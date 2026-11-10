@@ -16044,6 +16044,42 @@ function resolveChunkDebugCenter(policy) {
     return list.length > maxCount ? list.slice(0, maxCount) : list;
   }
 
+  // Editor (Kevin 10-11): dezelfde 2D-namen als in de game, maar voor kaarten met een plek (ID's "doc:...").
+  // Zelfde regel: hoogste punt van de echte mesh + "Namen boven mesh". Afstand vanaf de camera; dichtstbij eerst.
+  function getEntityLabelAnchors(entityIds, maxDistance = 400, maxCount = 60) {
+    const list = [];
+    if (!camera || !canvas || !Array.isArray(entityIds)) return list;
+    const rect = canvas.getBoundingClientRect();
+    const presentation = runtimeTargetPresentationConfig();
+    const point = new THREE.Vector3();
+    for (const id of entityIds) {
+      const root = rootForSelectableId(id);
+      if (!root || root.visible === false || !root.parent) continue;
+      if (root.userData?.runtimeTarget === true) {
+        runtimeTargetLabelPoint(root, root.userData.runtimeTargetPayload || {}, point);
+      } else {
+        const visuals = root.children.filter(function (child) { return child?.userData?.runtimeTargetHitProxy !== true; });
+        const measured = runtimeVisualMeasurement(root, visuals, "editorLabelMeasurement", fallbackRuntimeVisualMeasurement(null));
+        point.set(measured.centerX, measured.topY, measured.centerZ);
+        root.localToWorld(point);
+        point.y += presentation.labelOffsetMeters;
+      }
+      const distance = camera.position.distanceTo(point);
+      if (!(distance <= maxDistance)) continue;
+      point.project(camera);
+      if (!(point.z >= -1 && point.z <= 1) || Math.abs(point.x) > 1.05 || Math.abs(point.y) > 1.05) continue;
+      list.push({
+        id: id,
+        x: rect.left + (point.x * 0.5 + 0.5) * rect.width,
+        y: rect.top + (-point.y * 0.5 + 0.5) * rect.height,
+        distance: distance,
+        fontSizePx: presentation.labelFontSizePx
+      });
+    }
+    list.sort(function (a, b) { return a.distance - b.distance; });
+    return list.length > maxCount ? list.slice(0, maxCount) : list;
+  }
+
   function createRuntimeTargetNameplate(target) {
     const label = runtimeTargetLabel(target);
     const color = runtimeTargetColor(target);
@@ -19236,6 +19272,7 @@ function resolveChunkDebugCenter(policy) {
     setFlagHiddenEntities: setFlagHiddenEntities,
     setPlayerFlags: setPlayerFlags,
     getRuntimeTargetLabelAnchors: getRuntimeTargetLabelAnchors,
+    getEntityLabelAnchors: getEntityLabelAnchors,
     setPerformanceHud: setPerformanceHud,
     getRuntimeTargetNameplatesVisible: getRuntimeTargetNameplatesVisible,
     clearRuntimeTargets: clearRuntimeTargets,

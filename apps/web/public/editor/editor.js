@@ -1,4 +1,4 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261109-kantelen1";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261110-namen1";
 import { edgeBetweenPoints, editClosedEdges } from "./walkable-edge-tools.js?v=20261031-randen1";
 import { createTerrainEditor } from "./terrain-editor.js?v=20261102-terrein10";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261106-perf1";
@@ -476,6 +476,7 @@ const el = {
   viewportAuthoringIndicatorToggle: document.querySelector("#viewportAuthoringIndicatorToggle"),
   viewportRuntimeNameplateToggle: document.querySelector("#viewportRuntimeNameplateToggle"),
   viewportAuthoringIndicators: document.querySelector("#viewportAuthoringIndicators"),
+  viewportLabels: document.querySelector("#viewportLabels"),
   editorMinimapRoot: document.querySelector("#editorMinimapRoot"),
   editorMinimapCanvas: document.querySelector("#editorMinimapCanvas"),
   viewportErrors: document.querySelector("#viewportErrors"),
@@ -4563,12 +4564,14 @@ function renderViewportControls(options = {}) {
     el.viewportRuntimeNameplateToggle.classList.toggle("active", state.runtimeNameplatesEnabled);
     el.viewportRuntimeNameplateToggle.setAttribute("aria-pressed", state.runtimeNameplatesEnabled ? "true" : "false");
     el.viewportRuntimeNameplateToggle.title = state.runtimeNameplatesEnabled
-      ? "Gameplayballonnen verbergen"
-      : "Gameplayballonnen tonen";
+      ? "Namen verbergen"
+      : "Namen tonen";
   }
+  // Kevin 10-11: de oude 3D-ballonnen staan in de editor altijd uit; de knop zet de 2D-namen (zoals de game) aan/uit.
   if (runtime && typeof runtime.setRuntimeTargetNameplatesVisible === "function") {
-    runtime.setRuntimeTargetNameplatesVisible(state.runtimeNameplatesEnabled);
+    runtime.setRuntimeTargetNameplatesVisible(false);
   }
+  syncViewportLabels();
   if (el.snapModeSelect && el.snapModeSelect.value !== state.snapMode) el.snapModeSelect.value = state.snapMode;
   if (el.snapGridInput) {
     const nextValue = String(state.snapGridSize || 1);
@@ -6026,6 +6029,7 @@ async function boot() {
     },
     onRenderFrame: function () {
       if (state.authoringIndicatorsEnabled) syncAuthoringIndicatorScreenPositions();
+      syncViewportLabels();
     },
     onSelectEntity: function (entityId) {
       if (!entityId) {
@@ -21240,6 +21244,125 @@ function positionAuthoringIndicatorCluster(cluster, screen, wrapRect) {
   cluster.style.top = Math.round(screen.y - wrapRect.top - 18) + "px";
   cluster.style.setProperty("--indicator-scale", authoringIndicatorScaleForScreen(screen).toFixed(2));
   return true;
+}
+
+// ---------- Namen in de 3D-view (Kevin 10-11) ----------
+// Zoals in de game: 2D-namen boven NPC's, vijanden, grondstoffen, pickups en portals, met dezelfde kleuren,
+// hoogte en tekstgrootte (Instellingen > Game-scherm > 🎯 Objecten, NPC's en namen). Met "Editor: extra info"
+// staat eronder waar het ding in de Werkbank aan vastzit; dan krijgen losse modellen ook een naam.
+const VIEWPORT_LABEL_KIND = { npc: "npc", actor_spawn: "enemy", resource_spawn: "resource", pickup: "pickup", portal: "portal", placed_model: "model" };
+const viewportLabelPool = new Map();
+let viewportLabelCache = { at: -Infinity, workspace: null, entries: [], byId: new Map(), ids: [] };
+
+function placedDocSource(doc) {
+  const ref = doc.kind === "pickup" ? doc.body.itemRef : doc.kind === "actor_spawn" ? doc.body.archetypeRef : doc.kind === "resource_spawn" ? doc.body.resourceRef : null;
+  return ref ? docBench.doc(ref) || null : null;
+}
+
+function placedDocInfo(doc, source, questRefs) {
+  const body = doc.body || {};
+  const def = source?.body || {};
+  const parts = [];
+  const refName = function (key) { const found = key ? docBench.doc(key) : null; return found ? String(found.body.displayName || "").trim() : ""; };
+  if (doc.kind === "npc") {
+    if (Array.isArray(body.shopOffers) && body.shopOffers.length) parts.push("🛒 " + body.shopOffers.length);
+    if (body.crafting) parts.push("🔨");
+    if (body.greeting) parts.push("💬");
+  } else if (doc.kind === "actor_spawn") {
+    if (def.healthMax) parts.push("❤️ " + def.healthMax);
+    if (def.xpReward) parts.push("⭐ " + def.xpReward);
+    if (def.lootTableRef) parts.push("🎁 " + (refName(def.lootTableRef) || "loot"));
+    if (Array.isArray(body.patrolPointsMm) && body.patrolPointsMm.length) parts.push("🧭");
+  } else if (doc.kind === "resource_spawn") {
+    if (def.lootTableRef) parts.push("🎁 " + (refName(def.lootTableRef) || "loot"));
+    if (def.respawnMs) parts.push("⏳ " + Math.round(def.respawnMs / 1000) + " s");
+    if (def.gatherMode === "personal") parts.push("🧍");
+  } else if (doc.kind === "pickup") {
+    if (Number(body.amount) > 1) parts.push("×" + body.amount);
+    parts.push(body.claimMode === "once" ? "1️⃣" : body.claimMode === "personal" ? "🧍" : "🌍");
+    if (def.questItem) parts.push("🔑");
+  } else if (doc.kind === "portal") {
+    if (body.startUnlocked) parts.push("🔓");
+    if (body.respawnHere !== false) parts.push("💀");
+  } else if (doc.kind === "placed_model") {
+    if (body.solid) parts.push("🧱");
+  }
+  if (body.flagRef) parts.push("🚩 " + (refName(body.flagRef) || "vlag"));
+  // Quests die hem gebruiken: een NPC die quests geeft, of iets dat in een quest voorkomt (de plek of zijn kaart).
+  const keys = [doc.docKey].concat(source ? [source.docKey] : []);
+  let gives = 0;
+  let uses = 0;
+  for (const entry of questRefs) {
+    if (doc.kind === "npc" && entry.quest.body.giverRef === doc.docKey) gives += 1;
+    else if (keys.some(function (key) { return entry.refs.has(key); })) uses += 1;
+  }
+  if (gives) parts.push("📜 geeft " + gives);
+  if (uses) parts.push("📜 in " + uses);
+  return parts.join("  ");
+}
+
+function viewportLabelEntries() {
+  const now = performance.now();
+  if (viewportLabelCache.workspace === docBench.workspace && now - viewportLabelCache.at < 1500) return viewportLabelCache;
+  const entries = [];
+  if (docBench.workspace) {
+    const info = (docBench.spec("hud_settings") ? docBench.docs("hud_settings")[0]?.body?.editorInfo : true) !== false;
+    const questRefs = info && docBench.spec("quest") ? docBench.docs("quest").map(function (quest) { return { quest: quest, refs: docRefKeys(quest) }; }) : [];
+    for (const kind of PLACED_DOC_KINDS) {
+      if (!VIEWPORT_LABEL_KIND[kind] || (kind === "placed_model" && !info)) continue;
+      for (const doc of docBench.docs(kind)) {
+        const source = placedDocSource(doc);
+        const name = String(doc.body.displayName || source?.body?.displayName || "").trim() || doc.docKey;
+        entries.push({ id: runtimeIdForDocKey(doc.docKey), docKey: doc.docKey, kind: VIEWPORT_LABEL_KIND[kind], name: name.slice(0, 34),
+          info: info ? placedDocInfo(doc, source, questRefs) : "" });
+      }
+    }
+  }
+  viewportLabelCache = { at: now, workspace: docBench.workspace, entries: entries, byId: new Map(entries.map(function (entry) { return [entry.id, entry]; })),
+    ids: entries.map(function (entry) { return entry.id; }) };
+  return viewportLabelCache;
+}
+
+function syncViewportLabels() {
+  const root = el.viewportLabels;
+  if (!root) return;
+  const show = state.runtimeNameplatesEnabled && Boolean(runtime) && typeof runtime.getEntityLabelAnchors === "function";
+  if (root.hidden === show) root.hidden = !show;
+  if (!show) return;
+  const cache = viewportLabelEntries();
+  const anchors = cache.ids.length ? runtime.getEntityLabelAnchors(cache.ids) : [];
+  const rootRect = root.getBoundingClientRect();
+  const selected = new Set(selectedPlacedDocKeys());
+  const seen = new Set();
+  for (const anchor of anchors) {
+    const entry = cache.byId.get(anchor.id);
+    if (!entry) continue;
+    seen.add(anchor.id);
+    let label = viewportLabelPool.get(anchor.id);
+    if (!label) {
+      label = document.createElement("div");
+      label.appendChild(document.createElement("span"));
+      const infoLine = document.createElement("span");
+      infoLine.className = "edLabelInfo";
+      label.appendChild(infoLine);
+      root.appendChild(label);
+      viewportLabelPool.set(anchor.id, label);
+    }
+    if (label.firstChild.textContent !== entry.name) label.firstChild.textContent = entry.name;
+    if (label.lastChild.textContent !== entry.info) label.lastChild.textContent = entry.info;
+    label.lastChild.hidden = !entry.info;
+    const className = "edLabel edLabel--" + entry.kind + (selected.has(entry.docKey) ? " edOn" : "");
+    if (label.className !== className) label.className = className;
+    const fontSize = Math.max(8, Math.min(48, Number(anchor.fontSizePx) || 13)) + "px";
+    if (label.style.fontSize !== fontSize) label.style.fontSize = fontSize;
+    const left = Math.round(anchor.x - rootRect.left) + "px";
+    const top = Math.round(anchor.y - rootRect.top) + "px";
+    if (label.style.left !== left) label.style.left = left;
+    if (label.style.top !== top) label.style.top = top;
+  }
+  for (const [id, label] of viewportLabelPool) {
+    if (!seen.has(id)) { label.remove(); viewportLabelPool.delete(id); }
+  }
 }
 
 function syncAuthoringIndicatorScreenPositions() {
