@@ -21323,6 +21323,9 @@ function viewportLabelEntries() {
   return viewportLabelCache;
 }
 
+const VIEWPORT_LABEL_FULL_SIZE_METERS = 25;
+const VIEWPORT_LABEL_MIN_PX = 6;
+
 function syncViewportLabels() {
   const root = el.viewportLabels;
   if (!root) return;
@@ -21337,6 +21340,15 @@ function syncViewportLabels() {
   for (const anchor of anchors) {
     const entry = cache.byId.get(anchor.id);
     if (!entry) continue;
+    // Names shrink when the camera moves away, like the objects themselves.
+    const isSelected = selected.has(entry.docKey);
+    const baseSize = Math.max(8, Math.min(48, Number(anchor.fontSizePx) || 13));
+    const distanceScale = Math.min(1, VIEWPORT_LABEL_FULL_SIZE_METERS / Math.max(1, Number(anchor.distance) || 0));
+    let fontSizePx = baseSize * distanceScale;
+    if (fontSizePx < VIEWPORT_LABEL_MIN_PX) {
+      if (!isSelected) continue;
+      fontSizePx = VIEWPORT_LABEL_MIN_PX;
+    }
     seen.add(anchor.id);
     let label = viewportLabelPool.get(anchor.id);
     if (!label) {
@@ -21351,9 +21363,9 @@ function syncViewportLabels() {
     if (label.firstChild.textContent !== entry.name) label.firstChild.textContent = entry.name;
     if (label.lastChild.textContent !== entry.info) label.lastChild.textContent = entry.info;
     label.lastChild.hidden = !entry.info;
-    const className = "edLabel edLabel--" + entry.kind + (selected.has(entry.docKey) ? " edOn" : "");
+    const className = "edLabel edLabel--" + entry.kind + (isSelected ? " edOn" : "");
     if (label.className !== className) label.className = className;
-    const fontSize = Math.max(8, Math.min(48, Number(anchor.fontSizePx) || 13)) + "px";
+    const fontSize = (Math.round(fontSizePx * 2) / 2) + "px";
     if (label.style.fontSize !== fontSize) label.style.fontSize = fontSize;
     const left = Math.round(anchor.x - rootRect.left) + "px";
     const top = Math.round(anchor.y - rootRect.top) + "px";
