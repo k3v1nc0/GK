@@ -27,10 +27,12 @@ export function settingsValues(kind, body = null) {
 }
 
 // Regels { ref, amount } -> { itemId | currencyId, amount }.
+// Fase 5: een vaardigheid als questbeloning -> { abilityId } (het aantal telt niet).
 function grants(rows) {
   return (Array.isArray(rows) ? rows : []).map((row) => (kindOfRef(row.ref) === "currency"
     ? { currencyId: idFromRef(row.ref), amount: row.amount }
-    : { itemId: idFromRef(row.ref), amount: row.amount }));
+    : kindOfRef(row.ref) === "ability" ? { abilityId: idFromRef(row.ref), amount: 1 }
+      : { itemId: idFromRef(row.ref), amount: row.amount }));
 }
 
 // Stap 9: "alleen als vlag" op een NPC of model -> { flagId, flagOn } (niets als hij er altijd is).

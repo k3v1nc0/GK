@@ -1,4 +1,4 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261110-namen1";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261110-fase5";
 import { edgeBetweenPoints, editClosedEdges } from "./walkable-edge-tools.js?v=20261031-randen1";
 import { createTerrainEditor } from "./terrain-editor.js?v=20261102-terrein10";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261106-perf1";
@@ -11,7 +11,7 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261106-perf1";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261106-perf1";
-import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261110-draaien1";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261110-fase5";
 import { createAssetPicker } from "./mini-asset-picker.js?v=20261106-thumbs150";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
 import { createDocDrop, docKeyFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261108-portals1";
@@ -10312,7 +10312,6 @@ const QUEST_TIMELINE_CHILD_TYPE_OPTIONS = {
   actions: [
     { type: "action_give_currency", label: "Geef currency" },
     { type: "action_give_xp", label: "Geef XP" },
-    { type: "action_unlock_ability", label: "Ontgrendel ability" },
     { type: "action_remove_item", label: "Verwijder item" },
     { type: "action_start_quest", label: "Start quest" }
   ],
@@ -10320,7 +10319,6 @@ const QUEST_TIMELINE_CHILD_TYPE_OPTIONS = {
   rewardBundleChild: [
     { type: "action_give_currency", label: "Geef currency" },
     { type: "action_give_xp", label: "Geef XP" },
-    { type: "action_unlock_ability", label: "Ontgrendel ability" },
     { type: "action_remove_item", label: "Verwijder item" },
     { type: "action_start_quest", label: "Start quest" }
   ],
@@ -10336,7 +10334,6 @@ const QUEST_TIMELINE_SUPPORTED_CHILD_TYPES = new Set([
   "condition_has_item",
   "action_give_currency",
   "action_give_xp",
-  "action_unlock_ability",
   "action_remove_item",
   "action_start_quest",
   "reward_bundle",
@@ -12536,7 +12533,6 @@ const PLAYER_RULES_HUB_TYPES = [
   "player_progression_rules",
   "inventory_rules",
   "equipment_rules",
-  "ability_loadout_rules",
   "death_respawn_rules",
   "unstuck_rules",
   "xp_source_rule",
@@ -20622,10 +20618,6 @@ function renderWorkbenchQuestStoryboard(entry) {
       empty: "XP heeft geen bibliotheekkaart; vul de hoeveelheid in het formulier in.",
       actions: [{ label: "+ XP", onClick: function () { workbenchOpenQuestChildDraft(step, "actions", "action_give_xp"); } }]
     }));
-    drops.appendChild(workbenchQuestDropZone("Ability reward", "Ability → reward; rank en hotbarslot blijven expliciete velden.", function (payload) { return payload?.type === "ability_definition"; }, function (payload) {
-      const source = workbenchContentIndex().byNodeId.get(payload.nodeId);
-      if (source) workbenchOpenQuestChildDraft(step, "actions", "action_unlock_ability", { abilityRef: source.ref });
-    }, { label: "+ Ability", onClick: function () { workbenchOpenQuestChildDraft(step, "actions", "action_unlock_ability"); } }));
     drops.appendChild(workbenchQuestDropZone("Item inleveren / verbruiken", "Item → Remove Item; dit is geen positieve beloning.", function (payload) { return payload?.type === "item_definition"; }, function (payload) {
       const source = workbenchContentIndex().byNodeId.get(payload.nodeId);
       if (source) workbenchOpenQuestChildDraft(step, "actions", "action_remove_item", { itemRef: source.ref });
@@ -27035,7 +27027,6 @@ const NODE_WORKFLOW_HELP = Object.freeze({
   condition_group: "Combineert conditions met all of any, zodat je AND/OR logica bouwt zonder code.",
   action_give_currency: "Reward/action die currency via NODE-03 wallet toekent in een servertransactie.",
   action_give_xp: "Reward/action die XP toekent en level opnieuw berekent via player progression rules.",
-  action_unlock_ability: "Reward/action die een ability vrijspeelt en eventueel in een loadout-slot zet.",
   action_remove_item: "Action die items uit inventory consumeert. Gebruik dit voor delivery/turn-in kosten.",
   action_start_quest: "Action die een volgende quest activeert, beschikbaar maakt of alleen trackt.",
   action_sequence: "Voert meerdere actions in volgorde uit. Handig voor een rewardpakket met currency, XP en ability.",

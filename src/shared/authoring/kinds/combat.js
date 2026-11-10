@@ -12,24 +12,36 @@ const HEAL_ONLY = Object.freeze({ key: "abilityKind", is: ["heal"] });
 
 const PCT = { unit: "%", scale: 100 };
 
+// Fase 5 (vaardigheden): wanneer een speler deze vaardigheid krijgt, hoe hij eruitziet in de game en welk icoon op de knop staat.
+const PLAYER_GROUP = "📖 Voor spelers";
+export const ABILITY_ANIM_STYLES = Object.freeze(["slash", "cast", "shot"]);
+// Iconen die de game al kent (gk-icon-paths.js); leeg = het icoon van de soort (⚔️ of 💚).
+export const ABILITY_ICONS = Object.freeze(["crossed-swords", "broadsword", "round-shield", "shield-reflect", "anvil-impact", "crosshair", "fire-ray", "magic-swirl", "sparkles", "magic-portal", "water-drop", "healing", "heart-plus"]);
+const ABILITY_ICON_EMOJI = Object.freeze({ "crossed-swords": "⚔️", broadsword: "🗡️", "round-shield": "🛡️", "shield-reflect": "🔰", "anvil-impact": "💥", crosshair: "🎯",
+  "fire-ray": "🔥", "magic-swirl": "🌪️",
+  sparkles: "✨", "magic-portal": "🌀", "water-drop": "💧", healing: "💚", "heart-plus": "❤️" });
+const ABILITY_ICON_LABELS = Object.freeze({ "crossed-swords": "Zwaarden", broadsword: "Zwaard", "round-shield": "Schild", "shield-reflect": "Schildslag", "anvil-impact": "Klap", crosshair: "Doelwit",
+  "fire-ray": "Vuurstraal", "magic-swirl": "Magie",
+  sparkles: "Sterren", "magic-portal": "Wervel", "water-drop": "Druppel", healing: "Genezen", "heart-plus": "Hart" });
+
 export const COMBAT_KINDS = {
   ability: {
-    label: "Aanval",
-    plural: "Aanvallen",
+    label: "Vaardigheid",
+    plural: "Vaardigheden",
     icon: "⚔️",
     place: "werkbank",
     singleton: false,
     domain: "actors",
     idField: "abilityId",
     fields: {
-      abilityId: { type: "id", required: true, maxLength: 120, audience: "client", label: "Aanval-ID",
-        ui: ui("🔖", "id", "werkbank", { more: true }), default: null, help: HELP_ID("deze aanval") },
+      abilityId: { type: "id", required: true, maxLength: 120, audience: "client", label: "Vaardigheid-ID",
+        ui: ui("🔖", "id", "werkbank", { more: true }), default: null, help: HELP_ID("deze vaardigheid") },
       displayName: { type: "text", required: true, maxLength: 80, audience: "client", label: "Naam",
-        ui: ui("🏷️", "text", "werkbank"), default: "", help: HELP_NAME("deze aanval") },
+        ui: ui("🏷️", "text", "werkbank"), default: "", help: HELP_NAME("deze vaardigheid") },
       abilityKind: { type: "select", required: false, options: ABILITY_KINDS.slice(), optionIcons: { damage: "⚔️", heal: "💚" },
         optionLabels: { damage: "Schade", heal: "Genezen" }, audience: "client", label: "Soort",
         ui: ui("🎭", "select", "werkbank"), default: "damage",
-        help: help("Doet deze aanval schade, of geneest hij?", "Schade voor gewone aanvallen. Genezen voor de genees-spreuk van een klasse of een vijand-healer.", "Spreuk doet schade in plaats van genezen → kies Genezen.") },
+        help: help("Doet deze vaardigheid schade, of geneest hij? Schade raakt een vijand; Genezen kiest vanzelf de meest gewonde speler binnen het bereik (of jou).", "Schade voor aanvallen. Genezen voor de genees-spreuk van een klasse of een vijand-healer.", "Spreuk doet schade in plaats van genezen → kies Genezen.") },
       baseDamage: { type: "integer", required: true, min: 0, max: 1000000, audience: "server", label: "Basisschade",
         ui: ui("💥", "slider", "werkbank", { step: 1, range: [0, 200] }), default: 10,
         help: help("Hoeveel schade de aanval altijd doet, voordat kracht en pantser meetellen.", "5-20 voor het begin van de game, hoger voor latere vijanden.", "Vijanden gaan te snel dood → lager. Gevechten duren te lang → hoger.") },
@@ -54,7 +66,21 @@ export const COMBAT_KINDS = {
       manaCost: { type: "integer", required: false, min: 0, max: 1000000, audience: "client", label: "Kost mana",
         ui: ui("🔵", "slider", "werkbank", { step: 1, range: [0, 200], group: HEAL_GROUP }), default: 0,
         help: help("Hoeveel mana een speler kwijt is als hij deze aanval of spreuk doet. 0 = gratis.", "10-25 voor een genees-spreuk.", "Mana is meteen op → lager. Spelers genezen eindeloos → hoger.") },
-      ...effectFields(EFFECT_GROUP, { unit: "s", what: "de aanval" })
+      // Fase 5: vrij vanaf level of via een quest, hoe het eruitziet en het icoon op de knop (vak 2 en 3).
+      unlockLevel: { type: "integer", required: false, min: 1, max: 1000, audience: "client", label: "Vrij vanaf level",
+        ui: ui("🔓", "slider", "werkbank", { step: 1, range: [1, 50], group: PLAYER_GROUP }), default: 1,
+        help: help("Vanaf welk level een speler deze vaardigheid kan gebruiken (als hij bij zijn klasse staat).", "Level 1 voor de eerste vaardigheid van een klasse, daarna bijv. 3, 5 en 8.", "Speler ziet een slot met 'vanaf level …' → zet het level lager of geef XP met de maker-knop.") },
+      unlockQuest: { type: "boolean", required: false, audience: "client", label: "Alleen via een quest",
+        ui: ui("📜", "toggle", "werkbank", { group: PLAYER_GROUP }), default: false,
+        help: help("Krijgt een speler deze vaardigheid pas als een quest hem als beloning geeft? (en vanaf het level hierboven)", "Aan voor een bijzondere vaardigheid uit een lorequest. Zet hem in de quest bij 🎁 Beloning.", "Niemand krijgt hem → kijk of een quest hem bij 🎁 Beloning heeft.") },
+      animStyle: { type: "select", required: false, options: ABILITY_ANIM_STYLES.slice(), optionIcons: { slash: "🤺", cast: "✨", shot: "🏹" },
+        optionLabels: { slash: "Uithaal", cast: "Spreuk", shot: "Schot" }, audience: "client", label: "Animatie",
+        ui: ui("🎬", "select", "werkbank", { group: PLAYER_GROUP }), default: "slash",
+        help: help("Wat iedereen in de buurt ziet als deze vaardigheid gebruikt wordt: een uithaal, een spreuk-gloed of een schot naar het doel, met een flits bij het doel.", "Uithaal voor zwaarden, Spreuk voor magie en genezen, Schot voor bogen.", "Past niet bij de vaardigheid → kies een andere.") },
+      icon: { type: "select", required: false, options: ABILITY_ICONS.slice(), optionIcons: ABILITY_ICON_EMOJI, optionLabels: ABILITY_ICON_LABELS, audience: "client", label: "Icoon",
+        ui: ui("🖼️", "select", "werkbank", { group: PLAYER_GROUP }), default: null,
+        help: help("Het plaatje op de knop in de game (vak 1, 2 of 3) en in het vaardighedenboek.", "Kies iets dat bij de vaardigheid past. Leeg = zwaarden bij Schade, hartje bij Genezen.", "Twee knoppen lijken op elkaar → kies een ander icoon.") },
+      ...effectFields(EFFECT_GROUP, { unit: "s", what: "de vaardigheid" })
     }
   }
 };

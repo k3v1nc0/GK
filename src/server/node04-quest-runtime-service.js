@@ -5,7 +5,6 @@ import { runOperation } from "./persistence/operation-contract.js";
 import { QUEST_NEARBY_M, pointInArea, worldEventWindow } from "../../apps/web/public/shared/quest-graph.js";
 import { WorldFlags } from "./world-flags.js";
 
-const DEFAULT_LOADOUT_ID = "loadout.main";
 
 function now() {
   return new Date().toISOString();
@@ -1297,6 +1296,7 @@ export class Node04QuestRuntimeService {
       if (action?.actionKind === "xp" && safeInteger(action.amount, 0) > 0) return "+" + safeInteger(action.amount, 0) + " XP";
       if (action?.actionKind === "currency") return "+" + safeInteger(action.amountMinor, 0) + " " + displayForCurrency(ctx.catalogs, action.currencyRef);
       if (action?.actionKind === "item") return "+" + safeInteger(action.amount, 1) + "× " + displayForItem(ctx.catalogs, action.itemRef);
+      if (action?.actionKind === "ability") return "📖 " + this.abilityName(ctx, action.abilityRef);
       return null;
     }).filter(Boolean).slice(0, 6);
     // Het einde alleen noemen als de quest er meer heeft (na een keuze).
@@ -2005,7 +2005,7 @@ export class Node04QuestRuntimeService {
       return grant ? [grant] : [];
     }
     if (action.actionKind === "ability") {
-      return [this.unlockAbility(ctx, action.abilityRef, action.rank, action.loadoutId, action.preferredSlotIndex, operationId, sourceRef, action.reason || "quest_reward")].filter(Boolean);
+      return [this.unlockAbility(ctx, action.abilityRef, operationId, sourceRef, action.reason || "quest_reward")].filter(Boolean);
     }
     if (action.actionKind === "start_quest") {
       const quest = questById(ctx.project, action.questRef);
@@ -2093,41 +2093,25 @@ export class Node04QuestRuntimeService {
     return { kind: "xp", amount: grantAmount, beforeXp, afterXp, beforeLevel, afterLevel };
   }
 
-  unlockAbility(ctx, abilityId, rank, loadoutId, preferredSlotIndex, operationId, sourceRef, reason) {
+  // Fase 5: de naam van een vaardigheid (uit de build; oude wereld: uit de catalogus).
+  abilityName(ctx, abilityId) {
+    const fromBuild = typeof this.node03RuntimeService?.abilityDisplayName === "function" ? this.node03RuntimeService.abilityDisplayName(abilityId) : null;
+    return fromBuild || displayForAbility(ctx.catalogs, abilityId);
+  }
+
+  // Fase 5: een quest leert je een vaardigheid (vrij voor dit character). In de game sleep je hem zelf naar vak 2 of 3.
+  unlockAbility(ctx, abilityId, operationId, sourceRef, reason) {
     const id = safeString(abilityId);
     if (!id) return null;
-    const stamp = now();
-    const existing = this.db.prepare("SELECT rank FROM player_abilities WHERE player_id = ? AND ability_id = ? LIMIT 1").get(ctx.profile.id, id);
-    this.db.prepare(`
+    const result = this.db.prepare(`
       INSERT INTO player_abilities (player_id, ability_id, rank, unlock_source, unlocked_at, revision)
-      VALUES (?, ?, ?, ?, ?, 1)
-      ON CONFLICT(player_id, ability_id) DO UPDATE SET
-        rank = MAX(player_abilities.rank, excluded.rank),
-        revision = player_abilities.revision + 1
-    `).run(ctx.profile.id, id, Math.max(1, safeInteger(rank, 1)), reason, stamp);
-    const loadout = safeString(loadoutId, DEFAULT_LOADOUT_ID);
-    const occupied = new Set(this.db.prepare("SELECT slot_index FROM player_ability_loadouts WHERE player_id = ? AND loadout_id = ? AND ability_id IS NOT NULL").all(ctx.profile.id, loadout).map(function (row) {
-      return safeInteger(row.slot_index, 0);
-    }));
-    const alreadySlotted = this.db.prepare("SELECT slot_index FROM player_ability_loadouts WHERE player_id = ? AND loadout_id = ? AND ability_id = ? LIMIT 1")
-      .get(ctx.profile.id, loadout, id);
-    if (!alreadySlotted) {
-      let slot = Math.max(0, safeInteger(preferredSlotIndex, 2));
-      if (occupied.has(slot)) {
-        slot = 0;
-        while (occupied.has(slot) && slot < 12) slot += 1;
-      }
-      this.db.prepare(`
-        INSERT INTO player_ability_loadouts (player_id, loadout_id, slot_index, ability_id, updated_at)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(player_id, loadout_id, slot_index) DO UPDATE SET
-          ability_id = COALESCE(player_ability_loadouts.ability_id, excluded.ability_id),
-          updated_at = excluded.updated_at
-      `).run(ctx.profile.id, loadout, slot, id, stamp);
-    }
-    if (!existing) this.node03RuntimeService.recordLedger(operationId, ctx.profile.id, "ability", id, 1, 0, 1, reason, sourceRef);
-    return { kind: "ability", abilityId: id, displayName: displayForAbility(ctx.catalogs, id), rank: Math.max(1, safeInteger(rank, 1)) };
+      VALUES (?, ?, 1, ?, ?, 1)
+      ON CONFLICT(player_id, ability_id) DO NOTHING
+    `).run(ctx.profile.id, id, reason, now());
+    if (Number(result.changes) === 1) this.node03RuntimeService.recordLedger(operationId, ctx.profile.id, "ability", id, 1, 0, 1, reason, sourceRef);
+    return { kind: "ability", abilityId: id, displayName: this.abilityName(ctx, id) };
   }
+
 
   startDialogue(ctx, payload = {}) {
     this.ensureRuntime(ctx);
@@ -2582,6 +2566,7 @@ export class Node04QuestRuntimeService {
       if (reward?.actionKind === "xp") return { kind: "xp", amount: safeInteger(reward.amount, 0) };
       if (reward?.actionKind === "currency") return { kind: "currency", currencyId: reward.currencyRef, displayName: displayForCurrency(ctx.catalogs, reward.currencyRef), amount: safeInteger(reward.amountMinor, 0) };
       if (reward?.actionKind === "item") return { kind: "item", itemId: reward.itemRef, displayName: displayForItem(ctx.catalogs, reward.itemRef), amount: safeInteger(reward.amount, 1) };
+      if (reward?.actionKind === "ability") return { kind: "ability", abilityId: reward.abilityRef, displayName: this.abilityName(ctx, reward.abilityRef), amount: 1 };
       return null;
     };
     // Stap 7: bij een einde met "Speler kiest 1": de beloningen om uit te kiezen (index = wat de knop terugstuurt).

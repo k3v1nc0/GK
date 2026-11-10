@@ -54,6 +54,7 @@ const flagGate = (wat) => ({
 });
 
 const CLASS_HEAL_GROUP = "💚 Terugkrijgen en genezen";
+const SHIELD_GROUP = "🛡️ Schild van sterkere vijanden";
 export const STACKING_LABELS = Object.freeze({ refresh: "Opnieuw beginnen", extend: "Tijd erbij", block: "Niet nog eens" });
 
 const MAP_ICON_OPTIONS = Object.freeze(["dot", "diamond", "square", "triangle", "star", "pin", "portal", "cross", "ring", "arrow"]);
@@ -217,8 +218,8 @@ export const GAME_KINDS = {
       spawns: { type: "questSpawns", required: false, maxItems: QUEST_SPAWN_LIMITS.spawns, audience: "client", label: "Verschijnen",
         ui: ui("👾", "questSpawns", "questbuilder"), default: null,
         help: help("Vijanden die deze quest laat verschijnen, bijv. een wolvengroep bij het 5e hout.", "Geef ze een naam (Wolvengroep), kies voor wie (meestal de groep) en zet bij een stap (⚡ Wat gebeurt er onderweg) een regel: Dan 👾 laat vijanden verschijnen.", "Ze verschijnen nooit → kijk in de Quest Builder (🧪 Testen) wat de quest-check zegt.") },
-      rewards: refList("Beloning", "🎁", ["item_definition", "currency"], [AMOUNT], "werkbank",
-        help("Wat de speler krijgt als de quest klaar is.", "Sleep items of valuta uit de Bibliotheek, bijv. 10 goud of een zwaard.", "Spelers worden te snel rijk → minder of goedkopere beloningen.")),
+      rewards: refList("Beloning", "🎁", ["item_definition", "currency", "ability"], [AMOUNT], "werkbank",
+        help("Wat de speler krijgt als de quest klaar is: items, geld of een vaardigheid (die leert hij dan; het aantal telt niet).", "Sleep items, valuta of een vaardigheid uit de Bibliotheek, bijv. 10 goud of een zwaard. Een vaardigheid met 'Alleen via een quest' komt zo vrij.", "Spelers worden te snel rijk → minder of goedkopere beloningen. Vaardigheid komt niet vrij → staat hij bij de klasse van de speler?")),
       rewardXp: int("XP", "⭐", 50, 0, 1000000, "werkbank", { range: [0, 1000] },
         help("Hoeveel ervaring de speler krijgt bij het inleveren.", "50-200 voor een eerste quest.", "Spelers stijgen te snel → minder XP.")),
       // 5-11: het verhaal bij de start, in de Quest Builder (tab 🚪 Start). Bij een NPC vertelt de NPC het; bij een brief,
@@ -335,25 +336,25 @@ export const GAME_KINDS = {
       description: { type: "text", required: false, maxLength: 160, audience: "client", label: "Uitleg",
         ui: ui("💬", "text", "instellingen", { more: true }), default: null,
         help: help("Eén zin onder de naam in het Characters-venster.", "Bijv. \"Veel levens en pantser; houdt vijanden bezig.\"", "Iedereen kiest hetzelfde → maak de andere klassen aantrekkelijker.") },
-      abilityRef: { type: "ref", refKind: "ability", required: false, audience: "client", label: "Aanval",
+      abilityRef: { type: "ref", refKind: "ability", required: false, audience: "client", label: "Auto-aanval (vak 1)",
         ui: ui("⚔️", "ref", "instellingen"), default: null,
-        help: help("De aanval die deze klasse gebruikt tegen vijanden.", "Sleep een aanval uit de Bibliotheek (Werkbank) hierop of kies hem uit de lijst; bijv. een snelle steek voor DPS en een schildslag voor Tank.", "Leeg → een simpele standaardklap; kies hier een aanval.") },
+        help: help("De vaste aanval van deze klasse op vak 1 (toets 1). Hij slaat vanzelf door zolang je een vijand als doel hebt; genoeg voor gewone vijanden, maar een sterkere vijand met schild breek je met vak 2 of 3.", "Sleep een vaardigheid met soort Schade uit de Bibliotheek (Werkbank) hierop; bijv. een snelle steek voor DPS en een schildslag voor Tank.", "Leeg → een simpele standaardklap; kies hier een vaardigheid.") },
+      // Fase 5: de vaardigheden die een speler van deze klasse zelf op vak 2 en 3 zet (vrij vanaf level of via een quest).
+      skills: refList("Vaardigheden (vak 2 en 3)", "📖", ["ability"], [], "instellingen",
+        help("De vaardigheden die deze klasse kan leren. De speler sleept ze in de game uit het 📖 vaardighedenboek naar vak 2 of 3. Wanneer ze vrijkomen staat bij de vaardigheid zelf (Vrij vanaf level, Alleen via een quest).", "Minstens één vaardigheid vanaf level 1 (voor vak 2), bijv. een genees-spreuk voor de Healer en een harde klap voor DPS en Tank. Een sterkere vijand met schild breek je alleen met vak 2 of 3.", "Speler heeft niets op vak 2 → zet hier een vaardigheid met Vrij vanaf level 1.")),
       healthMax: int("Levens", "❤️", 100, 1, 1000000, "instellingen", { range: [10, 1000] },
         help("Hoeveel levens deze klasse heeft.", "DPS 80, Healer 60, Tank 100; vijanden doen 5-20 schade per klap.", "Deze klasse gaat te snel dood → hoger.")),
       attackPower: int("Kracht", "💪", 10, 0, 1000000, "instellingen", { range: [0, 200] },
         help("Hoe hard deze klasse slaat (telt op bij de schade van de aanval).", "DPS 10, Healer en Tank 5.", "Vijanden gaan te langzaam dood → hoger.")),
       armor: int("Pantser", "🛡️", 0, 0, 1000000, "instellingen", { range: [0, 200] },
         help("Hoeveel schade deze klasse tegenhoudt zonder uitrusting.", "Tank 10, de rest 0.", "Te sterk → lager.")),
-      healPower: int("Heal-kracht", "💚", 5, 0, 1000000, "instellingen", { range: [0, 200] },
+      healPower: int("Heal-kracht", "💚", 5, 0, 1000000, "instellingen", { range: [0, 200], group: CLASS_HEAL_GROUP },
         help("Hoe goed deze klasse kan genezen (telt op bij een heal).", "5 voor de meeste klassen, 10 voor de Healer.", "Healer geneest te weinig → hoger.")),
-      // Healing (2-11): vanzelf levens en mana terugkrijgen (buiten gevecht) en een genees-spreuk, in een uitklapblok.
+      // Healing (2-11): vanzelf levens en mana terugkrijgen (buiten gevecht), in een uitklapblok. Fase 5: heal-kracht erbij.
       healthRegenBp: int("Levens terug", "❤️", 100, 0, 10000, "instellingen", { step: 10, range: [0, 1000], unit: "%/s", scale: 100, group: CLASS_HEAL_GROUP },
         help("Hoeveel procent van je levens je per seconde vanzelf terugkrijgt, buiten een gevecht. 0 % = niets.", "0,5-2 %/s. Bij 1 %/s ben je in 100 seconden weer vol.", "Spelers moeten te lang wachten → hoger. Gevechten voelen zonder risico → lager.")),
       manaRegenBp: int("Mana terug", "🔵", 200, 0, 10000, "instellingen", { step: 10, range: [0, 1000], unit: "%/s", scale: 100, group: CLASS_HEAL_GROUP },
         help("Hoeveel procent van je mana je per seconde vanzelf terugkrijgt, buiten een gevecht. 0 % = niets.", "1-3 %/s; meer voor de Healer.", "Mana is te lang op → hoger.")),
-      healAbilityRef: { type: "ref", refKind: "ability", required: false, audience: "client", label: "Genees-spreuk",
-        ui: ui("✨", "ref", "instellingen", { group: CLASS_HEAL_GROUP }), default: null,
-        help: help("De spreuk waarmee deze klasse geneest: jezelf of de meest gewonde speler in de buurt. Komt als 💚-knop (toets 2) in de game.", "Sleep een aanval met soort Genezen uit de Bibliotheek hierop; meestal alleen voor de Healer.", "Geen 💚-knop in de game → zet hier een spreuk op en kies bij de spreuk soort Genezen.") },
       manaMax: int("Mana", "🔵", 50, 0, 1000000, "instellingen", { range: [0, 1000], more: true },
         help("Hoeveel mana deze klasse heeft (blauwe balk onder de levens).", "Healer 100, DPS 50, Tank 30. 0 = geen manabalk.", "Spreuken raken te snel op → hoger.")),
       startItems: refList("Start-spullen", "🎒", ["item_definition", "currency"], [AMOUNT], "instellingen",
@@ -387,7 +388,12 @@ export const GAME_KINDS = {
       respawnManaPct: int("Mana na respawn", "🔵", 100, 0, 100, "instellingen", { unit: "%" },
         help("Met hoeveel procent van je mana je terugkomt na doodgaan.", "50-100 %.", "Healer kan na respawn niets → hoger.")),
       levelUpRestore: toggle("Level omhoog = vol", "⭐", true, "instellingen",
-        help("Krijg je volle levens en mana als je een level omhoog gaat?", "Meestal aan: dat voelt als een beloning.", "Spelers misbruiken het midden in een gevecht → zet dit uit."))
+        help("Krijg je volle levens en mana als je een level omhoog gaat?", "Meestal aan: dat voelt als een beloning.", "Spelers misbruiken het midden in een gevecht → zet dit uit.")),
+      // Fase 5: het schild van een sterkere vijand of baas. Vak 2 of 3 breekt het; daarna doet vak 1 weer gewone schade.
+      shieldAutoPct: int("Auto-aanval tegen schild", "🛡️", 25, 0, 100, "instellingen", { range: [0, 100], unit: "%", group: SHIELD_GROUP },
+        help("Hoeveel procent van zijn gewone schade de auto-aanval (vak 1) doet zolang het schild van een sterkere vijand of baas staat.", "20-30 %: je merkt dat je vak 2 of 3 nodig hebt, maar je staat niet stil. 0 % = met alleen vak 1 lukt het nooit.", "Spelers verslaan een sterkere met alleen vak 1 → lager. Healers komen er solo niet doorheen → hoger.")),
+      shieldBackS: int("Schild komt terug na", "⏳", 15, 1, 600, "instellingen", { range: [1, 120], unit: "s", group: SHIELD_GROUP },
+        help("Na hoeveel seconden het gebroken schild terugkomt.", "10-20 seconden: lang genoeg om met vak 1 flink schade te doen.", "Het schild is er bijna nooit → korter. Spelers moeten steeds vak 2 drukken → langer."))
     }
   },
   hud_settings: {

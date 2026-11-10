@@ -15,6 +15,7 @@ import { groundHeightAt, resolveMovement } from "../../../apps/web/public/shared
 import { computeHeal, regenStep } from "../../../apps/web/public/shared/effect-math.js";
 import { createNavigator } from "./navigation.js";
 import { playerAbilityFromSection } from "../authoring/actor-compiler.js";
+import { lineOfSightBlocked } from "./line-of-sight.js";
 
 export const ACTOR_INSTANCE_PREFIX = "actor:";
 export const RESOURCE_INSTANCE_PREFIX = "res:";
@@ -113,7 +114,9 @@ export class ActorRuntime {
     this.questEscortArrived = null;
     this.questEscortDown = null;
     this.escortNews = [];
-    this.perf = { steps: 0, maxStepMs: 0, avgStepMs: 0, pathQueries: 0, pathBudgetHits: 0, snapshotsSent: 0 };
+    // Fase 5: zichtlijn-controle bij elke aanval of vaardigheid (gemeten, zodat hij licht blijft).
+    this.perf = { steps: 0, maxStepMs: 0, avgStepMs: 0, pathQueries: 0, pathBudgetHits: 0, snapshotsSent: 0, losChecks: 0, losBlocked: 0, losMaxMs: 0, losAvgMs: 0 };
+    this.combatSettings = null;
   }
 
   // node03: applyActorHit({ worldId, playerId, actorId, label, ability, attackPower }) -> { damage, remainingHealth, defeated } | null
@@ -141,6 +144,8 @@ export class ActorRuntime {
     this.buildId = buildId;
     this.worldId = worldContext?.worldId || null;
     this.section = canonical?.data?.actors || null;
+    // Fase 5: schild-regels (Instellingen > Genezen en effecten).
+    this.combatSettings = canonical?.data?.game?.combat || null;
     this.loadSpawns(nowMs);
     return this.section;
   }
@@ -183,7 +188,7 @@ export class ActorRuntime {
       actor.def = def;
       actor.spawn = spawn;
       actor.home = { x: meters(spawn.xMm), z: meters(spawn.zMm) };
-      actor.hpMax = def.healthMax;
+      actor.hpMax = Math.round(def.healthMax * (actor.strength || 1));
       actor.hp = Math.min(actor.hp, actor.hpMax);
       if (actor !== old) actor.y = this.groundYAt(actor.x, actor.z);
       actor.patrol = Array.isArray(spawn.patrolPointsMm) ? spawn.patrolPointsMm.map(([x, z]) => ({ x: meters(x), z: meters(z) })) : [];
@@ -230,6 +235,8 @@ export class ActorRuntime {
       targetPlayerId: null, path: [], pathGoal: null, pathFails: 0, patrolIndex: 0, pauseUntilMs: 0, stuck: 0,
       nextAttackAtMs: 0, contributors: new Set(), respawnAtMs: 0, rev: 1
     };
+    this.rollElite(actor);
+    actor.hp = actor.hpMax;
     if (deadUntil > nowMs) {
       actor.state = "dead";
       actor.anim = "dead";
@@ -379,6 +386,12 @@ export class ActorRuntime {
         continue;
       }
       if (actor.escort) { this.stepEscort(actor, nowMs, players, budget); continue; }
+      // Fase 5: het gebroken schild komt terug.
+      if (actor.shieldDownUntilMs && nowMs >= actor.shieldDownUntilMs) {
+        actor.shieldDownUntilMs = 0;
+        actor.rev += 1;
+        this.emitEvent({ e: "shield", id: actor.id, up: true }, actor.x, actor.z, actor);
+      }
       if (actor.state !== "return" && actor.state !== "engage" && !near(actor.x, actor.z, WAKE_M) && !near(actor.home.x, actor.home.z, WAKE_M)) continue;
       this.stepActor(actor, nowMs, players, playerList, budget, escorts);
     }
@@ -661,7 +674,8 @@ export class ActorRuntime {
     let outcome = null;
     if (this.bridge && typeof this.bridge.applyActorHit === "function") {
       try {
-        outcome = this.bridge.applyActorHit({ worldId: this.worldId, playerId: target.id, actorId: actor.id, label: actor.def.displayName, ability, attackPower: actor.def.attackPower });
+        outcome = this.bridge.applyActorHit({ worldId: this.worldId, playerId: target.id, actorId: actor.id, label: actor.def.displayName, ability,
+          attackPower: Math.round((Number(actor.def.attackPower) || 0) * (actor.strength || 1)) });
       } catch (error) {
         console.error("[actors] aanval op speler mislukt:", error.message);
       }
@@ -670,10 +684,48 @@ export class ActorRuntime {
     if (outcome?.defeated) this.startReturn(actor);
   }
 
+  // Fase 5: af en toe een sterkere (meer levens, harder, meer XP en een schild). Elke keer dat hij terugkomt opnieuw gegooid.
+  rollElite(actor) {
+    const spawn = actor.spawn || {};
+    const chance = Number(spawn.eliteChancePct) || 0;
+    actor.elite = !actor.group && !actor.escort && chance > 0 && Math.random() * 100 < chance;
+    actor.strength = actor.elite ? Math.max(1, (Number(spawn.eliteStrengthPct) || 200) / 100) : 1;
+    actor.shieldDownUntilMs = 0;
+    actor.hpMax = Math.round(actor.def.healthMax * actor.strength);
+  }
+
+  // Een sterkere vijand of een baas (Altijd een schild) heeft een schild; vak 2 of 3 breekt het even.
+  shielded(actor) {
+    return actor.kind === "actor" && !actor.escort && (actor.elite === true || actor.def?.shieldAlways === true);
+  }
+
+  shieldUp(actor, nowMs = this.lastStepAtMs) {
+    return this.shielded(actor) && nowMs >= (actor.shieldDownUntilMs || 0);
+  }
+
+  shieldRules() {
+    const combat = this.combatSettings || {};
+    const autoPct = Number.isFinite(Number(combat.shieldAutoPct)) ? Math.max(0, Math.min(100, Number(combat.shieldAutoPct))) : 25;
+    return { autoPct, backMs: Math.max(1000, (Number(combat.shieldBackS) || 15) * 1000) };
+  }
+
+  // Fase 5: zit er een muur of obstakel tussen aanvaller en doel? Alleen op het moment van gebruik (gemeten).
+  lineBlocked(ax, az, bx, bz, ay = null) {
+    const startedAt = performance.now();
+    const blocked = lineOfSightBlocked(this.worldContextRef, ax, az, bx, bz, ay);
+    const ms = performance.now() - startedAt;
+    this.perf.losChecks += 1;
+    if (blocked) this.perf.losBlocked += 1;
+    this.perf.losMaxMs = Math.max(this.perf.losMaxMs, ms);
+    this.perf.losAvgMs = this.perf.losAvgMs ? this.perf.losAvgMs * 0.95 + ms * 0.05 : ms;
+    return blocked;
+  }
+
   respawnActor(actor, nowMs) {
     actor.occurrence += 1;
     actor.id = actor.spawnKey + ":" + actor.occurrence;
     actor.state = "idle";
+    this.rollElite(actor);
     actor.hp = actor.hpMax;
     actor.x = actor.home.x; actor.z = actor.home.z; actor.y = this.groundYAt(actor.x, actor.z);
     if (Number.isFinite(actor.homeRy)) actor.ry = actor.homeRy;
@@ -698,7 +750,9 @@ export class ActorRuntime {
 
   // ---- spelersacties (aangeroepen door node03 binnen runOperation) ------------------------------------------
 
-  // ctx: { playerId, classId, x, z (m), safe, attackPower, nowMs, operationId }. Puur: verandert het geheugen niet.
+  // ctx: { playerId, classId, x, z (m), y?, safe, attackPower, nowMs, operationId, ability?, auto? }. Puur: verandert het geheugen niet.
+  // Fase 5: zonder ability = de auto-aanval van de klasse (vak 1, eigen wachttijd hier). Met ability = een vaardigheid van vak 2/3
+  // (wachttijd per vaardigheid regelt node03); die breekt het schild van een sterkere vijand.
   planPlayerAttack(ctx) {
     const section = this.ensureBuild(ctx.nowMs);
     const { entry: actor, stale } = this.findByInstanceId(ctx.targetId);
@@ -707,20 +761,31 @@ export class ActorRuntime {
     if (actor.escort) throw httpError(409, "Dit is geen vijand.", "NOT_AN_ENEMY");
     // Stap 5: wie een quest-vijand niet mag zien, kan hem ook niet raken.
     if (actor.group && !this.canSeeGroup(actor.group, ctx.playerId)) throw httpError(404, "Vijand niet gevonden.");
-    const label = actor.def.displayName;
-    if (stale || actor.state === "dead") return { plan: null, result: { action: "attack", targetId: ctx.targetId, message: label + " is al verslagen.", events: [] } };
+    const label = this.labelOf(actor);
+    if (stale || actor.state === "dead") return { plan: null, result: { action: "attack", targetId: ctx.targetId, message: label + " is al verslagen.", events: [], stop: true } };
     if (ctx.safe || this.pointIsSafe(actor.x, actor.z)) throw httpError(409, "Hier kun je niet vechten (veilig gebied).", "SAFE_AREA");
-    const ability = playerAbilityFromSection(section, ctx.classId || null);
+    const auto = !ctx.ability;
+    const ability = ctx.ability || playerAbilityFromSection(section, ctx.classId || null);
     const reachMm = ability.rangeMm + actor.def.radiusMm + RANGE_SLACK_MM;
     if (!withinRangeMm(mm(ctx.x), mm(ctx.z), mm(actor.x), mm(actor.z), reachMm)) {
       const error = httpError(400, "Target is te ver weg voor attack.", "TARGET_OUT_OF_RANGE");
       error.details = { range: meters(ability.rangeMm), radius: meters(actor.def.radiusMm) };
       throw error;
     }
-    const lastAt = this.playerAttackAtMs.get(ctx.playerId) || 0;
-    const waitMs = lastAt + ability.cooldownMs - ctx.nowMs;
-    if (waitMs > 0) return { plan: null, result: { action: "attack", targetId: actor.id, message: "Nog even wachten.", cooldownMs: waitMs, events: [] } };
-    const damage = computeDamage(ability, ctx.attackPower, actor.def.armor);
+    if (auto) {
+      const lastAt = this.playerAttackAtMs.get(ctx.playerId) || 0;
+      const waitMs = lastAt + ability.cooldownMs - ctx.nowMs;
+      if (waitMs > 0) return { plan: null, result: { action: "attack", targetId: actor.id, message: "Nog even wachten.", cooldownMs: waitMs, events: [] } };
+    }
+    if (this.lineBlocked(ctx.x, ctx.z, actor.x, actor.z, Number.isFinite(Number(ctx.y)) ? Number(ctx.y) : null)) {
+      throw httpError(409, "Er zit iets tussen jou en " + label + ".", "NO_LINE_OF_SIGHT");
+    }
+    let damage = computeDamage(ability, ctx.attackPower, actor.def.armor);
+    const shieldUp = this.shieldUp(actor, ctx.nowMs);
+    const rules = this.shieldRules();
+    // Schild: de auto-aanval doet maar een deel; een vaardigheid (vak 2/3) breekt het.
+    if (shieldUp && auto) damage = Math.max(rules.autoPct > 0 ? 1 : 0, Math.round(damage * rules.autoPct / 100));
+    const shieldBreak = shieldUp && !auto;
     const hpAfter = Math.max(0, actor.hp - damage);
     const killed = hpAfter === 0;
     const rewards = [];
@@ -731,17 +796,38 @@ export class ActorRuntime {
           playerId,
           claimKey: actor.id + "|" + playerId,
           items: actor.def.lootTableId ? rollLoot(section.lootTables, actor.def.lootTableId, lootSeed(this.buildId, actor.id, playerId)) : [],
-          xp: Math.max(0, Number(actor.def.xpReward) || 0)
+          xp: Math.max(0, Math.round((Number(actor.def.xpReward) || 0) * (actor.strength || 1)))
         });
       }
     }
     const plan = {
       kind: "attack", instanceId: actor.id, actorId: actor.def.actorId, x: actor.x, z: actor.z, spawnKey: actor.spawnKey, occurrence: actor.occurrence, playerId: ctx.playerId,
       damage, hpAfter, killed, respawnAtMs: killed ? ctx.nowMs + (actor.group ? QUEST_CORPSE_MS : actor.def.respawnMs) : null, rewards, buildId: this.buildId, label,
+      auto, abilityId: ability.abilityId || null, shieldUp, shieldBreak, shieldBackMs: rules.backMs,
       questSpawn: actor.group ? { groupId: actor.group.id, questId: actor.group.questId, spawnId: actor.group.spawnId } : null
     };
     this.pending.set(ctx.operationId, plan);
     return { plan, result: null };
+  }
+
+  // Fase 5: de naam zoals spelers hem zien (een sterkere heet "Sterke …").
+  labelOf(actor) {
+    return (actor.elite ? "Sterke " : "") + actor.def.displayName;
+  }
+
+  // Fase 5: de dichtstbijzijnde levende vijand binnen bereik die deze speler mag zien (vaardigheid zonder gekozen doel).
+  nearestEnemy(playerId, x, z, rangeMm) {
+    let best = null;
+    let bestD = Infinity;
+    for (const actor of this.actors.values()) {
+      if (actor.escort || actor.state === "dead") continue;
+      if (actor.group && !this.canSeeGroup(actor.group, playerId)) continue;
+      const d = Math.hypot(actor.x - x, actor.z - z);
+      if (d * 1000 > rangeMm + actor.def.radiusMm + RANGE_SLACK_MM || d >= bestD) continue;
+      best = actor;
+      bestD = d;
+    }
+    return best ? best.id : null;
   }
 
   planGather(ctx) {
@@ -795,9 +881,11 @@ export class ActorRuntime {
       return;
     }
     const actor = this.actors.get(plan.spawnKey);
+    if (plan.auto !== false) this.playerAttackAtMs.set(plan.playerId, nowMs);
     if (!actor || actor.occurrence !== plan.occurrence) return;
-    this.playerAttackAtMs.set(plan.playerId, nowMs);
     actor.hp = plan.hpAfter;
+    // Fase 5: een vaardigheid brak het schild; het komt na een tijdje terug (step).
+    if (plan.shieldBreak && !plan.killed) actor.shieldDownUntilMs = nowMs + plan.shieldBackMs;
     actor.contributors.add(plan.playerId);
     actor.rev += 1;
     if (plan.killed) {
@@ -811,10 +899,11 @@ export class ActorRuntime {
         if (spec) spec.dead = true;
         this.persistQuestGroup(actor.group);
       }
-      this.emitEvent({ e: "death", id: actor.id, by: plan.playerId, amount: plan.damage }, actor.x, actor.z, actor);
+      this.emitEvent({ e: "death", id: actor.id, by: plan.playerId, amount: plan.damage, ab: plan.abilityId, sk: plan.auto === false ? 1 : 0 }, actor.x, actor.z, actor);
       return;
     }
-    this.emitEvent({ e: "hit", id: actor.id, by: plan.playerId, amount: plan.damage, hp: actor.hp }, actor.x, actor.z, actor);
+    this.emitEvent({ e: "hit", id: actor.id, by: plan.playerId, amount: plan.damage, hp: actor.hp, ab: plan.abilityId, sk: plan.auto === false ? 1 : 0,
+      sh: plan.shieldUp && !plan.shieldBreak ? 1 : 0, sb: plan.shieldBreak ? 1 : 0 }, actor.x, actor.z, actor);
     // Stap 8: wie een vijand slaat die de begeleide NPC aanvalt, trekt hem naar zich toe (zo bescherm je hem).
     if (actor.state !== "return" && (actor.state !== "engage" || actor.targetEscort)) this.engage(actor, plan.playerId);
   }
@@ -838,7 +927,11 @@ export class ActorRuntime {
     const s = entry.state === "dead" ? "d" : entry.anim === "attack" ? "a" : entry.anim === "walk" ? "w" : "i";
     // Stap 8: een begeleide NPC (d = NPC-ID; de game toont zijn eigen model en verbergt hem op zijn vaste plek).
     if (entry.escort) return { id: entry.id, k: "e", d: entry.npcId, x: r2(entry.x), y: r2(entry.y), z: r2(entry.z), r: Math.round(entry.ry * 100) / 100, hp: entry.hp, hm: entry.hpMax, s };
-    return { id: entry.id, k: "a", d: entry.def.actorId, x: r2(entry.x), y: r2(entry.y), z: r2(entry.z), r: Math.round(entry.ry * 100) / 100, hp: entry.hp, hm: entry.hpMax, s };
+    const out = { id: entry.id, k: "a", d: entry.def.actorId, x: r2(entry.x), y: r2(entry.y), z: r2(entry.z), r: Math.round(entry.ry * 100) / 100, hp: entry.hp, hm: entry.hpMax, s };
+    // Fase 5: een sterkere (el) en of zijn schild nu staat (sh). Alleen meesturen als het zo is.
+    if (entry.elite) out.el = 1;
+    if (entry.state !== "dead" && this.shieldUp(entry, nowMs)) out.sh = 1;
+    return out;
   }
 
   sendSnapshots(nowMs) {

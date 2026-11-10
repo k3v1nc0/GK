@@ -467,6 +467,7 @@ function rewardActions(xp, grants) {
   if (xp > 0) rewards.push({ actionKind: "xp", amount: xp });
   for (const grant of grants) {
     if (grant.currencyId) rewards.push({ actionKind: "currency", currencyRef: grant.currencyId, amountMinor: grant.amount });
+    else if (grant.abilityId) rewards.push({ actionKind: "ability", abilityRef: grant.abilityId });
     else rewards.push({ actionKind: "item", itemRef: grant.itemId, amount: grant.amount });
   }
   return rewards;
@@ -736,7 +737,8 @@ function withGame(world, source, options) {
     death_respawn_rules: [{ id: "rules.respawn", healthRestorePercent: (Number(combat.respawnHealthPct) || 100) / 100,
       manaRestorePercent: (Number.isFinite(Number(combat.respawnManaPct)) ? Number(combat.respawnManaPct) : 100) / 100, staminaRestorePercent: 1 }],
     combat_rules: [{ id: "rules.combat", regenDelayMs: Math.max(0, Number(combat.regenDelayS) || 0) * 1000, effectStacking: combat.effectStacking || "refresh",
-      maxEffects: Number(combat.maxEffects) || 8, clearBuffsOnDeath: combat.clearBuffsOnDeath !== false, levelUpRestore: combat.levelUpRestore !== false }],
+      maxEffects: Number(combat.maxEffects) || 8, clearBuffsOnDeath: combat.clearBuffsOnDeath !== false, levelUpRestore: combat.levelUpRestore !== false,
+      shieldAutoPct: Number.isFinite(Number(combat.shieldAutoPct)) ? Number(combat.shieldAutoPct) : 25, shieldBackMs: Math.max(1, Number(combat.shieldBackS) || 15) * 1000 }],
     // Groep (MMO) (3-11): Instellingen > Groep. Zonder kaart de standaard; server en game lezen dit.
     party_rules: [Object.assign({ id: "rules.party" }, game?.party || partyValues(null))],
     chat_rules: [Object.assign({ id: "rules.chat" }, game?.chat || chatValues(null))]

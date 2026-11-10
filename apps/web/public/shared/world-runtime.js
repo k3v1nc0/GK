@@ -4912,6 +4912,10 @@ export function createGkWorldRuntime(canvas, options = {}) {
   };
   const remotePlayers = new Map();
   const runtimeTargetRoots = new Map();
+  // Fase 5: gevechts-animaties (zie playCombatFx).
+  const COMBAT_FX_MAX = 12;
+  const combatFx = [];
+  let combatFxShapes = null;
   const runtimeTargetSuppressedEntityIds = new Set();
   // Stap 8: NPC's die nu met de speler meelopen (begeleiden): hun vaste model is even onzichtbaar (botsen blijft gelijk aan de server).
   const escortHiddenEntityIds = new Set();
@@ -8793,6 +8797,7 @@ function resolveChunkDebugCenter(policy) {
     }
     frameTiming.syncChunkMs = round(performance.now() - sectionStart);
     sectionStart = performance.now();
+    if (combatFx.length) updateCombatFx(performance.now());
     if (gpuFrameTimer) gpuFrameTimer.begin();
     renderer.render(scene, camera);
     if (gpuFrameTimer) gpuFrameTimer.end();
@@ -16026,6 +16031,8 @@ function resolveChunkDebugCenter(policy) {
       runtimeTargetLabelPoint(root, target, point);
       push(id, name, String(target.entityKind || target.targetKind || ""), {
         action: String(target.action || ""), selected: target.selected === true, available: target.available !== false,
+        // Fase 5: schild-icoon boven de naam van een sterkere vijand of baas.
+        shield: target.shield === true,
         // Stap 8: een begeleide NPC toont zijn levens onder zijn naam.
         health: target.escort === true && Number(target.healthMax) > 0 ? Math.max(0, Math.min(1, Number(target.healthCurrent) / Number(target.healthMax))) : null
       });
@@ -17041,6 +17048,90 @@ function resolveChunkDebugCenter(policy) {
       }
     }
     return true;
+  }
+
+  // Fase 5: korte gevechts-animatie zonder clip in het model: een uithaal (boog), spreuk-bol of schot van de aanvaller
+  // naar het doel, en een flits bij het doel. Licht: hooguit 12 tegelijk, gedeelde vormen, na ±0,3 s weg.
+  function combatFxShapesOnce() {
+    if (combatFxShapes) return combatFxShapes;
+    combatFxShapes = {
+      arc: new THREE.TorusGeometry(0.7, 0.05, 6, 18, Math.PI * 0.9),
+      orb: new THREE.SphereGeometry(0.18, 10, 8),
+      bolt: new THREE.BoxGeometry(0.06, 0.06, 0.6),
+      flash: new THREE.SphereGeometry(0.4, 12, 10)
+    };
+    return combatFxShapes;
+  }
+  function combatFxPoint(id) {
+    const key = String(id || "");
+    let root = null;
+    if (key === "self") root = player.root;
+    else if (key.startsWith("player:")) root = remotePlayers.get(key.slice(7))?.root || null;
+    else root = runtimeTargetRoots.get(key) || null;
+    if (!root || root.visible === false) return null;
+    return new THREE.Vector3(root.position.x, root.position.y + 1.1, root.position.z);
+  }
+  function addCombatFxMesh(geometry, color, start, durationMs, kind, from, to) {
+    const material = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false, blending: THREE.AdditiveBlending });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.renderOrder = 20;
+    mesh.frustumCulled = false;
+    scene.add(mesh);
+    combatFx.push({ mesh, material, start, durationMs, kind, from, to });
+    while (combatFx.length > COMBAT_FX_MAX) removeCombatFx(0);
+  }
+  function removeCombatFx(index) {
+    const fx = combatFx[index];
+    if (!fx) return;
+    scene.remove(fx.mesh);
+    fx.material.dispose();
+    combatFx.splice(index, 1);
+  }
+  // options: { from: "self" | "player:<id>" | actor-id, to: idem, style: "slash" | "cast" | "shot", tone: "damage" | "heal" }
+  function playCombatFx(options = {}) {
+    if (mode !== "game" || !scene) return false;
+    const from = combatFxPoint(options.from);
+    const to = combatFxPoint(options.to) || from;
+    if (!from && !to) return false;
+    const shapes = combatFxShapesOnce();
+    const color = options.tone === "heal" ? 0x6ee77a : 0xffa53a;
+    const now = performance.now();
+    const style = ["slash", "cast", "shot"].includes(options.style) ? options.style : "slash";
+    const travel = style === "slash" ? 0 : style === "cast" ? 260 : 170;
+    if (from && to && from.distanceToSquared(to) > 0.01) {
+      if (style === "slash") addCombatFxMesh(shapes.arc, color, now, 230, "arc", from, to);
+      else addCombatFxMesh(style === "cast" ? shapes.orb : shapes.bolt, color, now, travel, "travel", from, to);
+    }
+    if (to) addCombatFxMesh(shapes.flash, options.tone === "heal" ? 0x9dffb0 : 0xfff1c4, now + travel, 260, "flash", to, to);
+    requestRender("combat-fx");
+    return true;
+  }
+  function updateCombatFx(now) {
+    for (let index = combatFx.length - 1; index >= 0; index -= 1) {
+      const fx = combatFx[index];
+      const t = (now - fx.start) / fx.durationMs;
+      if (t >= 1) { removeCombatFx(index); continue; }
+      const mesh = fx.mesh;
+      if (t < 0) { mesh.visible = false; continue; }
+      mesh.visible = true;
+      if (fx.kind === "arc") {
+        // Boog voor de aanvaller, gedraaid naar het doel, die snel ronddraait en vervaagt (de uithaal).
+        const angle = Math.atan2(fx.to.x - fx.from.x, fx.to.z - fx.from.z);
+        mesh.position.set(fx.from.x + Math.sin(angle) * 0.5, fx.from.y, fx.from.z + Math.cos(angle) * 0.5);
+        mesh.rotation.set(Math.PI / 2, 0, -angle + Math.PI * 0.05 - t * Math.PI * 0.9);
+        fx.material.opacity = 0.9 * (1 - t);
+      } else if (fx.kind === "travel") {
+        mesh.position.lerpVectors(fx.from, fx.to, t);
+        mesh.lookAt(fx.to);
+        fx.material.opacity = 0.95;
+      } else {
+        mesh.position.copy(fx.to);
+        const size = 0.5 + t * 1.1;
+        mesh.scale.set(size, size, size);
+        fx.material.opacity = 0.85 * (1 - t);
+      }
+    }
+    if (combatFx.length) requestRender("combat-fx");
   }
 
   function setRuntimeTargetAnimation(instanceId, stateName) {
@@ -19266,6 +19357,7 @@ function resolveChunkDebugCenter(policy) {
     setRuntimeTargets: setRuntimeTargets,
     setRuntimeTargetPose: setRuntimeTargetPose,
     setRuntimeTargetAnimation: setRuntimeTargetAnimation,
+    playCombatFx: playCombatFx,
     registerRuntimeAssets: registerRuntimeAssets,
     setRuntimeTargetNameplatesVisible: setRuntimeTargetNameplatesVisible,
     setEntityHidden: setEntityHidden,

@@ -5,7 +5,7 @@
 // Alles schrijft naar het quest-document (veld steps) via de opslag van de Werkbank (met Ctrl+Z).
 // De quest-check is dezelfde als bij SAVE TO GAME (shared/quest-graph.js).
 import { api, el } from "./canonical-api.js";
-import { CHOICE_DECIDE, ESCORT_DEATH, ESCORT_LIMITS, ESCORT_WALK, OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_CHOICE_LIMITS, QUEST_FLAG_LIMITS, QUEST_LIMITS, QUEST_NEARBY_M, QUEST_SPAWN_AUDIENCE, QUEST_SPAWN_DESPAWN, QUEST_SPAWN_LIMITS, QUEST_START_LIMITS, QUEST_START_MODES, QUEST_REPEAT, QUEST_TIMER_LIMITS, REQUIREMENT_KINDS, REQUIREMENT_MATCH, RULE_THEN, RULE_WHEN, STEP_MAP_SHOW, STEP_MATCH, TIMER_LATE, TIMER_LOGOUT, TIMER_SHARE, TIMER_START, WORLD_EVENT_LIMITS, durationText, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, questStartIssues, questRepeatOf, questStartMode, spawnName, stepsFromSimple, worldEventEvery, worldEventLasts } from "../shared/quest-graph.js?v=20261108-quest24";
+import { CHOICE_DECIDE, ESCORT_DEATH, ESCORT_LIMITS, ESCORT_WALK, OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_CHOICE_LIMITS, QUEST_FLAG_LIMITS, QUEST_LIMITS, QUEST_NEARBY_M, QUEST_SPAWN_AUDIENCE, QUEST_SPAWN_DESPAWN, QUEST_SPAWN_LIMITS, QUEST_START_LIMITS, QUEST_START_MODES, QUEST_REPEAT, QUEST_TIMER_LIMITS, REQUIREMENT_KINDS, REQUIREMENT_MATCH, RULE_THEN, RULE_WHEN, STEP_MAP_SHOW, STEP_MATCH, TIMER_LATE, TIMER_LOGOUT, TIMER_SHARE, TIMER_START, WORLD_EVENT_LIMITS, durationText, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, questStartIssues, questRepeatOf, questStartMode, spawnName, stepsFromSimple, worldEventEvery, worldEventLasts } from "../shared/quest-graph.js?v=20261110-fase5";
 
 const TABS = [["start", "🚪 Start"], ["stappen", "🪜 Stappen"], ["verschijnen", "👾 Verschijnen"], ["testen", "🧪 Testen"]];
 const SIMPLE_FIELDS = ["goal", "itemRef", "amount", "targetNpcRef"];
@@ -1020,7 +1020,7 @@ function objectiveRow(state, step, objective, issues, change, remove, steps = []
 const END_REWARD_AMOUNT = { key: "amount", label: "Aantal", icon: "🔢", min: 1, max: QUEST_LIMITS.amount, default: 1 };
 function endRewardBox(state, step, change) {
   const rewards = Array.isArray(step.rewards) ? step.rewards : [];
-  const list = state.bench.refListControl({ refKinds: ["item_definition", "currency"], columns: [END_REWARD_AMOUNT], maxItems: QUEST_CHOICE_LIMITS.rewards }, rewards,
+  const list = state.bench.refListControl({ refKinds: ["item_definition", "currency", "ability"], columns: [END_REWARD_AMOUNT], maxItems: QUEST_CHOICE_LIMITS.rewards }, rewards,
     (rows) => change("beloning einde", (target) => {
       if (rows && rows.length) target.rewards = rows;
       else delete target.rewards;

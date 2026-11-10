@@ -1,12 +1,12 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261109-kantelen1";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261110-fase5";
 import { nextPlayerRouteWaypoint } from "../shared/player-path-client.js?v=20261108-roads9";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20261106-perf1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
 import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../shared/protocol-v1.js?v=20261025-f2-client1";
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
-import { createActorPresentation } from "./actor-presentation.js?v=20261110-draaien1";
-import { createGkHud } from "./hud/gk-hud.js?v=20261108-portals3";
+import { createActorPresentation } from "./actor-presentation.js?v=20261110-fase5";
+import { createGkHud } from "./hud/gk-hud.js?v=20261110-fase5";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -354,6 +354,13 @@ function handleActorMessage(message) {
     return true;
   }
   if (actorPresentation.applyEvent(message)) syncRuntimeTargets();
+  // Fase 5: de animatie van een klap (speler op vijand, of vijand op speler).
+  if ((message.e === "hit" || message.e === "death") && message.by && !String(message.by).startsWith("actor:")) {
+    playCombatFxFor(String(message.by), String(message.id), message.ab || null, message.sk === 1, message.sb === 1, "damage");
+  } else if (message.e === "attack" && message.target && state.runtime && typeof state.runtime.playCombatFx === "function") {
+    const target = String(message.target);
+    state.runtime.playCombatFx({ from: String(message.id), to: target === state.player?.id ? "self" : target.startsWith("actor:") ? target : "player:" + target, style: "slash", tone: "damage" });
+  }
   // Healing (2-11): kleine zwevende getallen boven de vijand (schade rood, genezen groen) en boven andere spelers.
   if (gkHud && Number(message.amount) > 0) {
     if (message.e === "hit" || message.e === "death") gkHud.worldFloat(message.id, "-" + Math.round(Number(message.amount)), "dmg");
@@ -675,7 +682,10 @@ const state = {
     selectedTargetId: "",
     lastRangeRenderAt: 0,
     pendingTargetAction: null,
-    reloadQueued: false
+    reloadQueued: false,
+    // Fase 5: vak 1 slaat vanzelf door op deze vijand; een vaardigheid wacht kort als er net een actie loopt.
+    autoAttack: { targetId: "", timer: 0 },
+    queuedSkill: null
   },
   node04: {
     snapshot: null,
@@ -7189,22 +7199,6 @@ function updateNode03RangeDom() {
       button.disabled = state.node03.actionInFlight || !target.available;
     }
   }
-  for (const button of Array.from(elements.root.querySelectorAll("[data-node03-hotbar-slot]"))) {
-    const abilityId = button.dataset.node03AbilityId || "";
-    const target = nearestNode03TargetForAbility(abilityId);
-    button.classList.toggle("node03HotbarButton--outOfRange", target?.inRange === false);
-    button.classList.toggle("node03HotbarButton--selected", target?.selected === true);
-    if (target) {
-      button.dataset.node03Action = target.action;
-      button.dataset.node03TargetId = target.instanceId;
-      button.disabled = state.node03.actionInFlight || !target.available;
-      button.title = (button.dataset.node03AbilityLabel || target.prompt || target.action) + " - " + (target.displayName || target.instanceId) + (target.inRange === false ? " (move closer)" : "");
-    } else {
-      delete button.dataset.node03Action;
-      delete button.dataset.node03TargetId;
-      button.disabled = true;
-    }
-  }
 }
 
 function selectNode03Target(targetId) {
@@ -7278,82 +7272,6 @@ function maybeRunPendingNode03TargetAction(reason = "range") {
   return true;
 }
 
-function node03TargetMatchesAbility(target, abilityId) {
-  if (!target || target.available === false) return false;
-  if (abilityId === "ability.basic_attack" || abilityId === "ability.attack_1") return target.action === "attack";
-  if (abilityId === "ability.gather_sun_crystal") return target.action === "gather";
-  return false;
-}
-
-function nearestNode03TargetForAbility(abilityId) {
-  const targets = node03DecoratedInteractionTargets()
-    .filter(function (target) { return node03TargetMatchesAbility(target, abilityId); })
-    .sort(function (left, right) {
-      if (left.inRange !== right.inRange) return left.inRange ? -1 : 1;
-      return num(left.distance, 999999) - num(right.distance, 999999);
-    });
-  const selected = targets.find(function (target) {
-    return String(target?.instanceId || "") === String(state.node03.selectedTargetId || "");
-  });
-  return selected || targets[0] || null;
-}
-
-function renderNode03Hotbar(module, snapshot) {
-  const card = node03ModuleCard(module, "node03Module--hotbar");
-  const slots = Array.isArray(snapshot?.abilities?.loadout) ? snapshot.abilities.loadout : [];
-  const slotCount = Math.max(1, Math.min(12, num(module.slotCount, 6)));
-  for (let index = 0; index < slotCount; index += 1) {
-    const slot = slots.find(function (candidate) { return candidate.slotIndex === index; }) || null;
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "node03HotbarButton";
-    button.title = slot?.displayName || "Empty";
-    if (module.showKeybinds !== false) {
-      const key = document.createElement("span");
-      key.className = "node03HotbarKey";
-      key.textContent = String(index + 1);
-      button.appendChild(key);
-    }
-    const name = document.createElement("strong");
-    name.textContent = slot?.displayName ? slot.displayName.slice(0, 2).toUpperCase() : "-";
-    button.appendChild(name);
-    button.dataset.node03HotbarSlot = String(index);
-    if (slot?.abilityId) button.dataset.node03AbilityId = slot.abilityId;
-    if (slot?.displayName) button.dataset.node03AbilityLabel = slot.displayName;
-    const target = nearestNode03TargetForAbility(slot?.abilityId);
-    if (target) {
-      button.dataset.node03Action = target.action;
-      button.dataset.node03TargetId = target.instanceId;
-      if (target.inRange === false) button.classList.add("node03HotbarButton--outOfRange");
-      if (target.selected === true) button.classList.add("node03HotbarButton--selected");
-      button.title = (slot?.displayName || target.prompt || target.action) + " - " + (target.displayName || target.instanceId) + (target.inRange === false ? " (move closer)" : "");
-      button.disabled = state.node03.actionInFlight || !target.available;
-    } else {
-      button.disabled = true;
-    }
-    card.appendChild(button);
-  }
-  return card;
-}
-
-function node03HotbarSlotIndexForKey(code) {
-  const text = String(code || "");
-  const digit = /^Digit([1-9])$/.exec(text) || /^Numpad([1-9])$/.exec(text);
-  if (!digit) return -1;
-  return Number(digit[1]) - 1;
-}
-
-function triggerNode03HotbarSlot(slotIndex) {
-  if (state.node03.actionInFlight || !state.node03.snapshot) return false;
-  const slots = Array.isArray(state.node03.snapshot?.abilities?.loadout) ? state.node03.snapshot.abilities.loadout : [];
-  const slot = slots.find(function (candidate) { return candidate.slotIndex === slotIndex; }) || null;
-  if (!slot?.abilityId) return false;
-  const target = nearestNode03TargetForAbility(slot.abilityId);
-  if (!target) return false;
-  runNode03Action(target.action, target.instanceId);
-  return true;
-}
-
 function renderNode03Interactions(module, snapshot) {
   const card = node03ModuleCard(module, "node03Module--interactions");
   const head = document.createElement("div");
@@ -7419,7 +7337,7 @@ function renderNode03Module(module, snapshot) {
   if (module.nodeType === "wallet_hud") return renderNode03Wallet(module, snapshot);
   if (module.nodeType === "inventory_hud") return renderNode03Inventory(module, snapshot);
   if (module.nodeType === "equipment_hud") return renderNode03Equipment(module, snapshot);
-  if (module.nodeType === "hotbar_hud") return renderNode03Hotbar(module, snapshot);
+  // Fase 5: de actiebalk (vak 1, 2 en 3) tekent de nieuwe HUD (gk-hud.js); de oude node-hotbar is weg.
   if (module.nodeType === "interaction_hud") return renderNode03Interactions(module, snapshot);
   if (module.nodeType === "death_respawn_hud") return renderNode03Death(module, snapshot);
   return null;
@@ -7623,6 +7541,8 @@ async function runNode03Action(action, targetId, extra = {}) {
       return;
     }
   }
+  // Fase 5: zelf aanvallen (klik, toets 1) zet de auto-aanval op deze vijand.
+  if (normalizedAction === "attack" && extra.autoSwing !== true && targetId) startAutoAttack(targetId);
   state.node03.actionInFlight = true;
   state.node03.lastError = "";
   if (isUnstuck || isPortalTravel) {
@@ -7634,6 +7554,7 @@ async function runNode03Action(action, targetId, extra = {}) {
   // De server beslist of je bij het portal bent; wacht tot de serverpositie (niet alleen je scherm) in bereik is.
   if (isTravel) await waitForServerPositionInRange(currentTarget, PORTAL_SERVER_RANGE_WAIT_MS);
   if (isTravel) beginPortalTravel(currentTarget);
+  let gotSnapshot = false;
   try {
     const response = await gameFetch(isTravel ? "/api/game/travel/zone-link" : "/api/game/node03/action", {
       method: "POST",
@@ -7649,6 +7570,10 @@ async function runNode03Action(action, targetId, extra = {}) {
         amount: extra.amount === null || extra.amount === undefined ? null : Number(extra.amount),
         itemInstanceId: extra.itemInstanceId || null,
         slotId: extra.slotId || null,
+        slot: extra.slot === null || extra.slot === undefined ? null : Number(extra.slot),
+        abilityId: extra.abilityId || null,
+        level: extra.level === null || extra.level === undefined ? null : Number(extra.level),
+        xp: extra.xp === null || extra.xp === undefined ? null : Number(extra.xp),
         operationId: "node03:" + state.net.clientSessionId + ":" + Date.now() + ":" + Math.random().toString(36).slice(2, 8)
       })
     });
@@ -7657,6 +7582,7 @@ async function runNode03Action(action, targetId, extra = {}) {
       return;
     }
     const data = await response.json().catch(function () { return null; });
+    gotSnapshot = Boolean(data?.snapshot);
     if (!response.ok || !data || data.ok !== true) {
       const serverMessage = data?.message || "Spelactie mislukt.";
       const pendingAttempt = Math.max(0, Number(extra.pendingAttempt || 0) || 0);
@@ -7674,13 +7600,26 @@ async function runNode03Action(action, targetId, extra = {}) {
         return;
       }
       state.node03.lastError = serverMessage;
-      showHudError(state.node03.lastError);
+      if (normalizedAction === "attack") stopAutoAttack();
+      if (normalizedAction === "skill" && gkHud && typeof gkHud.skillFailed === "function") gkHud.skillFailed(Number(extra.slot));
+      // Een doorslaande klap die net niet mag (even te ver, muur) is geen pop-up waard; de knop stopt met gloeien.
+      if (extra.autoSwing === true) showGameHudDialogueNotice(serverMessage, { title: "Melding" });
+      else showHudError(state.node03.lastError);
       return;
     }
     if (currentTarget?.instanceId) clearNode03PendingTargetAction(currentTarget.instanceId);
     state.node03.lastActionMessage = data.message || (isTravel ? "Travel complete." : "");
     keepNewestActionMessage("node03");
-    if (state.node03.lastActionMessage) showGameHudDialogueNotice(state.node03.lastActionMessage, { title: "Melding" });
+    // Fase 5: een gewone doorslaande klap toont alleen het getal boven de vijand; verslagen, schild en vaardigheden wel als melding.
+    const quietSwing = extra.autoSwing === true && data.stop !== true && !/schild/i.test(String(data.message || ""));
+    if (state.node03.lastActionMessage && !quietSwing && !(normalizedAction === "attack" && data.performed !== true && data.cooldownMs)) {
+      showGameHudDialogueNotice(state.node03.lastActionMessage, { title: "Melding" });
+    }
+    if (normalizedAction === "attack") {
+      if (data.stop === true) stopAutoAttack();
+      else scheduleAutoAttack(num(data.cooldownMs, 0) || num(state.node03.snapshot?.skills?.auto?.cooldownMs, 1500));
+    }
+    if (normalizedAction === "skill" && data.performed !== true && num(data.cooldownMs, 0) > 0 && gkHud && typeof gkHud.skillFailed === "function") gkHud.skillFailed(Number(extra.slot));
     if (isTravel) {
       applyInstantTravelResponse(data);
       await loadSessionState({
@@ -7707,8 +7646,97 @@ async function runNode03Action(action, targetId, extra = {}) {
   } finally {
     if (isTravel && state.portalTravel.active) finishPortalTravel();
     state.node03.actionInFlight = false;
-    await loadNode03State({ silent: true });
+    // Fase 5: aanvallen en vaardigheden geven de nieuwe stand al mee; geen extra verzoek per klap.
+    if (!(gotSnapshot && NODE03_SNAPSHOT_ACTIONS.has(normalizedAction))) await loadNode03State({ silent: true });
+    runQueuedSkill();
   }
+}
+
+// ---- Fase 5: auto-aanval (vak 1) en vaardigheden (vak 2 en 3) ----
+// De client vraagt alleen; de server controleert bereik, muur, wachttijd en schade (zie node03 attack/skill).
+const NODE03_SNAPSHOT_ACTIONS = new Set(["attack", "skill", "loadout_set", "maker_level", "maker_xp"]);
+const AUTO_ATTACK_SLACK_M = 1.0;
+
+function autoAttackTarget() {
+  const id = String(state.node03.autoAttack.targetId || "");
+  if (!id) return null;
+  const target = node03TargetWithClientRange(node03TargetById(id));
+  return target && target.available !== false && target.action === "attack" ? target : null;
+}
+
+function startAutoAttack(targetId) {
+  const auto = state.node03.autoAttack;
+  if (auto.targetId === String(targetId)) return;
+  if (auto.timer) window.clearTimeout(auto.timer);
+  auto.timer = 0;
+  auto.targetId = String(targetId);
+}
+
+function stopAutoAttack(message) {
+  const auto = state.node03.autoAttack;
+  if (auto.timer) window.clearTimeout(auto.timer);
+  auto.timer = 0;
+  if (!auto.targetId) return;
+  auto.targetId = "";
+  if (message) showGameHudDialogueNotice(message, { title: "Melding" });
+}
+
+function scheduleAutoAttack(delayMs) {
+  const auto = state.node03.autoAttack;
+  if (!auto.targetId) return;
+  if (auto.timer) window.clearTimeout(auto.timer);
+  auto.timer = window.setTimeout(autoAttackSwing, Math.max(120, Math.round(num(delayMs, 1500)) + 30));
+}
+
+function autoAttackSwing() {
+  const auto = state.node03.autoAttack;
+  auto.timer = 0;
+  if (!auto.targetId) return;
+  if (isNode03Defeated()) { stopAutoAttack(); return; }
+  const target = autoAttackTarget();
+  if (!target) { stopAutoAttack(); return; }
+  const position = state.predictedPosition || state.position;
+  const reach = Math.max(0, num(target.range, 0)) + Math.max(0, num(target.radius, 0)) + AUTO_ATTACK_SLACK_M;
+  if (position && Math.hypot(num(position.x, 0) - num(target.x, 0), num(position.z, 0) - num(target.z, 0)) > reach) {
+    stopAutoAttack("Te ver weg: auto-aanval gestopt.");
+    return;
+  }
+  if (state.node03.actionInFlight) { scheduleAutoAttack(120); return; }
+  runNode03Action("attack", auto.targetId, { skipMoveToTarget: true, autoSwing: true });
+}
+
+// Vak 2 of 3: bij schade gaat de vaardigheid naar je auto-aanval-doel of de aangeklikte vijand (anders kiest de server);
+// bij genezen naar het gekozen teamlid (of de server kiest de meest gewonde).
+function useSkillSlot(slot, targetId, kind) {
+  let target = targetId || null;
+  if (kind !== "heal" && !target) {
+    const selected = String(state.node03.selectedTargetId || "");
+    target = state.node03.autoAttack.targetId || (selected.startsWith("actor:") ? selected : null);
+  }
+  if (state.node03.actionInFlight) {
+    state.node03.queuedSkill = { slot: Number(slot), targetId: target, at: performance.now() };
+    return;
+  }
+  runNode03Action("skill", target, { slot: Number(slot), skipMoveToTarget: true });
+}
+
+function runQueuedSkill() {
+  const queued = state.node03.queuedSkill;
+  if (!queued) return;
+  state.node03.queuedSkill = null;
+  if (performance.now() - queued.at > 1500 || state.node03.actionInFlight) return;
+  runNode03Action("skill", queued.targetId, { slot: queued.slot, skipMoveToTarget: true });
+}
+
+// Wat iedereen in de buurt ziet: uithaal, spreuk-gloed of schot, plus de naam van de vaardigheid boven wie hem doet.
+function playCombatFxFor(byPlayerId, targetKey, abilityId, isSkill, shieldBroke, tone) {
+  if (!state.runtime || typeof state.runtime.playCombatFx !== "function") return;
+  const from = byPlayerId && byPlayerId === state.player?.id ? "self" : byPlayerId ? "player:" + byPlayerId : null;
+  const info = abilityId ? actorPresentation.ability(abilityId) : null;
+  state.runtime.playCombatFx({ from: from || targetKey, to: targetKey, style: info?.animStyle || (tone === "heal" ? "cast" : "slash"), tone: tone === "heal" ? "heal" : "damage" });
+  if (!gkHud) return;
+  if (isSkill && from && info?.displayName) gkHud.worldFloat(from, info.displayName + "!", "skill");
+  if (shieldBroke) gkHud.worldFloat(targetKey, "Schild gebroken!", "skill");
 }
 
 // ---- NODE-04 quest/dialogue HUD: rendered from published quest_tracker/dialogue/notification nodes ----
@@ -12638,6 +12666,9 @@ function handleSocketMessage(raw) {
   }
   // Healing (2-11): een speler geneest een ander: groen getal boven die speler.
   if (message.type === "fx") {
+    if (message.target && message.tone === "heal" && message.by) {
+      playCombatFxFor(String(message.by), message.target === state.player?.id ? "self" : "player:" + message.target, message.ab || null, Boolean(message.ab), false, "heal");
+    }
     if (message.target && Number(message.amount) > 0 && message.tone === "heal") nudgePartyHp(message.target, Number(message.amount));
     if (gkHud && message.target && message.target !== state.player?.id && Number(message.amount) > 0) {
       gkHud.worldFloat("player:" + message.target, "+" + Math.round(Number(message.amount)), message.tone === "heal" ? "heal" : "dmg");
@@ -13370,7 +13401,8 @@ function bindKeyboardControls() {
       event.preventDefault();
       return;
     }
-    const hotbarSlot = node03HotbarSlotIndexForKey(event.code);
+    // Fase 5: toetsen 1, 2 en 3 regelt de HUD (vak 1 auto-aanval, vak 2 en 3 vaardigheden); hier alleen: niet bij verslagen.
+    const hotbarSlot = /^(Digit|Numpad)[1-3]$/.test(String(event.code || "")) ? 1 : -1;
     const sprintKey = event.code === "ShiftLeft" || event.code === "ShiftRight";
     const movementKey = event.code === "KeyW" || event.code === "ArrowUp"
       || event.code === "KeyS" || event.code === "ArrowDown"
@@ -13380,10 +13412,6 @@ function bindKeyboardControls() {
       event.preventDefault();
       clearLocalMovementForDefeat({ force: true, sendStop: true });
       renderNode04Hud();
-      return;
-    }
-    if (hotbarSlot >= 0 && triggerNode03HotbarSlot(hotbarSlot)) {
-      event.preventDefault();
       return;
     }
     if (sprintKey) {
@@ -14100,6 +14128,7 @@ function ensureGkHud() {
         modules: gkHudModules(),
         player: gkHudPlayer(),
         isAdmin: state.node03.snapshot?.viewer?.isAdmin === true,
+        autoAttack: state.node03.autoAttack.targetId || null,
         // MMO (3-11): je groep en openstaande uitnodigingen.
         party: state.party.view,
         partyInvites: state.party.invites,
@@ -14143,6 +14172,8 @@ function ensureGkHud() {
       return stationId ? node05CraftingStations().find(function (station) { return station.stationId === stationId; }) || null : null;
     },
     run03: function (action, targetId, extra) { return runNode03Action(action, targetId, extra || {}); },
+    // Fase 5: vak 2 en 3.
+    useSkill: function (slot, targetId, kind) { return useSkillSlot(slot, targetId, kind); },
     // Portals (8-11): de server kijkt of je dichtbij bent (vrijspelen) en of je mag reizen.
     portalUnlock: function (portalId) { return runNode03Action("portal_unlock", portalId, { skipMoveToTarget: true }); },
     portalTravel: function (portalId) { return runNode03Action("portal_travel", portalId, { skipMoveToTarget: true }); },

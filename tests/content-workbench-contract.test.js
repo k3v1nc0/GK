@@ -133,7 +133,6 @@ test("W3 story and Stat Block relations follow real ownership edges", function (
       node("step", "quest_step", { stepId: "quest_step.ore.1", displayName: "Collect", sequenceIndex: 10 }, "campaign"),
       node("objective", "objective_collect", { objectiveId: "objective.ore", itemRef: "item.ore", requiredAmount: 2 }, "campaign"),
       node("currency_action", "action_give_currency", { actionId: "action.gold", currencyRef: "currency.gold", amountMinor: 10 }, "campaign"),
-      node("ability_action", "action_unlock_ability", { actionId: "action.dash", abilityRef: "ability.dash", rank: 1 }, "campaign"),
       node("dialogue", "dialogue_definition", { dialogueId: "dialogue.bram", displayName: "Bram Intro", targetRef: "target.bram" }, "campaign")
     ],
     edges: [
@@ -143,7 +142,6 @@ test("W3 story and Stat Block relations follow real ownership edges", function (
       { id: "e4", fromNodeId: "step", fromPort: "questStep", toNodeId: "quest", toPort: "steps" },
       { id: "e5", fromNodeId: "objective", fromPort: "objective", toNodeId: "step", toPort: "objectives" },
       { id: "e6", fromNodeId: "currency_action", fromPort: "rewardEntry", toNodeId: "step", toPort: "rewards" },
-      { id: "e7", fromNodeId: "ability_action", fromPort: "rewardEntry", toNodeId: "step", toPort: "rewards" },
       { id: "e8", fromNodeId: "dialogue", fromPort: "dialogueDef", toNodeId: "quest", toPort: "startDialogue" }
     ]
   };
@@ -152,7 +150,6 @@ test("W3 story and Stat Block relations follow real ownership edges", function (
   assert.ok(kinds.has("quest_npc:npc"));
   assert.ok(kinds.has("quest_item:item"));
   assert.ok(kinds.has("quest_currency:gold"));
-  assert.ok(kinds.has("quest_ability:ability"));
   assert.ok(kinds.has("quest_dialogue:dialogue"));
   assert.ok(index.byNodeId.get("dialogue").out.some(function (relation) { return relation.kind === "dialogue_npc" && relation.to === "npc"; }));
   assert.ok(index.byNodeId.get("block").out.some(function (relation) { return relation.kind === "stat_block_stat" && relation.to === "stat" && relation.detail === "125"; }));

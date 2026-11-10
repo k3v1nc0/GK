@@ -5,12 +5,14 @@
 // - Praten, handelen en maken zijn tijdelijke standen bovenop het paneel. Daarna (en na een gevecht of een
 //   herlaad) sta je weer precies waar je was: zelfde paneel, tabblad, filter, item en scrollplek.
 // Dit bestand tekent alleen. Alle spelregels blijven op de server; game.js geeft de data en de acties (api).
-import { ICON_PATHS } from "./gk-icon-paths.js?v=20261103-chat1";
+import { ICON_PATHS } from "./gk-icon-paths.js?v=20261110-fase5";
 import { createHudMinimap } from "./gk-minimap.js?v=20261108-portals3";
 import { formatDuration } from "../../shared/effect-math.js?v=20261102-heal2";
 
 const STORE_KEY = "gk:hud:v1";
 const SVG_NS = "http://www.w3.org/2000/svg";
+// Fase 5: slepen van een vaardigheid uit het boek naar vak 2 of 3.
+const SKILL_MIME = "text/gk-skill";
 
 // Kleurverlopen voor de iconen (boven licht, onder donker), zodat de silhouetten op game-iconen lijken.
 const THEMES = {
@@ -32,7 +34,9 @@ const ICON_THEME = {
   person: "plain", crown: "gold", "stone-pile": "stone", ore: "stone", minerals: "gem", meat: "blood", "cheese-wedge": "gold",
   "water-drop": "mana", "treasure-map": "parchment", expand: "plain", contract: "plain", "magic-portal": "arcane", palette: "arcane",
   "three-friends": "sky", "shaking-hands": "skin",
-  "chat-bubble": "sky", conversation: "plain", lips: "arcane", silenced: "blood", "paper-plane": "sky"
+  "chat-bubble": "sky", conversation: "plain", lips: "arcane", silenced: "blood", "paper-plane": "sky",
+  // Fase 5: vaardigheden.
+  "spell-book": "arcane", padlock: "steel", "magic-swirl": "arcane", "fire-ray": "fire", "shield-reflect": "steel"
 };
 // Kleuren van de iconen (Instellingen): "color" = elk icoon zijn eigen kleur, de rest één kleur voor alles.
 const ICON_COLORS = [["color", "Kleur"], ["gold", "Goud"], ["ice", "IJs"], ["plain", "Wit"]];
@@ -40,6 +44,8 @@ const ICON_COLORS = [["color", "Kleur"], ["gold", "Goud"], ["ice", "IJs"], ["pla
 const TABS = [
   { id: "bag", icon: "knapsack", title: "Tas", module: "inventory_hud", key: "KeyB" },
   { id: "gear", icon: "visored-helm", title: "Uitrusting", module: "equipment_hud", key: "KeyC" },
+  // Fase 5: het vaardighedenboek (vak 1 auto-aanval, vak 2 en 3 zelf indelen).
+  { id: "skills", icon: "spell-book", title: "Vaardigheden", module: "hotbar_hud", key: "KeyK" },
   { id: "quests", icon: "scroll-unfurled", title: "Quests", module: "quest_tracker_hud", key: "KeyL" },
   { id: "money", icon: "two-coins", title: "Geld", module: "wallet_hud", key: null },
   { id: "chars", icon: "pointy-hat", title: "Characters", module: null, key: "KeyP" },
@@ -360,6 +366,9 @@ export function createGkHud(api) {
     mapAt: 0,
     targetsAt: 0,
     attackTarget: null,
+    skillReadyAt: {},       // Fase 5: wachttijd per vaardigheid (zelf gestart)
+    skillSnapAt: 0,
+    skillSnapRef: null,
     doTarget: null,
     doKind: "",
     farTradeSince: 0,
@@ -466,16 +475,38 @@ export function createGkHud(api) {
   const toasts = h("div", { class: "gkToasts", "aria-live": "polite" });
 
   const attackLabel = h("span", { class: "gkActLabel" });
-  const attackBtn = h("button", { type: "button", class: "gkAct gkAct--attack", "data-act": "attack", title: "Aanvallen (1)" }, [ico("crossed-swords"), attackLabel, h("span", { class: "gkKey", text: "1" })]);
+  // Fase 5: vak 1 = de auto-aanval van je klasse (slaat vanzelf door zolang je een doel hebt).
+  const attackIcon = h("span", { style: "display:contents" }, [ico("crossed-swords")]);
+  const attackBtn = h("button", { type: "button", class: "gkAct gkAct--attack", "data-act": "attack", title: "Aanvallen (1)" }, [attackIcon, attackLabel, h("span", { class: "gkKey", text: "1" })]);
   const doLabel = h("span", { class: "gkActLabel" });
   const doIcon = h("span", { style: "display:contents" }, [ico("hand")]);
   const doBtn = h("button", { type: "button", class: "gkAct gkAct--do", "data-act": "do", title: "Doen: praten, oppakken of verzamelen (E)" }, [doIcon, doLabel, h("span", { class: "gkKey", text: "E" })]);
   const bagAct = h("button", { type: "button", class: "gkAct gkAct--bag", "data-act": "bag", title: "Tas (B)" }, [ico("knapsack")]);
-  // Healing (2-11): de genees-spreuk van je klasse (toets 2). Kiest zelf jou of de meest gewonde speler in de buurt.
-  const healLabel = h("span", { class: "gkActLabel" });
-  const healCd = h("em", { class: "gkActCd", hidden: true });
-  const healBtn = h("button", { type: "button", class: "gkAct gkAct--heal", "data-act": "heal", title: "Genezen (2)", hidden: true }, [ico("healing"), healLabel, healCd, h("span", { class: "gkKey", text: "2" })]);
-  const actions = h("div", { class: "gkActions" }, [bagAct, doBtn, healBtn, attackBtn]);
+  // Fase 5: vak 2 en 3 = vaardigheden die je zelf indeelt (slepen uit het 📖 boek of daar op 2/3 tikken).
+  // Een genees-vaardigheid kiest zelf jou of de meest gewonde speler in de buurt (of het teamlid dat je linksboven aantikte).
+  function slotButton(slot) {
+    const label = h("span", { class: "gkActLabel" });
+    const cd = h("em", { class: "gkActCd", hidden: true });
+    const icon = h("span", { style: "display:contents" }, [ico("spell-book")]);
+    const btn = h("button", { type: "button", class: "gkAct gkAct--skill gkEmpty", "data-act": "skill", "data-id": String(slot), title: "Vak " + slot, hidden: true },
+      [icon, label, cd, h("span", { class: "gkKey", text: String(slot) })]);
+    btn.addEventListener("dragover", function (event) {
+      if (!Array.from(event.dataTransfer?.types || []).includes(SKILL_MIME)) return;
+      event.preventDefault();
+      btn.classList.add("gkDrop");
+    });
+    btn.addEventListener("dragleave", function () { btn.classList.remove("gkDrop"); });
+    btn.addEventListener("drop", function (event) {
+      btn.classList.remove("gkDrop");
+      const abilityId = event.dataTransfer?.getData(SKILL_MIME) || "";
+      if (!abilityId) return;
+      event.preventDefault();
+      putSkill(slot, abilityId);
+    });
+    return { slot, btn, label, cd, icon, sig: "" };
+  }
+  const slotUi = { 2: slotButton(2), 3: slotButton(3) };
+  const actions = h("div", { class: "gkActions" }, [bagAct, doBtn, slotUi[3].btn, slotUi[2].btn, attackBtn]);
   // Kevin 7-11: ongelezen chat als getal op de tas (het losse chat-icoontje linksonder is weg).
   const bagUnread = h("span", { class: "gkChatUnread", hidden: true });
   const bagBtn = h("button", { type: "button", class: "gkBagBtn", title: "Tas (B)" }, [h("i", { "data-act": "bag" }, [ico("knapsack"), bagUnread]), h("em", { "data-act": "grow", text: "‹", title: "Iconen tonen" })]);
@@ -534,6 +565,15 @@ export function createGkHud(api) {
 
   const rail = h("nav", { class: "gkRail", "aria-label": "Paneel" });
   const sheet = h("section", { class: "gkSheet" });
+  // Fase 5: een vaardigheid uit het boek oppakken (slepen naar vak 2 of 3); de vakken lichten dan op.
+  sheet.addEventListener("dragstart", function (event) {
+    const card = event.target?.closest?.("[data-drag-skill]");
+    if (!card || !event.dataTransfer) return;
+    event.dataTransfer.setData(SKILL_MIME, card.dataset.dragSkill);
+    event.dataTransfer.effectAllowed = "move";
+    root.classList.add("gkDragSkill");
+  });
+  sheet.addEventListener("dragend", function () { root.classList.remove("gkDragSkill"); });
   // Paneel gesplitst: boven het tabblad (tas, quests…), onder de chat of het gesprek met een NPC.
   const dock = h("div", { class: "gkDock" }, [talk, chatBox]);
   // Aan de vrije rand van het paneel: links in liggende stand, boven in staande stand.
@@ -821,7 +861,7 @@ export function createGkHud(api) {
     renderChat();
     if (ui.menu) renderMenu();
     renderEffects();
-    renderHeal();
+    renderSlots();
     renderToasts();
     renderTalk();
     renderDeath();
@@ -1833,32 +1873,81 @@ export function createGkHud(api) {
       if (button) button.disabled = left > 0 || Boolean(data().busy?.n03) ? true : false;
     }
   }
-  function renderHeal(now = performance.now()) {
-    const spell = data().s03?.healSpell || null;
-    const show = Boolean(spell) && has("hotbar_hud");
-    healBtn.hidden = !show;
-    if (!show) return;
-    healBtn.title = spell.displayName + (spell.manaCost ? " (" + spell.manaCost + " mana)" : "") + " (2)";
-    const left = Math.max(0, num(ui.healReadyAt) - now);
-    healCd.hidden = left <= 0;
-    if (left > 0) healCd.textContent = String(Math.ceil(left / 1000));
+  // ---- Fase 5: vak 1 (auto-aanval), vak 2 en 3 (vaardigheden) ----
+  function skillsData() { return data().s03?.skills || null; }
+  function skillById(abilityId) { return (skillsData()?.list || []).find(function (entry) { return entry.abilityId === abilityId; }) || null; }
+  function skillIcon(entry) { return entry?.icon || (entry?.kind === "heal" ? "healing" : "crossed-swords"); }
+  function renderSlots(now = performance.now()) {
+    const sk = skillsData();
+    if (ui.skillSnapRef !== data().s03) { ui.skillSnapRef = data().s03; ui.skillSnapAt = now; }
+    const show = has("hotbar_hud") && (sk?.list || []).length > 0;
     const mana = manaOf(data().s03);
-    healBtn.classList.toggle("gkIdle", left > 0 || (num(spell.manaCost) > 0 && mana.cur < num(spell.manaCost)));
+    for (const slot of [2, 3]) {
+      const u = slotUi[slot];
+      u.btn.hidden = !show;
+      if (!show) continue;
+      const entry = skillById(sk.slots?.[slot]);
+      const sig = entry ? entry.abilityId + "|" + skillIcon(entry) + "|" + entry.kind + "|" + entry.displayName : "empty";
+      if (u.sig !== sig) {
+        u.sig = sig;
+        u.icon.replaceChildren(ico(entry ? skillIcon(entry) : "spell-book"));
+        u.btn.classList.toggle("gkEmpty", !entry);
+        u.btn.classList.toggle("gkHealSlot", entry?.kind === "heal");
+        u.btn.title = entry ? entry.displayName + (entry.manaCost ? " (" + entry.manaCost + " mana)" : "") + " (" + slot + ")" : "Vak " + slot + " is leeg: sleep een vaardigheid uit het boek (K).";
+      }
+      // Wachttijd: wat de server meegaf (na opnieuw laden) of wat we net zelf startten.
+      const serverReady = entry && num(entry.readyInMs) > 0 ? num(ui.skillSnapAt) + num(entry.readyInMs) : 0;
+      const left = entry ? Math.max(0, Math.max(num(ui.skillReadyAt[entry.abilityId]), serverReady) - now) : 0;
+      u.cd.hidden = left <= 0;
+      if (left > 0) u.cd.textContent = String(Math.ceil(left / 1000));
+      u.btn.classList.toggle("gkIdle", !entry || left > 0 || (num(entry?.manaCost) > 0 && mana.cur < num(entry.manaCost)));
+    }
+    const auto = sk?.auto || null;
+    const autoIcon = skillIcon(auto);
+    if (ui.autoIconSig !== autoIcon) { ui.autoIconSig = autoIcon; attackIcon.replaceChildren(ico(autoIcon)); }
+    attackBtn.title = (auto?.displayName || "Aanvallen") + ": auto-aanval (1)";
+    attackBtn.classList.toggle("gkAuto", Boolean(data().autoAttack));
   }
+  function useSlot(slot) {
+    const sk = skillsData();
+    const entry = skillById(sk?.slots?.[slot]);
+    const u = slotUi[slot];
+    u.btn.classList.remove("gkFlash");
+    void u.btn.offsetWidth;
+    u.btn.classList.add("gkFlash");
+    ui.combatAt = performance.now();
+    if (!entry) { toast("Vak " + slot + " is leeg: zet er een vaardigheid op in het boek.", { icon: "spell-book", ms: 2500 }); openTab("skills"); return; }
+    const mana = manaOf(data().s03);
+    if (num(entry.manaCost) > 0 && mana.cur < num(entry.manaCost)) { toast("Te weinig mana.", { icon: "water-drop", ms: 2000 }); return; }
+    if (performance.now() < num(ui.skillReadyAt[entry.abilityId])) return;
+    ui.skillReadyAt[entry.abilityId] = performance.now() + num(entry.cooldownMs, 1500);
+    // MMO (3-11): gekozen teamlid (tik linksboven); anders kiest de server de meest gewonde speler in de buurt.
+    let targetId = null;
+    if (entry.kind === "heal") {
+      const mate = partyMates().find(function (m) { return m.id === ui.healTarget && m.online; });
+      targetId = mate ? "player:" + mate.id : null;
+    }
+    api.useSkill(slot, targetId, entry.kind);
+  }
+  // De server weigerde (te ver, muur, vergrendeld): de wachttijd op de knop mag weg.
+  function skillFailed(slot) {
+    const entry = skillById(skillsData()?.slots?.[slot]);
+    if (entry) ui.skillReadyAt[entry.abilityId] = 0;
+    renderSlots();
+  }
+  function putSkill(slot, abilityId) {
+    const entry = skillById(abilityId);
+    if (!entry) return;
+    if (!entry.unlocked) { toast(entry.displayName + ": " + lockLine(entry) + ".", { icon: "padlock", ms: 2500 }); return; }
+    api.run03("loadout_set", null, { slot, abilityId, skipMoveToTarget: true });
+  }
+  function lockLine(entry) {
+    return entry?.lockText ? "vergrendeld, " + entry.lockText : "vergrendeld";
+  }
+  // Tik op een teamlid + genezen (oude 💚-knop): de genees-vaardigheid op vak 2 of 3.
   function heal() {
     const spell = data().s03?.healSpell || null;
-    if (!spell) return;
-    ui.combatAt = performance.now();
-    healBtn.classList.remove("gkFlash");
-    void healBtn.offsetWidth;
-    healBtn.classList.add("gkFlash");
-    const mana = manaOf(data().s03);
-    if (num(spell.manaCost) > 0 && mana.cur < num(spell.manaCost)) { toast("Te weinig mana.", { icon: "water-drop", ms: 2000 }); return; }
-    if (performance.now() < num(ui.healReadyAt)) return;
-    ui.healReadyAt = performance.now() + num(spell.cooldownMs, 1500);
-    // MMO (3-11): gekozen teamlid (tik linksboven); anders kiest de server de meest gewonde speler in de buurt.
-    const mate = partyMates().find(function (entry) { return entry.id === ui.healTarget && entry.online; });
-    api.run03("heal", mate ? "player:" + mate.id : null, {});
+    if (spell && spell.slot) useSlot(Number(spell.slot));
   }
 
   function hitFeedback(amount) {
@@ -2160,6 +2249,7 @@ export function createGkHud(api) {
     if (view === "craft") parts.push(api.station(ui.craft?.stationId), d.s05?.crafting?.jobs);
     if (view === "quests") parts.push(d.s04?.quests, d.s04?.trackedQuest?.questId);
     if (view === "money") parts.push(d.s03?.currencies);
+    if (view === "skills") parts.push(d.s03?.skills?.slots, (d.s03?.skills?.list || []).map(function (e) { return e.abilityId + (e.unlocked ? "" : ":" + e.lock); }), d.s03?.skills?.auto, d.s03?.progression?.level, d.isAdmin);
     if (view === "chars") parts.push(ui.chars, ui.charsBusy);
     if (view === "settings") parts.push(d.isAdmin, d.defeated, store.floatNums, store.nameWorld, store.namePlayers, store.nameSelf,
       store.healthPing, store.healthTps, store.healthMspt, store.healthCpu, store.healthGpu, store.healthPacketLoss, d.healthDefaults);
@@ -2173,7 +2263,7 @@ export function createGkHud(api) {
     const scrollTop = viewChanged ? num(store.scroll[scrollKey]) : (oldBody ? oldBody.scrollTop : num(store.scroll[scrollKey]));
     const oldTop = sheet.querySelector(".gkSplitTop");
     const topScroll = !viewChanged && oldTop ? oldTop.scrollTop : 0;
-    const built = view === "bag" ? sheetBag() : view === "gear" ? sheetGear() : view === "quests" ? sheetQuests() : view === "money" ? sheetMoney()
+    const built = view === "bag" ? sheetBag() : view === "gear" ? sheetGear() : view === "skills" ? sheetSkills() : view === "quests" ? sheetQuests() : view === "money" ? sheetMoney()
       : view === "chars" ? sheetChars() : view === "settings" ? sheetSettings() : view === "logout" ? sheetLogout() : view === "trade" ? sheetTrade() : sheetCraft();
     replaceSheetChildren(built);
     if (!viewChanged) sheet.style.animation = "none";
@@ -2515,6 +2605,48 @@ export function createGkHud(api) {
     return [head("two-coins", "Geld"), body];
   }
 
+  // Fase 5: 📖 vaardigheden. Vak 1 = vaste auto-aanval; de rest sleep je naar vak 2 of 3 (of tik op 2/3).
+  // Vergrendeld zegt waarom. Een admin-account krijgt de maker-knoppen (level, XP).
+  function sheetSkills() {
+    const sk = skillsData();
+    const level = Math.max(1, num(data().s03?.progression?.level, 1));
+    const list = h("div", { class: "gkList" });
+    if (sk?.auto) list.append(skillCard(sk.auto, { auto: true }));
+    const entries = sk?.list || [];
+    if (!entries.length) list.append(emptyNote("spell-book", "Je klasse heeft nog geen vaardigheden voor vak 2 en 3. De maker zet ze in de editor bij Instellingen > Klassen."));
+    for (const entry of entries) list.append(skillCard(entry, { slots: sk.slots || {} }));
+    const intro = h("p", { class: "gkSkillIntro", text: "Level " + level + ". Vak 1 slaat vanzelf door zolang je een vijand als doel hebt. Sleep een vaardigheid naar vak 2 of 3, of tik op 2 of 3." });
+    const body = h("div", { class: "gkBody" }, [intro, list, data().isAdmin ? makerBox(level) : null]);
+    return [head("spell-book", "Vaardigheden"), body];
+  }
+  function skillCard(entry, opts) {
+    const facts = [opts.auto ? "Auto-aanval" : entry.kind === "heal" ? "Genezen" : "Schade", entry.manaCost ? entry.manaCost + " mana" : null,
+      (Math.round(num(entry.cooldownMs) / 100) / 10) + " s", (Math.round(num(entry.rangeM) * 10) / 10) + " m"].filter(Boolean).join(" · ");
+    const right = [];
+    if (opts.auto) right.push(h("span", { class: "gkSkillTag", text: "Vak 1" }));
+    else if (!entry.unlocked) right.push(h("button", { type: "button", class: "gkSkillLock", "data-act": "skill-locked", "data-id": entry.abilityId }, [ico("padlock"), h("span", { text: entry.lockText || "vergrendeld" })]));
+    else for (const slot of [2, 3]) {
+      right.push(h("button", { type: "button", class: "gkSkillPut" + (opts.slots[slot] === entry.abilityId ? " gkOn" : ""), "data-act": "skill-put", "data-id": entry.abilityId, "data-slot": String(slot), title: "Op vak " + slot + " zetten" }, [String(slot)]));
+    }
+    const drag = !opts.auto && entry.unlocked;
+    return h("div", { class: "gkCard gkSkill" + (!opts.auto && !entry.unlocked ? " gkLocked" : ""), draggable: drag ? "true" : null, "data-drag-skill": drag ? entry.abilityId : null,
+      title: drag ? "Sleep naar vak 2 of 3" : null }, [
+      h("span", { class: "gkSkillIco" }, [ico(skillIcon(entry))]),
+      h("div", { class: "gkSkillText" }, [h("strong", { text: entry.displayName }), h("small", { text: facts })]),
+      h("div", { class: "gkSkillBtns" }, right)
+    ]);
+  }
+  function makerBox(level) {
+    return h("div", { class: "gkCard gkMaker" }, [
+      h("strong", null, [ico("crown"), "Maker"]),
+      h("div", { class: "gkBtns" }, [
+        h("button", { type: "button", class: "gkBtn", "data-act": "maker-level", "data-id": String(Math.max(1, level - 1)), title: "Een level omlaag" }, ["Level −"]),
+        h("button", { type: "button", class: "gkBtn gkGo", "data-act": "maker-level", "data-id": String(level + 1), title: "Een level omhoog" }, ["Level +"]),
+        h("button", { type: "button", class: "gkBtn", "data-act": "maker-xp", "data-id": "100", title: "100 XP erbij" }, ["+100 XP"])
+      ])
+    ]);
+  }
+
   // Characters: per klasse een eigen character met eigen tas, level en plek. Wisselen laadt de game opnieuw.
   function loadCharacters(force) {
     if (ui.charsBusy || (!force && ui.chars && performance.now() - ui.charsAt < 20000)) return;
@@ -2727,7 +2859,7 @@ export function createGkHud(api) {
       renderChatFeed(now);
       renderEventLine();
       renderEffects(now);
-      renderHeal(now);
+      renderSlots(now);
       tickCooldowns(now);
       renderInvite(now);
     }
@@ -2884,7 +3016,7 @@ export function createGkHud(api) {
       // Naam-tags niet verbergen bij overlap met de HUD; ze horen altijd zichtbaar te blijven.
       if (el.style.visibility) el.style.visibility = "";
       const kind = own || (anchor.entityKind === "escort" ? "escort" : markerKind(anchor)) || "other";
-      const className = "gkLabel gkLabel--" + kind + (anchor.selected ? " gkOn" : "") + (anchor.available === false ? " gkDim" : "");
+      const className = "gkLabel gkLabel--" + kind + (anchor.selected ? " gkOn" : "") + (anchor.available === false ? " gkDim" : "") + (anchor.shield ? " gkShield" : "");
       if (el.className !== className) el.className = className;
       // Stap 8: levensbalk onder de naam van een NPC die je begeleidt.
       if (anchor.health !== null && anchor.health !== undefined) {
@@ -3567,7 +3699,10 @@ export function createGkHud(api) {
     attackBtn.classList.add("gkFlash");
     // Bij iedere druk/tik opnieuw meten; een eerder geselecteerde vijand mag een
     // inmiddels dichterbij gekomen vijand niet voorgaan.
-    ui.attackTarget = nearestAttackTarget();
+    // Fase 5: een aangeklikte vijand in bereik gaat voor; anders de dichtstbijzijnde. Vak 1 slaat daarna vanzelf door.
+    const selectedId = String(api.live().selectedTargetId || "");
+    const candidates = liveTargets();
+    ui.attackTarget = nearestAttackTarget(candidates.filter(function (target) { return String(target.instanceId) === selectedId; })) || nearestAttackTarget(candidates);
     if (!ui.attackTarget) { toast("Geen vijand in de buurt.", { icon: "crossed-swords", ms: 2000 }); return; }
     api.activate(ui.attackTarget);
   }
@@ -3686,6 +3821,11 @@ export function createGkHud(api) {
       case "unstuck": api.run03("unstuck", null, {}); break;
       case "attack": attack(); break;
       case "heal": heal(); break;
+      case "skill": useSlot(Number(id)); break;
+      case "skill-put": putSkill(Number(el.dataset.slot), id); break;
+      case "skill-locked": { const entry = skillById(id); if (entry) toast(entry.displayName + ": " + lockLine(entry) + ".", { icon: "padlock", ms: 2500 }); break; }
+      case "maker-level": api.run03("maker_level", null, { level: Number(id), skipMoveToTarget: true }); break;
+      case "maker-xp": api.run03("maker_xp", null, { xp: Number(id), skipMoveToTarget: true }); break;
       case "do": interact(); break;
       case "map": {
         const zooms = Array.isArray(store.map.zoomLevels) && store.map.zoomLevels.length ? store.map.zoomLevels : ZOOMS;
@@ -3903,7 +4043,8 @@ export function createGkHud(api) {
     if (code === "Enter" || code === "NumpadEnter") { openChat({ viaKey: true, focus: true }); return true; }
     if (code === "Slash" || code === "NumpadDivide") { openChat({ viaKey: true, focus: true, prefill: "/" }); return true; }
     if (code === "Digit1" || code === "Numpad1") { if (!has("hotbar_hud") || data().defeated) return false; attack(); return true; }
-    if (code === "Digit2" || code === "Numpad2") { if (!has("hotbar_hud") || data().defeated || !data().s03?.healSpell) return false; heal(); return true; }
+    if (code === "Digit2" || code === "Numpad2") { if (!has("hotbar_hud") || data().defeated) return false; useSlot(2); return true; }
+    if (code === "Digit3" || code === "Numpad3") { if (!has("hotbar_hud") || data().defeated) return false; useSlot(3); return true; }
     if (code === "KeyE" || code === "KeyF") {
       if (data().defeated) return false;
       // Tijdens een gesprek is E ook "verder": voer de bovenste zichtbare keuze uit.
@@ -3966,6 +4107,7 @@ export function createGkHud(api) {
     frame,
     handleKey,
     toast,
+    skillFailed,
     questBanner,
     questDone,
     npcSay,

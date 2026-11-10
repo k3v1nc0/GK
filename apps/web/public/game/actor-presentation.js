@@ -65,11 +65,14 @@ export function createActorPresentation(options = {}) {
       seen.add(entry.id);
       let record = records.get(entry.id);
       if (!record) {
-        record = { id: entry.id, k: entry.k, d: entry.d, samples: [], hp: entry.hp, hm: entry.hm, s: entry.s, dyingUntil: 0, tx: Number(entry.tx) || 0, tz: Number(entry.tz) || 0 };
+        record = { id: entry.id, k: entry.k, d: entry.d, samples: [], hp: entry.hp, hm: entry.hm, s: entry.s, dyingUntil: 0, tx: Number(entry.tx) || 0, tz: Number(entry.tz) || 0,
+          el: entry.el === 1, sh: entry.sh === 1 };
         records.set(entry.id, record);
         changed = true;
       }
       if (record.hp !== entry.hp || record.s !== entry.s || record.hm !== entry.hm) changed = true;
+      // Fase 5: een sterkere (el) en zijn schild (sh).
+      if (record.el !== (entry.el === 1) || record.sh !== (entry.sh === 1)) { record.el = entry.el === 1; record.sh = entry.sh === 1; changed = true; }
       // Kevin 10-11: kanteling van een grondstof (verandert alleen na een nieuwe build).
       const tx = Number(entry.tx) || 0;
       const tz = Number(entry.tz) || 0;
@@ -97,6 +100,12 @@ export function createActorPresentation(options = {}) {
     }
     if ((message.e === "hit" || message.e === "heal") && Number.isFinite(Number(message.hp))) {
       record.hp = Number(message.hp);
+      if (message.sb === 1) record.sh = false;
+      return true;
+    }
+    // Fase 5: het schild kwam terug.
+    if (message.e === "shield") {
+      record.sh = message.up === true;
       return true;
     }
     if (message.e === "attack") {
@@ -174,15 +183,22 @@ export function createActorPresentation(options = {}) {
     const ability = (classId && defs.abilities?.[defs.classAbilityIds?.[classId]]) || null;
     return {
       instanceId: record.id, entityKind: "enemy", targetKind: "enemy", action: "attack", prompt: "Aanvallen",
-      displayName: def.displayName, x: pose.x, y: pose.y, z: pose.z,
+      // Fase 5: een sterkere heet "Sterke …", is iets groter en heeft (zolang het staat) een schild boven zijn naam.
+      displayName: (record.el ? "Sterke " : "") + def.displayName, x: pose.x, y: pose.y, z: pose.z,
+      elite: record.el === true, shield: record.sh === true && status === "alive",
       range: ability ? ability.rangeMm / 1000 : 2.8, radius: def.radiusMm / 1000,
       // "dying" blijft zichtbaar (neervalanimatie); pas "dead" verbergt de vijand.
       available: status !== "dead", alive: status !== "dead", status,
       healthCurrent: record.hp, healthMax: record.hm,
-      modelAssetId: def.modelAssetId || "", modelScale: def.modelScaleBp ? def.modelScaleBp / 10000 : 1,
+      modelAssetId: def.modelAssetId || "", modelScale: (def.modelScaleBp ? def.modelScaleBp / 10000 : 1) * (record.el ? 1.2 : 1),
       actorClips: { idle: def.idleClip || "", walk: def.walkClip || "", attack: def.attackClip || "", death: def.deathClip || "" },
       actorTarget: true
     };
+  }
+
+  // Fase 5: een vaardigheid uit de build (naam, soort, animatie) voor de gevechts-animatie.
+  function ability(abilityId) {
+    return (abilityId && defs?.abilities?.[abilityId]) || null;
   }
 
   function targets(runtime, now = performance.now()) {
@@ -234,5 +250,5 @@ export function createActorPresentation(options = {}) {
     return (record.k === "e" ? defs.npcs?.[record.d] : record.k === "r" ? defs.resources?.[record.d] : defs.archetypes?.[record.d])?.displayName || "";
   }
 
-  return { applySnapshot, applyEvent, targets, targetById, frame, clear, escortNpcIds, nameOf, debug: () => ({ buildId, records: records.size, hasDefinitions: Boolean(defs) }) };
+  return { applySnapshot, applyEvent, targets, targetById, frame, clear, escortNpcIds, nameOf, ability, debug: () => ({ buildId, records: records.size, hasDefinitions: Boolean(defs) }) };
 }

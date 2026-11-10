@@ -189,7 +189,6 @@ const DEFINITION_SPECS = {
   stat_block: { section: "statBlocks", idField: "statBlockId" },
   stat_curve: { section: "statCurves", idField: "curveId" },
   ability_definition: { section: "abilities", idField: "abilityId" },
-  ability_rank: { section: "abilityRanks", idField: "abilityRankId" },
   status_effect_definition: { section: "statusEffects", idField: "statusEffectId" },
   damage_type_definition: { section: "damageTypes", idField: "damageTypeId" },
   combat_profile: { section: "combatProfiles", idField: "combatProfileId" },

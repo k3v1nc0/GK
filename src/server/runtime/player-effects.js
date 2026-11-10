@@ -4,7 +4,7 @@
 import { describeEffect, effectBonuses, isGoodEffect } from "../../../apps/web/public/shared/effect-math.js";
 
 export const DEFAULT_COMBAT_RULES = Object.freeze({
-  regenDelayMs: 5000, effectStacking: "refresh", maxEffects: 8, clearBuffsOnDeath: true, levelUpRestore: true
+  regenDelayMs: 5000, effectStacking: "refresh", maxEffects: 8, clearBuffsOnDeath: true, levelUpRestore: true, shieldAutoPct: 25, shieldBackMs: 15000
 });
 
 // De regels uit de spelwereld (kaart Instellingen > Genezen en effecten), met standaard als die er niet is.
@@ -15,7 +15,10 @@ export function combatRulesFromProject(project) {
     effectStacking: ["refresh", "extend", "block"].includes(rule.effectStacking) ? rule.effectStacking : DEFAULT_COMBAT_RULES.effectStacking,
     maxEffects: Math.max(1, Number(rule.maxEffects) || DEFAULT_COMBAT_RULES.maxEffects),
     clearBuffsOnDeath: rule.clearBuffsOnDeath !== false,
-    levelUpRestore: rule.levelUpRestore !== false
+    levelUpRestore: rule.levelUpRestore !== false,
+    // Fase 5: schild van een sterkere vijand of baas.
+    shieldAutoPct: Number.isFinite(Number(rule.shieldAutoPct)) ? Math.max(0, Math.min(100, Number(rule.shieldAutoPct))) : 25,
+    shieldBackMs: Math.max(1000, Number(rule.shieldBackMs) || 15000)
   };
 }
 

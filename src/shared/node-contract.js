@@ -15,7 +15,6 @@ export const REFERENCE_KINDS = Object.freeze([
   "vendor_catalog",
   "vendor_offer",
   "ability",
-  "ability_rank",
   "status_effect",
   "damage_type",
   "combat_profile",

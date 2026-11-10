@@ -2458,7 +2458,6 @@ const EXTRA_DATA_TYPE_COLORS = {
   statBlock: "#0d9488",
   statCurve: "#2dd4bf",
   abilityDef: "#f43f5e",
-  abilityRankDef: "#fb7185",
   statusEffectDef: "#e879f9",
   damageTypeDef: "#ef4444",
   combatProfile: "#dc2626",
@@ -2486,7 +2485,6 @@ const EXTRA_DATA_TYPE_COLORS = {
   playerPolicy: "#0f766e",
   inventoryPolicy: "#15803d",
   equipmentPolicy: "#0369a1",
-  abilityPolicy: "#be123c",
   xpRule: "#7c2d12",
   deathPolicy: "#64748b",
   unstuckPolicy: "#94a3b8",
@@ -3613,7 +3611,6 @@ const NODE03_CATALOG_NODE_DEFS = {
     accent: "#f43f5e",
     description: "Server-authoritative ability definition with safe formulas.",
     inputs: {
-      rankDefinitions: { label: "Ranks", dataType: "abilityRankDef", required: false, multiple: true },
       statusEffects: { label: "Status Effects", dataType: "statusEffectDef", required: false, multiple: true }
     },
     outputs: {
@@ -3649,27 +3646,6 @@ const NODE03_CATALOG_NODE_DEFS = {
       interruptible: { label: "Interruptible", type: "boolean", default: true, required: true },
       movementAllowedDuringCast: { label: "Movement while casting", type: "boolean", default: false, required: true },
       serverPredictionMode: { label: "Prediction", type: "select", options: ["none", "local_animation_only"], default: "local_animation_only", required: true }
-    })
-  },
-  ability_rank: {
-    label: "Ability Rank",
-    group: "Combat",
-    accent: "#fb7185",
-    description: "Optional rank override for an ability.",
-    inputs: {},
-    outputs: {
-      abilityRankDef: { label: "Ability Rank", dataType: "abilityRankDef" },
-      catalogDefinition: { label: "Catalog Definition", dataType: "catalogDefinition" }
-    },
-    fields: definitionFields("abilityRankId", "ability_rank.basic_attack.1", "Basic Attack Rank 1", {
-      abilityRef: refField("Ability", ["ability"], true),
-      rank: numberField("Rank", 1, 1, 1000, 1),
-      requiredPlayerLevel: numberField("Required level", 1, 1, 1000, 1),
-      costMultiplier: numberField("Cost multiplier", 1, 0, 1000, 0.01),
-      damageFormulaOverride: { label: "Damage override", type: "formula", default: null, required: false },
-      healFormulaOverride: { label: "Heal override", type: "formula", default: null, required: false },
-      cooldownOverrideMs: numberField("Cooldown override ms", 0, 0, 86400000, 1, false),
-      statusEffectOverrides: { label: "Status effect overrides", type: "json", default: [], required: false }
     })
   },
   combat_profile: {
@@ -4564,25 +4540,6 @@ const NODE03_RUNTIME_NODE_DEFS = {
       deathDurabilityLossPercent: numberField("Death durability loss", 0, 0, 1, 0.01)
     }
   },
-  ability_loadout_rules: {
-    label: "Ability Loadout Rules",
-    group: "Player Rules",
-    accent: "#be123c",
-    description: "Ability hotbar/loadout policy.",
-    inputs: {},
-    outputs: {
-      abilityPolicy: { label: "Ability Policy", dataType: "abilityPolicy" },
-      policy: { label: "Policy", dataType: "policy" }
-    },
-    fields: {
-      rulesId: { label: "Rules id", type: "identity", default: "player_rules.abilities", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
-      loadoutCount: numberField("Loadout count", 1, 1, 20, 1),
-      slotsPerLoadout: numberField("Slots per loadout", 8, 1, 64, 1),
-      allowedAbilityTagQuery: { label: "Allowed ability tags", type: "tagQuery", default: { all: [], any: [], none: [] }, required: false },
-      changeInCombat: { label: "Change in combat", type: "boolean", default: false, required: true },
-      changeCooldownMs: numberField("Change cooldown ms", 1000, 0, 86400000, 1)
-    }
-  },
   death_respawn_rules: {
     label: "Death Respawn Rules",
     group: "Player Rules",
@@ -5440,22 +5397,6 @@ const NODE04_CAMPAIGN_NODE_DEFS = {
     fields: {
       actionId: { label: "Action id", type: "identity", default: "action.give_xp", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
       amount: numberField("Amount", 25, 0, 1000000000, 1),
-      reason: { label: "Reason", type: "text", default: "quest_reward", required: false, maxLength: 96 }
-    }
-  },
-  action_unlock_ability: {
-    label: "Action Unlock Ability",
-    group: "Actions",
-    accent: "#fb7185",
-    description: "Atomic quest reward that unlocks an ability and optionally places it on the hotbar.",
-    inputs: {},
-    outputs: { action: { label: "Action", dataType: "action" }, rewardEntry: { label: "Reward", dataType: "rewardEntry" } },
-    fields: {
-      actionId: { label: "Action id", type: "identity", default: "action.unlock_ability", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
-      abilityRef: refField("Ability", ["ability"], true),
-      rank: numberField("Rank", 1, 1, 1000, 1),
-      loadoutId: { label: "Loadout id", type: "identity", default: "loadout.main", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
-      preferredSlotIndex: numberField("Preferred slot", 2, 0, 63, 1),
       reason: { label: "Reason", type: "text", default: "quest_reward", required: false, maxLength: 96 }
     }
   },

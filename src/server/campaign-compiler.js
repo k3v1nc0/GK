@@ -197,7 +197,6 @@ function buildCondition(graph, node, nodeMap) {
 function actionKindForNode(type) {
   if (type === "action_give_currency") return "currency";
   if (type === "action_give_xp") return "xp";
-  if (type === "action_unlock_ability") return "ability";
   if (type === "action_remove_item") return "remove_item";
   if (type === "action_start_quest") return "start_quest";
   if (type === "action_sequence") return "sequence";
@@ -214,9 +213,6 @@ function buildAction(graph, node, nodeMap) {
     record.amountMinor = Math.max(0, safeInteger(record.amountMinor, 0));
   } else if (node.type === "action_give_xp") {
     record.amount = Math.max(0, safeInteger(record.amount, 0));
-  } else if (node.type === "action_unlock_ability") {
-    record.rank = Math.max(1, safeInteger(record.rank, 1));
-    record.preferredSlotIndex = Math.max(0, safeInteger(record.preferredSlotIndex, 2));
   } else if (node.type === "action_remove_item") {
     record.amount = Math.max(1, safeInteger(record.amount, 1));
   } else if (node.type === "action_sequence") {

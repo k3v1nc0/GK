@@ -29,6 +29,7 @@ const soundHelp = (wat) => help(
 export const ACTOR_BEHAVIORS = Object.freeze(["aggressive", "defensive"]);
 
 const HEAL_GROUP = "💚 Genezen";
+const ELITE_GROUP = "💪 Af en toe een sterkere";
 
 export const ACTOR_KINDS = {
   actor_archetype: {
@@ -73,7 +74,11 @@ export const ACTOR_KINDS = {
         help: help("Hoeveel schade de vijand tegenhoudt.", "0-5 voor gewone vijanden.", "Je doet bijna geen schade → lager.") },
       abilityRef: { type: "ref", refKind: "ability", required: true, audience: "server", label: "Aanval",
         ui: ui("⚔️", "ref", "werkbank"), default: null,
-        help: help("Welke aanval de vijand gebruikt.", "Sleep een aanval uit de Bibliotheek op dit vak.", "Vijand doet niets → controleer of hier een aanval op staat.") },
+        help: help("Welke aanval (vaardigheid) de vijand gebruikt.", "Sleep een vaardigheid uit de Bibliotheek op dit vak.", "Vijand doet niets → controleer of hier een aanval op staat.") },
+      // Fase 5: een baas heeft altijd een schild (een sterkere vijand van een plek krijgt het vanzelf).
+      shieldAlways: { type: "boolean", required: false, audience: "client", label: "Altijd een schild (baas)",
+        ui: ui("🛡️", "toggle", "werkbank", { more: true }), default: false,
+        help: help("Heeft deze vijand altijd een schild? Zolang het schild staat doet de auto-aanval (vak 1) maar weinig schade; vak 2 of 3 breekt het. Hoe sterk en hoe lang staat in Instellingen > Genezen en effecten.", "Aan voor een baas. Gewone vijanden: uit (een sterkere vijand van een plek krijgt vanzelf een schild).", "Baas valt om met alleen vak 1 → zet dit aan.") },
       behavior: { type: "select", required: true, options: ACTOR_BEHAVIORS.slice(), optionIcons: { aggressive: "😠", defensive: "🙂" }, optionLabels: { aggressive: "Valt aan", defensive: "Alleen terug" }, audience: "server", label: "Gedrag",
         ui: ui("🧠", "select", "werkbank"), default: "aggressive",
         help: help("Valt de vijand je zelf aan, of alleen als jij eerst slaat?", "Valt aan voor gevaarlijke plekken, Alleen terug voor dieren bij het startpunt.", "Beginners worden steeds aangevallen → Alleen terug.") },
@@ -125,6 +130,13 @@ export const ACTOR_KINDS = {
       rotationY: { type: "number", required: false, min: 0, max: 359, audience: "server", label: "Draaien",
         ui: ui("🔄", "slider", "viewport", { step: 1, unit: "°", more: true }), default: 0,
         help: help("Welke kant de vijand op kijkt als hij op zijn plek staat.", "Klik hem in de 3D-view en druk R, of schuif hier.", "Staat met zijn rug naar het pad → draai hem.") },
+      // Fase 5: af en toe verschijnt hier een sterkere (meer levens, harder, met schild en meer XP).
+      eliteChancePct: { type: "integer", required: false, min: 0, max: 100, audience: "server", label: "Kans op een sterkere",
+        ui: ui("🎲", "slider", "werkbank", { step: 1, unit: "%", group: ELITE_GROUP }), default: 10,
+        help: help("Hoe vaak hier een sterkere vijand verschijnt in plaats van de gewone (bij elke keer dat hij terugkomt). Een sterkere heeft een schild (icoon boven de naam) dat je met vak 2 of 3 breekt.", "10 % = ongeveer 1 op de 10. 0 % = nooit.", "Spelers lopen steeds tegen sterkere aan → lager. Nooit een uitdaging → hoger.") },
+      eliteStrengthPct: { type: "integer", required: false, min: 100, max: 1000, audience: "server", label: "Hoeveel sterker",
+        ui: ui("💪", "slider", "werkbank", { step: 10, unit: "%", range: [100, 500], group: ELITE_GROUP }), default: 200,
+        help: help("Hoeveel levens, schade en XP een sterkere heeft vergeleken met de gewone vijand.", "200 % = dubbel zoveel levens, schade en XP.", "Sterkere is niet te doen → lager.") },
       patrolPointsMm: { type: "pointList", required: false, minItems: 2, maxItems: 16, min: -MAX_WORLD_MM, max: MAX_WORLD_MM, audience: "server", label: "Looproute",
         ui: ui("🧭", "points", "viewport"), default: null,
         help: help("De punten waar de vijand langs loopt als hij niet vecht.", "2-5 punten dicht bij de plek; teken ze in de 3D-view.", "Vijand loopt door muren → zet de punten op een open pad.") }

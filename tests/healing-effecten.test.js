@@ -7,7 +7,7 @@ import { computeHeal, describeEffect, effectFromSource, regenStep } from "../app
 import { Node03RuntimeService } from "../src/server/node03-runtime-service.js";
 import { VitalsRuntime } from "../src/server/runtime/vitals-runtime.js";
 import { ActorRuntime } from "../src/server/runtime/actor-runtime.js";
-import { compileActorSection, playerHealAbilityFromSection } from "../src/server/authoring/actor-compiler.js";
+import { classSkillIdsFromSection, compileActorSection } from "../src/server/authoring/actor-compiler.js";
 import { runtimeItemFromCanonical } from "../src/server/authoring/runtime-overlay.js";
 
 test("rekenregels: effect, genezing en regeneratie", () => {
@@ -71,12 +71,12 @@ function setup({ health = 100, mana = 50 } = {}) {
     connectionFor: (playerId) => ({ playerId }), send: (connection, payload) => sent.push(Object.assign({ to: connection.playerId }, payload)), onDefeat: () => {}
   });
   const healSection = {
-    classHealAbilityIds: { "class.healer": "ability.heal" },
+    classSkills: { "class.healer": ["ability.heal"] },
     abilities: { "ability.heal": { abilityId: "ability.heal", displayName: "Genees", abilityKind: "heal", baseHeal: 20, healScalingBp: 10000, manaCost: 10, rangeMm: 10000, cooldownMs: 1500 } }
   };
   const mmoService = {
     vitalsRuntime: vitals,
-    actorRuntime: { ensureBuild: () => healSection },
+    actorRuntime: { ensureBuild: () => healSection, lineBlocked: () => false },
     getWorldPlayerStates: () => positions,
     getConnectionForPlayer: () => ({}),
     broadcastToWorld: (worldId, payload) => sent.push(payload)
@@ -147,7 +147,7 @@ test("broodje: 1 % levens om de 1 s, ook in gevecht; gif -2 % om de 2 s", () => 
   assert.equal(stat("p2", "stat.health"), 48, "-2 % van 100");
 });
 
-test("genees-spreuk: kiest de meest gewonde speler in de buurt en kost mana", () => {
+test("genees-spreuk (vak 2): kiest de meest gewonde speler in de buurt en kost mana", () => {
   const { svc, ctx, stat, db } = setup();
   db.prepare("UPDATE player_stats SET current_value = 40 WHERE player_id = 'p2' AND stat_id = 'stat.health'").run();
   db.prepare("UPDATE player_stats SET current_value = 90 WHERE player_id = 'p1' AND stat_id = 'stat.health'").run();
@@ -157,14 +157,13 @@ test("genees-spreuk: kiest de meest gewonde speler in de buurt en kost mana", ()
   assert.equal(stat("p1", "stat.mana"), 40);
   const again = svc.healTarget(ctx, {}, "op2");
   assert.equal(again.message, "Nog even wachten.");
-  svc.healReadyAt.clear();
+  svc.skillReadyAt.clear();
   db.prepare("UPDATE player_stats SET current_value = 5 WHERE player_id = 'p1' AND stat_id = 'stat.mana'").run();
   assert.throws(() => svc.healTarget(ctx, {}, "op3"), (error) => error.status === 409 && /mana/.test(error.message));
 });
 
 test("MMO (3-11): gekozen teamlid te ver weg = melding, niet stilletjes iemand anders genezen", () => {
   const { svc, ctx, stat } = setup({ health: 50 });
-  svc.healReadyAt = new Map();
   svc.mmoService.getWorldPlayerStates = () => [{ player_id: "p1", x: 0, z: 0 }, { player_id: "p2", x: 50, z: 0 }];
   assert.throws(() => svc.healTarget(ctx, { targetId: "player:p2" }, "op_far"), (error) => error.status === 409 && /bob is te ver weg/.test(error.message));
   assert.equal(stat("p1", "stat.health"), 50, "jezelf ook niet");
@@ -181,14 +180,14 @@ test("compiler: genees-spreuk van klasse en vijand moet soort Genezen hebben", (
       behavior: "aggressive", aggroRangeMm: 8000, leashRangeMm: 20000, moveSpeedMmPerS: 3000, radiusMm: 600, respawnMs: 30000, regenEnabled: true, regenBp: 100 }),
     doc("actor_archetype", "actor_archetype:fout", { actorId: "fout", displayName: "Fout", healthMax: 40, attackPower: 2, armor: 0, abilityRef: "ability:klap", healAbilityRef: "ability:klap",
       behavior: "aggressive", aggroRangeMm: 8000, leashRangeMm: 20000, moveSpeedMmPerS: 3000, radiusMm: 600, respawnMs: 30000 }),
-    doc("player_class", "player_class:healer", { classId: "healer", displayName: "Healer", abilityRef: "ability:klap", healAbilityRef: "ability:heal" })
+    doc("player_class", "player_class:healer", { classId: "healer", displayName: "Healer", abilityRef: "ability:klap", skills: [{ ref: "ability:heal" }, { ref: "ability:heal" }] })
   ];
   const section = compileActorSection(docs);
   assert.equal(section.server.archetypes.sjamaan.healAbilityId, "heal");
   assert.equal(section.server.archetypes.sjamaan.regenEnabled, true);
   assert.ok(section.errors.some((error) => error.code === "HEAL_ABILITY_KIND" && /fout/.test(error.message)));
-  assert.equal(playerHealAbilityFromSection(section.server, "healer").abilityId, "heal");
-  assert.equal(playerHealAbilityFromSection(section.server, "andere"), null);
+  assert.deepEqual(classSkillIdsFromSection(section.server, "healer"), ["heal"], "dubbel telt 1x");
+  assert.deepEqual(classSkillIdsFromSection(section.server, "andere"), []);
 });
 
 test("vijand-healer geneest een gewonde vechtende vijand; regeneratie telt op", () => {

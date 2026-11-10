@@ -103,8 +103,6 @@ function specForNodeType(type) {
       return { kind: "status_effect", identityField: "statusEffectId", labelField: "displayName" };
     case "ability_definition":
       return { kind: "ability", identityField: "abilityId", labelField: "displayName" };
-    case "ability_rank":
-      return { kind: "ability_rank", identityField: "abilityRankId", labelField: "displayName" };
     case "combat_profile":
       return { kind: "combat_profile", identityField: "combatProfileId", labelField: "displayName" };
     case "enemy_archetype":
@@ -173,7 +171,6 @@ function specForNodeType(type) {
     case "player_progression_rules":
     case "inventory_rules":
     case "equipment_rules":
-    case "ability_loadout_rules":
     case "death_respawn_rules":
     case "unstuck_rules":
       return { kind: "policy", identityField: "rulesId", labelField: "rulesId" };
@@ -227,7 +224,6 @@ function specForNodeType(type) {
       return { kind: "condition", identityField: "conditionId", labelField: "conditionId" };
     case "action_give_currency":
     case "action_give_xp":
-    case "action_unlock_ability":
     case "action_remove_item":
     case "action_start_quest":
     case "action_sequence":

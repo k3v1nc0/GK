@@ -6,7 +6,7 @@ import { computeDamage } from "../../apps/web/public/shared/combat-math.js";
 import { isActorInstanceId, isResourceInstanceId } from "./runtime/actor-runtime.js";
 import { computeHeal, describeEffect, effectBonuses, effectFromSource } from "../../apps/web/public/shared/effect-math.js";
 import { applyEffect, clearEffectsForDeath, combatRulesFromProject, itemCooldowns, itemReadyInMs, loadActiveEffects, planEffect, publicEffects, setItemCooldown } from "./runtime/player-effects.js";
-import { playerAbilityFromSection, playerHealAbilityFromSection } from "./authoring/actor-compiler.js";
+import { abilityFromSection, classSkillIdsFromSection, playerAbilityFromSection } from "./authoring/actor-compiler.js";
 import { arrivalPoint, isUnlocked, nearestRespawnPortal, portalNear, portalRulesOf, portalsOf, portalVisibleFor, publicPortalState,
   storeUnlock, travelCost, unlockedPortalIds, withinUnlockRange } from "./runtime/portal-runtime.js";
 
@@ -20,6 +20,9 @@ const HEAL_POWER_STAT_ID = "stat.heal_power";
 const GOLD_CURRENCY_ID = "currency.gold";
 const DEFAULT_CHARACTER_ID = "player.desert_guardian";
 const DEFAULT_BIND_STATE = "unbound";
+// Fase 5: indeling van vak 2 en 3 per character (player_ability_loadouts).
+const HOTBAR_LOADOUT_ID = "hotbar";
+const SKILL_SLOTS = Object.freeze([2, 3]);
 
 function now() {
   return new Date().toISOString();
@@ -64,9 +67,10 @@ function rollLootAmount(minValue, maxValue, multiplier = 1) {
   return Math.max(0, Math.round(rolled * multiplier));
 }
 
-function httpError(status, message) {
+function httpError(status, message, code = null) {
   const error = new Error(message);
   error.status = status;
+  if (code) error.code = code;
   return error;
 }
 
@@ -496,7 +500,8 @@ export class Node03RuntimeService {
       throw error;
     }
     // Fase 05: een canonieke vijand/grondstof verandert pas in het geheugen na COMMIT (en nooit bij een replay).
-    const canonicalTarget = isActorInstanceId(payload.targetId) || isResourceInstanceId(payload.targetId);
+    // Fase 5: een vaardigheid zonder doel kiest zelf een vijand; ook dan geldt de vijandenserver.
+    const canonicalTarget = isActorInstanceId(payload.targetId) || isResourceInstanceId(payload.targetId) || action === "skill";
     if (canonicalTarget) {
       if (response.idempotent) this.actorRuntime()?.dropPending(operationId);
       else this.actorRuntime()?.applyPending(operationId);
@@ -524,9 +529,7 @@ export class Node03RuntimeService {
     const character = this.resolvePlayerCharacter(ctx);
     this.ensureProgression(ctx, character);
     this.ensureStats(ctx, character);
-    this.ensureStartingAbilities(ctx, character);
     const startItemIds = this.ensureStartingInventoryAndCurrencies(ctx, character);
-    this.ensureAbilityLoadout(ctx, character);
     this.ensureStarterEquipment(ctx, startItemIds);
   }
 
@@ -652,18 +655,6 @@ export class Node03RuntimeService {
     }
   }
 
-  ensureStartingAbilities(ctx, character) {
-    const refs = Array.from(new Set(Array.isArray(character?.startingAbilityRefs) ? character.startingAbilityRefs : []));
-    const stamp = now();
-    for (const abilityId of refs) {
-      this.db.prepare(`
-        INSERT INTO player_abilities (player_id, ability_id, rank, unlock_source, unlocked_at, revision)
-        VALUES (?, ?, 1, 'starting_character', ?, 1)
-        ON CONFLICT(player_id, ability_id) DO NOTHING
-      `).run(ctx.profile.id, abilityId, stamp);
-    }
-  }
-
   ensureStartingInventoryAndCurrencies(ctx, character) {
     const granted = [];
     for (const grant of Array.isArray(character?.startingCurrencyGrants) ? character.startingCurrencyGrants : []) {
@@ -695,19 +686,6 @@ export class Node03RuntimeService {
       LIMIT 1
     `).get(playerId, itemId);
     return Boolean(row);
-  }
-
-  ensureAbilityLoadout(ctx, character) {
-    const refs = Array.from(new Set(Array.isArray(character?.startingAbilityRefs) ? character.startingAbilityRefs : []));
-    const loadoutId = safeString(character?.defaultLoadoutId, "loadout.main");
-    const stamp = now();
-    refs.slice(0, 12).forEach((abilityId, index) => {
-      this.db.prepare(`
-        INSERT INTO player_ability_loadouts (player_id, loadout_id, slot_index, ability_id, updated_at)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(player_id, loadout_id, slot_index) DO NOTHING
-      `).run(ctx.profile.id, loadoutId, index, abilityId, stamp);
-    });
   }
 
   // Alleen net gegeven start-spullen gaan meteen aan (een start-zwaard zit dus in de hand).
@@ -1275,6 +1253,10 @@ export class Node03RuntimeService {
     if (action === "debug_level_reset" || action === "level_reset") return this.debugResetLevel(ctx, operationId);
     if (action === "debug_currency_add" || action === "currency_add") return this.debugAdjustCurrency(ctx, payload, operationId, 1);
     if (action === "debug_currency_remove" || action === "currency_remove") return this.debugAdjustCurrency(ctx, payload, operationId, -1);
+    // Fase 5: maker-gereedschap (alleen een admin-account): level zetten en XP geven.
+    if (action === "maker_level") return this.makerSetLevel(ctx, payload, operationId);
+    if (action === "maker_xp") return this.makerGiveXp(ctx, payload, operationId);
+    if (action === "loadout_set") return this.setLoadoutSlot(ctx, payload);
     if (this.isPlayerDead(ctx)) {
       const error = new Error("Je speler is verslagen. Gebruik Respawn om verder te spelen.");
       error.status = 409;
@@ -1291,6 +1273,7 @@ export class Node03RuntimeService {
     if (action === "unequip") return this.unequipItem(ctx, payload);
     if (action === "use") return this.useItem(ctx, payload, operationId);
     if (action === "heal") return this.healTarget(ctx, payload, operationId);
+    if (action === "skill") return this.useSkill(ctx, payload, operationId);
     if (action === "destroy") return this.destroyItem(ctx, payload, operationId);
     const error = new Error("Onbekende spelactie: " + (action || "-"));
     error.status = 400;
@@ -2259,7 +2242,8 @@ export class Node03RuntimeService {
     `).run(ctx.worldId, spawnKey, occurrence, state, respawnAtMs, buildId || null, now());
   }
 
-  attackActor(ctx, targetId, operationId) {
+  // Fase 5: zonder skill = de auto-aanval van de klasse (vak 1); met skill = een vaardigheid van vak 2/3.
+  attackActor(ctx, targetId, operationId, skill = null) {
     const runtime = this.actorRuntime();
     if (!runtime) {
       const error = new Error("Vijand niet gevonden.");
@@ -2271,14 +2255,15 @@ export class Node03RuntimeService {
     const bonus = effectBonuses(loadActiveEffects(this.db, ctx.profile.id, nowMs));
     const attackPower = Math.max(0, statValue(stats.byId, ATTACK_POWER_STAT_ID, 10) + this.equipmentBonusesForPlayer(ctx.profile.id, ctx.catalogs).attackPower + bonus.attackPower);
     // Healing (2-11): een aanval kan mana kosten.
-    const ability = playerAbilityFromSection(runtime.ensureBuild(nowMs), ctx.profile.selected_character_id || null);
+    const ability = skill || playerAbilityFromSection(runtime.ensureBuild(nowMs), ctx.profile.selected_character_id || null);
     const manaCost = Math.max(0, safeInteger(ability.manaCost, 0));
     const manaBefore = statValue(stats.byId, MANA_STAT_ID, 0);
     if (manaCost > 0 && manaBefore < manaCost) throw httpError(409, "Te weinig mana (" + Math.floor(manaBefore) + " / " + manaCost + ").");
     this.vitals()?.markCombat(ctx.profile.id, nowMs);
     const planned = runtime.planPlayerAttack({
       playerId: ctx.profile.id, classId: ctx.profile.selected_character_id || null, targetId, x: safeNumber(ctx.position?.x, 0), z: safeNumber(ctx.position?.z, 0),
-      safe: this.positionIsSafe(ctx), attackPower, nowMs: Date.now(), operationId
+      y: Number.isFinite(Number(ctx.position?.y)) ? Number(ctx.position.y) : null,
+      safe: this.positionIsSafe(ctx), attackPower, nowMs: Date.now(), operationId, ability: skill || null
     });
     if (planned.result) return planned.result;
     const plan = planned.plan;
@@ -2311,10 +2296,16 @@ export class Node03RuntimeService {
     } else {
       this.recordGameplayEvent(ctx, "actor_hit", "player", plan.instanceId, { damage: plan.damage, healthAfter: plan.hpAfter });
     }
+    const what = skill ? (skill.displayName || "Vaardigheid") + ": " : "";
     return {
-      action: "attack",
+      action: skill ? "skill" : "attack",
       targetId: plan.instanceId,
-      message: plan.killed ? plan.label + " verslagen." : plan.label + " geraakt voor " + plan.damage + ".",
+      performed: true,
+      abilityId: plan.abilityId,
+      cooldownMs: Math.max(100, safeInteger(ability.cooldownMs, 1500)),
+      stop: plan.killed,
+      message: what + (plan.killed ? plan.label + " verslagen." : plan.label + " geraakt voor " + plan.damage + "."
+        + (plan.shieldBreak ? " Schild gebroken!" : plan.shieldUp ? " (schild)" : "")),
       events,
       grants
     };
@@ -2361,15 +2352,17 @@ export class Node03RuntimeService {
 
   // Healing (2-11): de genees-spreuk van je klasse (💚-knop). Zonder doel kiest de server de meest gewonde speler
   // binnen het bereik (jij of een ander). Kost mana, heeft een wachttijd en kan een effect geven (genezing over tijd).
-  healTarget(ctx, payload, operationId) {
+  // Fase 5: skill = de genees-vaardigheid van vak 2/3 (useSkill controleert slot, vergrendeling en wachttijd). Zonder skill
+  // (oude "heal"-actie, tik op een teamlid) de eerste genees-vaardigheid die op vak 2 of 3 staat.
+  healTarget(ctx, payload, operationId, skill = null) {
     const runtime = this.actorRuntime();
     const nowMs = Date.now();
-    const section = runtime ? runtime.ensureBuild(nowMs) : null;
-    const ability = playerHealAbilityFromSection(section, ctx.profile.selected_character_id || null);
-    if (!ability) throw httpError(409, "Je klasse heeft geen genees-spreuk.");
-    if (!this.healReadyAt) this.healReadyAt = new Map();
-    const waitMs = (this.healReadyAt.get(ctx.profile.id) || 0) - nowMs;
-    if (waitMs > 0) return { action: "heal", message: "Nog even wachten.", cooldownMs: waitMs, events: [] };
+    let ability = skill;
+    if (!ability) {
+      const spell = this.healSpellForHud(ctx);
+      if (!spell) throw httpError(409, "Je hebt geen genees-spreuk op vak 2 of 3.");
+      return this.useSkill(ctx, Object.assign({}, payload, { slot: spell.slot }), operationId);
+    }
     const stats = this.loadPlayerStats(ctx.profile.id);
     const manaCost = Math.max(0, safeInteger(ability.manaCost, 0));
     const manaBefore = statValue(stats.byId, MANA_STAT_ID, 0);
@@ -2393,7 +2386,9 @@ export class Node03RuntimeService {
       const max = effectiveMaxStat(rows[HEALTH_STAT_ID], 0);
       return { max, current: statValue(rows, HEALTH_STAT_ID, max) };
     };
-    const wanted = safeString(payload.targetId, "").replace(/^player:/, "");
+    // Fase 5: een aangeklikte vijand is geen doel voor genezen; dan kiest de server zelf.
+    const rawWanted = safeString(payload.targetId, "");
+    const wanted = rawWanted.startsWith("player:") ? rawWanted.slice(7) : (rawWanted && !rawWanted.includes(":") ? rawWanted : "");
     let target = null;
     let targetHealth = null;
     for (const candidate of candidates) {
@@ -2415,7 +2410,14 @@ export class Node03RuntimeService {
     }
     const effect = effectFromSource(ability, ability.displayName || "Genezing");
     if (!target && effect) { target = candidates[0]; targetHealth = healthOf(ctx.profile.id); }
-    if (!target) throw httpError(409, "Iedereen in de buurt heeft volle levens.");
+    if (!target) throw httpError(409, candidates.length > 1 ? "Iedereen in de buurt heeft volle levens." : "Niemand in bereik om te genezen.");
+    // Fase 5: genezen gaat niet door een muur (alleen bij een ander; jezelf kan altijd).
+    if (!target.self) {
+      const other = states.find((state) => state?.player_id === target.id);
+      if (other && runtime?.lineBlocked(myX, myZ, safeNumber(other.x, 0), safeNumber(other.z, 0), Number.isFinite(Number(ctx.position?.y)) ? Number(ctx.position.y) : null)) {
+        throw httpError(409, "Er zit iets tussen jou en die speler.", "NO_LINE_OF_SIGHT");
+      }
+    }
     const bonus = effectBonuses(loadActiveEffects(this.db, ctx.profile.id, nowMs));
     const amount = computeHeal(ability, statValue(stats.byId, HEAL_POWER_STAT_ID, 0) + bonus.healPower);
     const after = Math.min(targetHealth.max, targetHealth.current + amount);
@@ -2427,10 +2429,10 @@ export class Node03RuntimeService {
     }
     if (effect) applyEffect(this.db, target.id, { sourceKind: "ability", sourceId: ability.abilityId, effect }, nowMs, this.combatRules(ctx.project));
     if (manaCost > 0) this.spendMana(ctx.profile.id, manaBefore, manaCost, operationId, "ability_used", ability.abilityId);
-    this.healReadyAt.set(ctx.profile.id, nowMs + Math.max(100, safeInteger(ability.cooldownMs, 1500)));
     this.recordGameplayEvent(ctx, "player_healed", "player", target.id, { amount: healed, abilityId: ability.abilityId });
     // Getallen: groen boven wie geneest wordt (iedereen in de buurt ziet het), blauw voor je eigen mana.
-    this.broadcastFx(ctx.worldId, { target: target.id, by: ctx.profile.id, amount: healed, tone: "heal", x: myX, z: myZ });
+    // Fase 5: met de vaardigheid erbij, zodat iedereen in de buurt ook de animatie (spreuk-gloed) ziet.
+    this.broadcastFx(ctx.worldId, { target: target.id, by: ctx.profile.id, amount: healed, tone: "heal", x: myX, z: myZ, ab: ability.abilityId });
     if (!target.self) {
       const vitals = this.vitals();
       if (vitals) setTimeout(() => { try { vitals.push(target.id, ctx.worldId, Date.now(), null, [], true); } catch {} }, 0);
@@ -2442,6 +2444,8 @@ export class Node03RuntimeService {
     return {
       action: "heal",
       targetId: target.id,
+      performed: true,
+      abilityId: ability.abilityId,
       message: (ability.displayName || "Genezen") + ": " + who + " +" + healed + " levens" + (effect ? " (" + effect.name + ")" : "") + ".",
       events: [{ type: "healed", targetId: target.id, amount: healed }].concat(manaCost > 0 ? [{ type: "mana", amount: -manaCost }] : []),
       cooldownMs: Math.max(100, safeInteger(ability.cooldownMs, 1500)),
@@ -2512,7 +2516,6 @@ export class Node03RuntimeService {
     const stats = this.loadPlayerStats(ctx.profile.id);
     const inventory = this.loadInventory(ctx);
     const currencies = this.loadCurrencies(ctx);
-    const abilities = this.loadAbilities(ctx);
     const equipment = this.loadEquipment(ctx);
     const entities = this.loadEntities(ctx);
     const modules = uiModules(ctx.project);
@@ -2533,7 +2536,8 @@ export class Node03RuntimeService {
       currencies,
       inventory,
       equipment,
-      abilities,
+      // Fase 5: vak 1 (auto-aanval), de vaardigheden van je klasse en de indeling van vak 2 en 3.
+      skills: this.skillsForHud(ctx),
       catalog: this.loadHudCatalog(ctx),
       // Healing (2-11): actieve effecten, wachttijd per item en de genees-spreuk (💚-knop).
       effects: publicEffects(loadActiveEffects(this.db, ctx.profile.id, Date.now()), Date.now()),
@@ -2553,17 +2557,193 @@ export class Node03RuntimeService {
     };
   }
 
-  healSpellForHud(ctx) {
+  // ---- Fase 5: vaardigheden (vak 1 auto-aanval, vak 2 en 3 zelf in te delen) ------------------------------------
+
+  // De naam van een vaardigheid uit de actieve build (voor quest-meldingen).
+  abilityDisplayName(abilityId) {
     try {
-      const runtime = this.actorRuntime();
-      const ability = playerHealAbilityFromSection(runtime ? runtime.ensureBuild(Date.now()) : null, ctx.profile.selected_character_id || null);
-      if (!ability) return null;
-      return { abilityId: ability.abilityId, displayName: ability.displayName || "Genezen", manaCost: safeInteger(ability.manaCost, 0),
-        rangeM: safeNumber(ability.rangeMm, 2000) / 1000, cooldownMs: safeInteger(ability.cooldownMs, 1500) };
+      const section = this.actorRuntime()?.ensureBuild(Date.now());
+      return section?.abilities?.[abilityId]?.displayName || null;
     } catch {
       return null;
     }
   }
+
+  // Alles wat nodig is om te weten wat een character mag: klasse, level, geleerde vaardigheden en de indeling van vak 2 en 3.
+  skillState(ctx, section = null) {
+    const runtime = this.actorRuntime();
+    const build = section || (runtime ? runtime.ensureBuild(Date.now()) : null);
+    const classId = ctx.profile.selected_character_id || null;
+    const level = Math.max(1, safeInteger(this.db.prepare("SELECT level FROM player_progression WHERE player_id = ? LIMIT 1").get(ctx.profile.id)?.level, 1));
+    const learned = new Set(this.db.prepare("SELECT ability_id FROM player_abilities WHERE player_id = ?").all(ctx.profile.id).map((row) => row.ability_id));
+    const skillIds = classSkillIdsFromSection(build, classId);
+    const lockOf = (abilityId) => {
+      const ability = build?.abilities?.[abilityId];
+      if (!ability) return "bestaat niet meer";
+      if (ability.unlockQuest === true && !learned.has(abilityId)) return "quest";
+      const need = Math.max(1, safeInteger(ability.unlockLevel, 1));
+      return level < need ? "level" : null;
+    };
+    const usable = skillIds.filter((id) => !lockOf(id));
+    const rows = this.db.prepare("SELECT slot_index, ability_id FROM player_ability_loadouts WHERE player_id = ? AND loadout_id = ?").all(ctx.profile.id, HOTBAR_LOADOUT_ID);
+    const stored = new Map(rows.map((row) => [safeInteger(row.slot_index, 0), row.ability_id || null]));
+    const slots = {};
+    for (const slot of SKILL_SLOTS) {
+      const id = stored.has(slot) ? stored.get(slot) : null;
+      slots[slot] = id && usable.includes(id) ? id : null;
+    }
+    // Nooit iets ingedeeld op vak 2: de eerste vaardigheid die vrij is (bestaande Healers: hun genees-spreuk).
+    if (!stored.has(2) && !slots[2]) slots[2] = usable.find((id) => id !== slots[3]) || null;
+    return { build, classId, level, learned, skillIds, usable, lockOf, slots };
+  }
+
+  skillReadyInMs(playerId, abilityId, nowMs = Date.now()) {
+    return Math.max(0, (this.skillReadyAt?.get(playerId + "|" + abilityId) || 0) - nowMs);
+  }
+
+  // Waarom een vaardigheid nog op slot zit, in gewone woorden.
+  lockText(state, abilityId) {
+    const lock = state.lockOf(abilityId);
+    const ability = state.build?.abilities?.[abilityId] || {};
+    if (lock === "level") return "vanaf level " + Math.max(1, safeInteger(ability.unlockLevel, 1));
+    if (lock === "quest") {
+      const quests = Array.isArray(ability.fromQuests) ? ability.fromQuests.filter(Boolean) : [];
+      return quests.length ? "na quest " + quests.map((name) => "\u201c" + name + "\u201d").join(" of ") : "na een quest";
+    }
+    return lock || null;
+  }
+
+  // Een vaardigheid van vak 2 of 3 gebruiken. De server controleert vak, vergrendeling, wachttijd, mana, bereik en muur.
+  useSkill(ctx, payload, operationId) {
+    const slot = safeInteger(payload.slot, 0);
+    if (!SKILL_SLOTS.includes(slot)) throw httpError(400, "Kies vak 2 of 3.", "SLOT_INVALID");
+    const state = this.skillState(ctx);
+    const abilityId = state.slots[slot];
+    if (!abilityId) {
+      const stored = this.db.prepare("SELECT ability_id FROM player_ability_loadouts WHERE player_id = ? AND loadout_id = ? AND slot_index = ? LIMIT 1").get(ctx.profile.id, HOTBAR_LOADOUT_ID, slot)?.ability_id;
+      if (stored && state.skillIds.includes(stored)) throw httpError(409, "Vergrendeld: " + this.lockText(state, stored) + ".", "SKILL_LOCKED");
+      throw httpError(409, "Vak " + slot + " is leeg. Sleep een vaardigheid uit het 📖 boek.", "SLOT_EMPTY");
+    }
+    const ability = abilityFromSection(state.build, abilityId);
+    const nowMs = Date.now();
+    const waitMs = this.skillReadyInMs(ctx.profile.id, abilityId, nowMs);
+    if (waitMs > 0) return { action: "skill", slot, abilityId, message: "Nog even wachten.", cooldownMs: waitMs, events: [] };
+    const result = ability.abilityKind === "heal"
+      ? this.healTarget(ctx, payload, operationId, ability)
+      : this.attackActor(ctx, this.skillTarget(ctx, payload, ability), operationId, ability);
+    if (result?.performed) {
+      if (!this.skillReadyAt) this.skillReadyAt = new Map();
+      this.skillReadyAt.set(ctx.profile.id + "|" + abilityId, nowMs + Math.max(100, safeInteger(ability.cooldownMs, 1500)));
+    }
+    return Object.assign({}, result, { action: "skill", slot, abilityId, cooldownMs: Math.max(100, safeInteger(ability.cooldownMs, 1500)) });
+  }
+
+  // Doel van een aanval-vaardigheid: de gekozen vijand, anders de dichtstbijzijnde binnen bereik.
+  skillTarget(ctx, payload, ability) {
+    const wanted = safeString(payload.targetId, "");
+    if (wanted && isActorInstanceId(wanted)) return wanted;
+    const id = this.actorRuntime()?.nearestEnemy(ctx.profile.id, safeNumber(ctx.position?.x, 0), safeNumber(ctx.position?.z, 0), safeInteger(ability.rangeMm, 2000));
+    if (!id) throw httpError(409, "Geen vijand in de buurt.", "NO_TARGET");
+    return id;
+  }
+
+  // Een vaardigheid op vak 2 of 3 zetten (of het vak leegmaken). Alleen wat bij je klasse hoort en vrij is.
+  setLoadoutSlot(ctx, payload) {
+    const slot = safeInteger(payload.slot, 0);
+    if (!SKILL_SLOTS.includes(slot)) throw httpError(400, "Kies vak 2 of 3.", "SLOT_INVALID");
+    const abilityId = safeString(payload.abilityId, "") || null;
+    const state = this.skillState(ctx);
+    if (abilityId) {
+      if (!state.skillIds.includes(abilityId)) throw httpError(409, "Deze vaardigheid hoort niet bij je klasse.", "SKILL_NOT_IN_CLASS");
+      if (state.lockOf(abilityId)) throw httpError(409, "Vergrendeld: " + this.lockText(state, abilityId) + ".", "SKILL_LOCKED");
+    }
+    const upsert = this.db.prepare(`
+      INSERT INTO player_ability_loadouts (player_id, loadout_id, slot_index, ability_id, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(player_id, loadout_id, slot_index) DO UPDATE SET ability_id = excluded.ability_id, updated_at = excluded.updated_at
+    `);
+    const stamp = now();
+    const other = slot === 2 ? 3 : 2;
+    // Stond hij al op het andere vak: wisselen (het andere vak krijgt wat hier stond).
+    if (abilityId && state.slots[other] === abilityId) upsert.run(ctx.profile.id, HOTBAR_LOADOUT_ID, other, state.slots[slot] || null, stamp);
+    else if (!state.slots[other]) upsert.run(ctx.profile.id, HOTBAR_LOADOUT_ID, other, null, stamp);
+    upsert.run(ctx.profile.id, HOTBAR_LOADOUT_ID, slot, abilityId, stamp);
+    const name = abilityId ? (state.build?.abilities?.[abilityId]?.displayName || abilityId) : null;
+    return { action: "loadout_set", slot, abilityId, message: name ? name + " staat op vak " + slot + "." : "Vak " + slot + " is leeg." };
+  }
+
+  // Wat de game nodig heeft: de auto-aanval, de vaardigheden van je klasse (met slot-reden) en de indeling.
+  skillsForHud(ctx) {
+    try {
+      const state = this.skillState(ctx);
+      const nowMs = Date.now();
+      const view = (abilityId) => {
+        const ability = state.build?.abilities?.[abilityId] || {};
+        return { abilityId, displayName: ability.displayName || abilityId, kind: ability.abilityKind === "heal" ? "heal" : "damage",
+          icon: ability.icon || null, manaCost: safeInteger(ability.manaCost, 0), cooldownMs: Math.max(100, safeInteger(ability.cooldownMs, 1500)),
+          rangeM: safeNumber(ability.rangeMm, 2000) / 1000, animStyle: ability.animStyle || "slash" };
+      };
+      const auto = playerAbilityFromSection(state.build, state.classId);
+      return {
+        auto: Object.assign(view(auto.abilityId), { displayName: auto.displayName || "Aanval", cooldownMs: Math.max(100, safeInteger(auto.cooldownMs, 1500)),
+          rangeM: safeNumber(auto.rangeMm, 2000) / 1000, icon: auto.icon || null, manaCost: safeInteger(auto.manaCost, 0) }),
+        slots: { 2: state.slots[2], 3: state.slots[3] },
+        list: state.skillIds.map((abilityId) => Object.assign(view(abilityId), {
+          unlocked: !state.lockOf(abilityId), lock: state.lockOf(abilityId), lockText: this.lockText(state, abilityId),
+          unlockLevel: Math.max(1, safeInteger(state.build?.abilities?.[abilityId]?.unlockLevel, 1)),
+          readyInMs: this.skillReadyInMs(ctx.profile.id, abilityId, nowMs)
+        })),
+        level: state.level
+      };
+    } catch {
+      return { auto: null, slots: { 2: null, 3: null }, list: [], level: 1 };
+    }
+  }
+
+  // Healing (2-11) / Fase 5: de genees-vaardigheid op vak 2 of 3 (voor de tik op een teamlid), of null.
+  healSpellForHud(ctx) {
+    try {
+      const state = this.skillState(ctx);
+      for (const slot of SKILL_SLOTS) {
+        const ability = abilityFromSection(state.build, state.slots[slot]);
+        if (!ability || ability.abilityKind !== "heal") continue;
+        return { abilityId: ability.abilityId, displayName: ability.displayName || "Genezen", manaCost: safeInteger(ability.manaCost, 0),
+          rangeM: safeNumber(ability.rangeMm, 2000) / 1000, cooldownMs: safeInteger(ability.cooldownMs, 1500), slot };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  // ---- Fase 5: maker-gereedschap (alleen een admin-account, zoals 🧪 Testen in de Quest Builder) -------------------
+
+  assertMaker(ctx) {
+    if (ctx?.sessionContext?.user?.role === "admin") return;
+    throw httpError(403, "Alleen voor de maker (admin-account).", "MAKER_ONLY");
+  }
+
+  makerSetLevel(ctx, payload, operationId) {
+    this.assertMaker(ctx);
+    const progressionPolicy = policiesOfType(ctx.project, "player_progression_rules")[0] || {};
+    const curveRef = progressionPolicy.xpCurveRef || "stat_curve.player_xp";
+    const maxLevel = Math.max(1, safeInteger(progressionPolicy.maxLevel, 10));
+    const level = Math.max(1, Math.min(maxLevel, safeInteger(payload.level, 1)));
+    const row = this.db.prepare("SELECT * FROM player_progression WHERE player_id = ? LIMIT 1").get(ctx.profile.id) || {};
+    const beforeXp = safeInteger(row.xp, 0);
+    const xp = xpForLevel(ctx.catalogs, curveRef, level);
+    this.db.prepare("UPDATE player_progression SET level = ?, xp = ?, revision = revision + 1, updated_at = ? WHERE player_id = ?").run(level, xp, now(), ctx.profile.id);
+    if (xp !== beforeXp) this.recordLedger(operationId, ctx.profile.id, "xp", "xp", xp - beforeXp, beforeXp, xp, "maker_level", "maker");
+    return { action: "maker_level", level, xp, message: "Maker: level " + level + (level === maxLevel ? " (hoogste level)" : "") + "." };
+  }
+
+  makerGiveXp(ctx, payload, operationId) {
+    this.assertMaker(ctx);
+    const amount = Math.max(1, Math.min(1000000, safeInteger(payload.xp ?? payload.amount, 100)));
+    const grant = this.grantXpAmount(ctx, amount, "maker_xp", "maker", operationId);
+    return { action: "maker_xp", grants: [grant].filter(Boolean), message: "Maker: +" + amount + " XP" + (grant && grant.afterLevel > grant.beforeLevel ? " → level " + grant.afterLevel + "!" : ".") };
+  }
+
 
   loadProgression(ctx) {
     const row = this.db.prepare("SELECT * FROM player_progression WHERE player_id = ? LIMIT 1").get(ctx.profile.id) || {};
@@ -2741,22 +2921,6 @@ export class Node03RuntimeService {
         maxDurability: row.max_durability
       };
     });
-  }
-
-  loadAbilities(ctx) {
-    const unlocked = this.db.prepare("SELECT * FROM player_abilities WHERE player_id = ? ORDER BY ability_id ASC").all(ctx.profile.id).map((row) => ({
-      abilityId: row.ability_id,
-      displayName: displayForAbility(ctx.catalogs, row.ability_id),
-      rank: safeInteger(row.rank, 1),
-      unlockSource: row.unlock_source
-    }));
-    const loadout = this.db.prepare("SELECT * FROM player_ability_loadouts WHERE player_id = ? ORDER BY loadout_id ASC, slot_index ASC").all(ctx.profile.id).map((row) => ({
-      loadoutId: row.loadout_id,
-      slotIndex: safeInteger(row.slot_index, 0),
-      abilityId: row.ability_id,
-      displayName: row.ability_id ? displayForAbility(ctx.catalogs, row.ability_id) : null
-    }));
-    return { unlocked, loadout };
   }
 
   loadEntities(ctx) {

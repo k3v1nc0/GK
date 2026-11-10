@@ -7,8 +7,8 @@ import { convertShape } from "./werkbank-world.js?v=20261108-portals1";
 import { renderUsers } from "./werkbank-users.js?v=20261104-account-reset1";
 import { computeDamage, rollLoot } from "../shared/combat-math.js";
 import { areaCenterMm, areaCirclePointsMm, areaRectPointsMm, areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261108-roads7";
-import { QUEST_START_MODES, hasOwnSteps, objectiveText, questGraphIssues, questStartIssues, questStartMode, requirementText, stepsFromSimple } from "../shared/quest-graph.js?v=20261108-quest24";
-import { openQuestBuilder } from "./quest-builder.js?v=20261108-quest24";
+import { QUEST_START_MODES, hasOwnSteps, objectiveText, questGraphIssues, questStartIssues, questStartMode, requirementText, stepsFromSimple } from "../shared/quest-graph.js?v=20261110-fase5";
+import { openQuestBuilder } from "./quest-builder.js?v=20261110-fase5";
 
 const DOC_MIME = "application/x-gk-doc";
 

@@ -12,6 +12,8 @@ export const ACTOR_DOC_KINDS = Object.freeze(["ability", "loot_table", "resource
 export const DEFAULT_PLAYER_ABILITY = Object.freeze(Object.assign({ abilityId: "legacy.basic_attack", displayName: "Aanval", rangeMm: 2800, cooldownMs: 250 }, LEGACY_PLAYER_ATTACK));
 
 const idFromRef = (ref) => String(ref || "").replace(/^[a-z_]+:/, "");
+// Fase 5: standaard voor "af en toe een sterkere" als het veld op een oude plek nog leeg is.
+export const ELITE_DEFAULTS = Object.freeze({ chancePct: 10, strengthPct: 200 });
 
 // Zoekt cycli en te diepe nesting in loottabellen. tables: Map docKey -> doc.
 export function lootGraphIssues(tables) {
@@ -91,9 +93,23 @@ export function compileActorSection(documents, options = {}) {
   };
 
 
+  // Fase 5: welke quests een vaardigheid als beloning geven (de game zegt dan "na quest …").
+  const questsGiving = new Map();
+  for (const quest of active.filter((doc) => doc.kind === "quest").sort((a, b) => a.docKey.localeCompare(b.docKey))) {
+    const rows = [].concat(Array.isArray(quest.body.rewards) ? quest.body.rewards : [],
+      ...(Array.isArray(quest.body.steps) ? quest.body.steps : []).map((step) => (step?.kind === "end" && Array.isArray(step.rewards) ? step.rewards : [])));
+    for (const row of rows) {
+      if (!row?.ref || !String(row.ref).startsWith("ability:")) continue;
+      const list = questsGiving.get(row.ref) || [];
+      if (!list.includes(quest.body.displayName)) list.push(quest.body.displayName || quest.body.questId);
+      questsGiving.set(row.ref, list);
+    }
+  }
   const abilities = { server: {}, client: {} };
   for (const doc of of("ability")) {
     const split = splitByAudience(doc.kind, doc.body);
+    const fromQuests = questsGiving.get(doc.docKey) || [];
+    if (fromQuests.length) split.client.fromQuests = split.server.fromQuests = fromQuests.slice(0, 3);
     abilities.server[doc.body.abilityId] = split.server;
     abilities.client[doc.body.abilityId] = split.client;
   }
@@ -173,6 +189,12 @@ export function compileActorSection(documents, options = {}) {
     const spawn = { spawnId: doc.body.spawnId, actorId: idFromRef(doc.body.archetypeRef), regionId: doc.body.regionRef ? idFromRef(doc.body.regionRef) : null, xMm: doc.body.xMm, zMm: doc.body.zMm, cellKey: cellKeyForPointMm(doc.body.xMm, doc.body.zMm) };
     if (Array.isArray(doc.body.patrolPointsMm) && doc.body.patrolPointsMm.length) spawn.patrolPointsMm = doc.body.patrolPointsMm;
     if (Number(doc.body.rotationY)) spawn.rotationY = Number(doc.body.rotationY);
+    // Fase 5: af en toe een sterkere (leeg = de standaard van het schema: 10 % kans, 200 % sterk).
+    const chance = Number.isInteger(doc.body.eliteChancePct) ? doc.body.eliteChancePct : ELITE_DEFAULTS.chancePct;
+    if (chance > 0) {
+      spawn.eliteChancePct = chance;
+      spawn.eliteStrengthPct = Number.isInteger(doc.body.eliteStrengthPct) ? doc.body.eliteStrengthPct : ELITE_DEFAULTS.strengthPct;
+    }
     spawns.push(spawn);
   }
   const resourceSpawns = [];
@@ -183,23 +205,37 @@ export function compileActorSection(documents, options = {}) {
     resourceSpawns.push(resourceSpawn);
   }
 
-  // Klassen: per klasse een eigen aanval (klasse-ID -> ability-ID). Zonder aanval de ingebouwde standaardklap.
+  // Klassen: per klasse een vaste auto-aanval (vak 1) en een lijst vaardigheden voor vak 2 en 3 (Fase 5).
+  // Zonder auto-aanval de ingebouwde standaardklap.
   const classAbilityIds = {};
-  const classHealAbilityIds = {};
+  const classSkills = {};
   for (const doc of active.filter((candidate) => candidate.kind === "player_class").sort((a, b) => a.docKey.localeCompare(b.docKey))) {
-    const ability = doc.body.abilityRef ? needRef(doc, doc.body.abilityRef, "ability", "Klasse " + doc.body.displayName + " (aanval)") : null;
+    const label = "Klasse " + doc.body.displayName;
+    const ability = doc.body.abilityRef ? needRef(doc, doc.body.abilityRef, "ability", label + " (auto-aanval)") : null;
     if (ability) classAbilityIds[doc.body.classId] = ability.body.abilityId;
-    // Healing (2-11): de genees-spreuk van de klasse (💚-knop in de game).
-    const heal = doc.body.healAbilityRef ? needRef(doc, doc.body.healAbilityRef, "ability", "Klasse " + doc.body.displayName + " (genees-spreuk)") : null;
-    if (heal && heal.body.abilityKind !== "heal") errors.push({ code: "HEAL_ABILITY_KIND", docKey: doc.docKey, message: "Klasse " + doc.body.displayName + ": de genees-spreuk " + heal.body.displayName + " heeft niet de soort Genezen." });
-    else if (heal) classHealAbilityIds[doc.body.classId] = heal.body.abilityId;
+    const list = [];
+    for (const row of Array.isArray(doc.body.skills) ? doc.body.skills : []) {
+      const skill = needRef(doc, row?.ref, "ability", label + " (vaardigheden)");
+      if (skill && !list.includes(skill.body.abilityId)) list.push(skill.body.abilityId);
+    }
+    if (list.length) classSkills[doc.body.classId] = list;
   }
   return {
-    server: { schema: ACTOR_SECTION_VERSION, classAbilityIds, classHealAbilityIds, abilities: abilities.server, lootTables, resources: resources.server, archetypes: archetypes.server, spawns, resourceSpawns },
-    client: { schema: ACTOR_SECTION_VERSION, classAbilityIds, classHealAbilityIds, abilities: abilities.client, resources: resources.client, archetypes: archetypes.client, assets,
+    server: { schema: ACTOR_SECTION_VERSION, classAbilityIds, classSkills, abilities: abilities.server, lootTables, resources: resources.server, archetypes: archetypes.server, spawns, resourceSpawns },
+    client: { schema: ACTOR_SECTION_VERSION, classAbilityIds, classSkills, abilities: abilities.client, resources: resources.client, archetypes: archetypes.client, assets,
       ...(Object.keys(npcs).length ? { npcs } : {}) },
     errors
   };
+}
+
+// Fase 5: de vaardigheden van een klasse voor vak 2 en 3 (ability-ID's op volgorde). Een oudere build had alleen een
+// losse genees-spreuk per klasse (classHealAbilityIds); die telt dan als de eerste vaardigheid.
+export function classSkillIdsFromSection(section, classId = null) {
+  if (!classId || !section) return [];
+  const list = Array.isArray(section.classSkills?.[classId]) ? section.classSkills[classId].slice() : [];
+  const legacyHeal = section.classHealAbilityIds?.[classId];
+  if (legacyHeal && !list.includes(legacyHeal)) list.unshift(legacyHeal);
+  return list.filter((id) => section.abilities?.[id]);
 }
 
 // Runtime: welke aanval gebruikt de speler (die van zijn klasse), anders de ingebouwde standaardklap.
@@ -209,9 +245,8 @@ export function playerAbilityFromSection(section, classId = null) {
   return ability ? Object.assign({}, DEFAULT_PLAYER_ABILITY, ability) : DEFAULT_PLAYER_ABILITY;
 }
 
-// Healing (2-11): de genees-spreuk van de klasse, of null.
-export function playerHealAbilityFromSection(section, classId = null) {
-  const id = classId ? section?.classHealAbilityIds?.[classId] : null;
-  const ability = id ? section?.abilities?.[id] : null;
-  return ability && ability.abilityKind === "heal" ? Object.assign({ abilityId: id }, ability) : null;
+// Een vaardigheid uit de build (met zijn ID), of null.
+export function abilityFromSection(section, abilityId) {
+  const ability = abilityId ? section?.abilities?.[abilityId] : null;
+  return ability ? Object.assign({ abilityId }, ability) : null;
 }
