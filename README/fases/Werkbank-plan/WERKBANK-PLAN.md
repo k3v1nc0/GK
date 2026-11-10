@@ -1,6 +1,7 @@
 # GK Werkbank-plan: Fase 1 t/m 5
 
 **Status:** ACTIEF. Kevin gaf akkoord op 26-10-2026. Dit is het **enige actieve plan**.
+**Aangescherpt op 10-11-2026** met het masterplan en de ChatGPT-review daarvan (Kevins akkoord): spelbrede visie in §0e, en in §6 de nieuwe volgorde Fase 5 t/m 10 rond de spelerlus. Fase 1 t/m 4 zijn afgerond via §13. Achtergrond en onderbouwing: Claude Doc "GK-masterplan (voorstel)" (https://claude.ai/artifact/19jnXT9q861k9fxU5zNZrd).
 Het oude MMORPG-basis v2.3-plan (`README/fases/MMORPG-basis-v2/`) is gesloten: F1 t/m F4 zijn af, het F5-werk gaat hierin op, en F6/F7 komen pas na dit plan terug.
 Rapport van de serverinventaris: `evidence/INVENTARIS-SERVER.md` (staat op de server; de prompt ervoor staat in `CLI-INVENTARIS-PROMPT.md`).
 
@@ -12,7 +13,7 @@ Rapport van de serverinventaris: `evidence/INVENTARIS-SERVER.md` (staat op de se
 
 **Hoofdregel (Kevin): zo kinderlijk simpel mogelijk.** Iconen, relaties en slepen in de viewport. Kan iets met een icoon of door te slepen, dan geen tekstveld of lijst. Tekst alleen voor namen en een paar getallen.
 
-1. Bovenin de editor staan alleen nog twee tabs: **Werkbank | Instellingen**. Beide met dezelfde look: iconen, sliders, kaarten, slepen, zo min mogelijk tekst.
+1. Bovenin de editor staan **Instellingen | Werkbank**, plus **Terrein** en **Game** als werkruimtes op dezelfde opslag (door Kevin goedgekeurd). Allemaal met dezelfde look: iconen, sliders, kaarten, slepen, zo min mogelijk tekst.
 2. **Werkbank** = alles wat een plek in de wereld heeft (mesh, punt, lijn, vlak) of in een keten hoort (Relaties). Klik in de 3D-view, het paneel Werkbank toont alleen de paar waarden die je mag veranderen (wachttijd, mesh, rol NPC/quest/oppakken/vendor/muziek...). Relaties toont de ketting.
 3. **Instellingen** = regels voor het hele spel die je niet kunt aanwijzen in de wereld (camera, licht, toetsen, HUD, spelregels). Met een live voorbeeld ernaast.
 4. **Geen nodes.** De Werkbank schrijft naar de nieuwe opslag (authoring-documenten + builds, de techniek van Canoniek), nooit meer naar de node-graph. De Nodes-tab en `canoniek.html` verdwijnen.
@@ -92,7 +93,7 @@ In de game staan nu te veel losse panelen. Dat is te moeilijk en past niet op ee
 | --- | --- |
 | 🎒 | tas (`inventory_hud`) |
 | ⛑️ | uitrusting (`equipment_hud`) |
-| 📖 | vaardigheden en hotbar indelen (`hotbar_hud`, loadout) |
+| 📖 | vaardigheden en hotbar indelen (`hotbar_hud`, loadout); komt in Fase 5 |
 | 📜 | quests (`quest_tracker_hud`); de actieve quest staat ook als één regel in beeld |
 | 🗺️ | grote kaart |
 | 🪙 | geld en gevolgde items (`wallet_hud`) |
@@ -132,6 +133,14 @@ Hier stel je zelf in hoe de game-panelen eruitzien, met live voorbeeld en een kn
 Dit volgt het bouwrecept (§0b): elk paneel is een soort in het schema, met icoon, volgorde, lettertype en opbouw als velden. Nieuwe panelen krijgen deze instellingen dus vanzelf. Dezelfde instellingen voor de iconen, volgorde en het lettertype van de **editor-panelen** zelf komen in Instellingen → Editor.
 
 **Fase:** de thumbnails komen in Fase 1. Het nieuwe tas-paneel met portret en hotbar, plus de UI-ontwerper, komen in Fase 4 (samen met de HUD live view). Ze vervangen de huidige HUD-modules en hun opgeslagen indeling (`game_hud_layout_defaults`). Je huidige plekken en maten worden overgenomen als startpunt.
+
+## 0e. Spelbrede visie (Kevin 10-11)
+
+1. **Eén doorlopende flow.** GK is van begin tot eind één MMO-RPG-flow. Hoofdverhaal, zijquests en lorequests lopen door de hele game, naast verkennen, vechten, verzamelen, craften, uitrusting en groei. Er komt geen tutorial-eiland of vereenvoudigd "eerste kwartier". Een korte speelsessie mag een proef zijn, maar is niet het ontwerp.
+2. **Klassen en vaardigheden.** Een klasse bepaalt welke vaardigheden er zijn en wanneer ze vrijkomen (op level of als quest-beloning). Op vak 1 staat een vaste auto-aanval van de klasse: genoeg voor gewone vijanden. Een sterkere vijand of baas heeft een schild dat je met vak 2 of 3 breekt. Vak 2 en 3 deelt de speler zelf in. Het character bewaart zijn voortgang en indeling. Alles werkt met toetsen 1, 2 en 3, of met één vinger op mobiel. Elke aanval heeft een animatie. De server beslist kosten, wachttijd, doel, raakmoment, schade en ontgrendeling.
+3. **Groei en schaling zijn twee dingen.** De XP-curve bepaalt hoe snel je levelt. Schaling bepaalt of content uitdagend blijft. Schaling volgt ESO: tegen een vijand telt iedereen als het level van die vijand, met een begrensd verschil per level (schuifje). Zo blijft een oud verhaal een gevecht, en speelt een gemengde groep gelijk op tegen dezelfde gedeelde vijand. Er komt geen regel "te hoog level = minder quest-XP".
+4. **Balans.** Rood bij SAVE TO GAME alleen voor bewezen ongeldige inhoud of een echte exploit; al het andere is een waarschuwing. Elke globale knop moet aantoonbaar werken op de server en in de game.
+5. **Klaar = Kevin speelt het.** Een fase is klaar als Kevin hem zelf speelt en GO geeft. Groene tests of bijgewerkte documenten zijn geen bewijs.
 
 ## 1. Hoe het nu werkt (waarom alles nog via nodes gaat)
 
@@ -315,13 +324,17 @@ Velden die toch iets betekenen gaan mee: `publishTarget`, `packageVersion`/`cont
 
 ---
 
-## 6. Fase 1 t/m 5
+## 6. Fase 1 t/m 10
+
+> **Stand (10-11):** Fase 1 t/m 4 zijn afgerond via de ombouw van §13. De oude Fase 5 ("Nodes weg en een speelbaar stuk spel") is vervangen door Fase 5 t/m 10 hieronder.
 
 > **Let op (26-10):** de volgorde en werkwijze van §13 (ombouw per onderdeel, Area tool, grond leeg beginnen, geen hardcoded inhoud) gaan boven deze fases.
 
 Elke fase eindigt met: één commit op main ("Werkbank Fase N"), de lijst-regels afgevinkt, perf-meting niet slechter, **de opruimregels uit §8 voor die fase gedaan (laadgrootte niet groter)**, en een korte handtest die Kevin zelf filmt.
 
 ### Fase 1 — Werkbank | Instellingen, Canoniek weg
+
+**Stand:** ✅ afgerond via §13 (ombouw).
 
 **Doel:** de bovenbalk wordt `Werkbank | Instellingen`; alles uit Canoniek zit in de Werkbank; de Instellingen-tab bestaat met de eerste kaarten.
 **Bouw:**
@@ -337,6 +350,8 @@ Elke fase eindigt met: één commit op main ("Werkbank Fase N"), de lijst-regels
 
 ### Fase 2 — Eén wereld met chunks, land tekenen, hoogtes
 
+**Stand:** ✅ afgerond via §13 (ombouw).
+
 **Doel:** één wereld in plaats van start/test/andere zones; grond tekenen met texture; hoogtes en laagtes.
 **Bouw:**
 - Alle huidige zones samenvoegen tot één wereld (elke zone op een eigen plek, met verhuisrapport). Oude zones worden gebieden (point line) in Fase 3.
@@ -350,6 +365,8 @@ Elke fase eindigt met: één commit op main ("Werkbank Fase N"), de lijst-regels
 
 ### Fase 3 — Alles in de wereld via de Werkbank
 
+**Stand:** ✅ afgerond via §13 (ombouw).
+
 **Doel:** alles wat in de wereld staat bewerk je door het aan te klikken. Ook `node_resource_spawn_...`.
 **Bouw:**
 - Gebieden en deelgebieden met point lines; per gebied iconen voor muziek, sfeer, veilig, regels, ontdekken.
@@ -362,6 +379,8 @@ Elke fase eindigt met: één commit op main ("Werkbank Fase N"), de lijst-regels
 
 ### Fase 4 — Ketens en verhalen: Bibliotheek + Relaties
 
+**Stand:** ✅ afgerond via §13 (ombouw).
+
 **Doel:** alle definities als kaarten met icoon; koppelen door te slepen; Relaties toont de hele ketting.
 **Bouw:**
 - Alle A4-kaarten als document. Slepen: item op loottabel, loottabel op vijand, item op vendor, NPC op quest.
@@ -370,16 +389,89 @@ Elke fase eindigt met: één commit op main ("Werkbank Fase N"), de lijst-regels
 **Kevin ziet:** een vijand aanklikken en in Relaties zien: vijand → loot → item → vendor → quest. Een HUD-balk verslepen en het in het voorbeeld zien.
 **Klaar als:** A4 + A5 + heel B afgevinkt.
 
-### Fase 5 — Nodes weg en een speelbaar stuk spel
+### Fase 5 t/m 10 — De spelerlus compleet in zes grondige stappen (masterplan, Kevin 10-11)
 
-**Doel:** de Nodes-tab is weg en het spel is echt speelbaar, helemaal gebouwd in de Werkbank.
+**De rode draad.** Eén character speelt één samenhangende MMO-lus in één wereld, samen met anderen: vechten en quests → sterker worden → buit, geld en beroepen → betere uitrusting → verder in het verhaal. Elke fase maakt die lus completer, en na elke fase speelt Kevin het zelf. Er komt geen aparte tutorial: een proefveld is alleen een stukje van de gewone flow.
+
+**Einddoel na Fase 10.** Kevin maakt vanuit een lege kaart, zonder code, SQL of JSON: een gebied, NPC, vijand, vaardigheid, hoofd-, zij- en lorequest, lorevondst, item, buit, verkoper, werkplek, beroep, recept en wereld-event. SAVE TO GAME publiceert het, de game speelt het en de editor kan het later teruglezen. Nieuwe spelregels buiten deze soorten blijven programmeerwerk. "De techniek is klaar" is niet hetzelfde als "de game is af": de game is af als het hoofdverhaal een einde heeft en er daarna iets herhaalbaars te doen is.
+
+**Vaste regels voor elke fase** (naast §0b en §13; aangevuld met de ChatGPT-review van 10-11):
+1. **Klaar** = Kevin speelt het en geeft GO (§0e punt 5).
+2. **Eerst kijken.** Een fase begint met een korte check van de huidige main: wat werkt, wat deels, wat onbekend. Kevin krijgt alleen een vraag bij een echte spelkeuze.
+3. **De hele keten.** Elke functie gaat door de hele keten: schema → Werkbank- of Instellingen-kaart → controle bij SAVE TO GAME → build → server → game → terug te zien in de editor. Geen halve systemen alvast voor een latere fase.
+4. **Proef- en testinhoud** komt nooit uit een script, JSON- of JS-bestand of rechtstreeks uit de database. Altijd via de editor-route: dezelfde opdrachten als de editor (`/api/authoring/command`, met Kevins editor-account), aanpasbaar en te archiveren, namen beginnen met "Proef", dicht bij elkaar op een proefveld bij het startpunt. Kevin doet zelf SAVE TO GAME.
+5. **De server beslist** en vangt misbruik op: vergrendeld, te snel, vervalst, dubbel klikken, uitloggen midden in een actie, opnieuw verbinden. De CLI test dat met gewone tests, zonder browsertests.
+6. **Rood bij SAVE TO GAME** alleen bij bewezen ongeldige inhoud of een echte exploit; de rest is oranje.
+7. **Opruimen per soort.** Een oude route (node, hardcoded inhoud) gaat weg zodra de nieuwe route hetzelfde doet met de bestaande inhoud (§13). Het afvink-script telt alleen wat er nog aan nodes hangt; het bewijs is een korte proef waarin de bestaande inhoud in build en game nog hetzelfde werkt. De Nodes-tab gaat pas weg als alle soorten zo over zijn, niet op een vast fasenummer (verwacht na Fase 8).
+8. **Oude laptop.** De game wordt niet trager. Bij elke fase met gamecode hoort een meting.
+9. **Eén keer nakijken per fase** (Kevin 10-11: zes keer in plaats van twaalf). De delen a en b zijn alleen de bouwvolgorde binnen een fase. De fase gaat helemaal af en in één commit op main ("Werkbank Fase N") na Kevins "go main". Daarna komen één handtest en één CLI-prompt in de chat. Alleen als de handtest iets vindt, volgt een kleine fix-commit.
+
+**Vóór Fase 5:** één korte CLI-inventaris op de server: inhoud per soort tellen, kijken wat nog aan nodes hangt, en de snelheid van de huidige main meten op de laptop.
+
+#### Fase 5 — Vaardigheden en gevecht
+**Waarom:** er is nu één vaste aanval per klasse. Zonder vaardigheden hebben levels niets om vrij te spelen en hebben groepen geen rollen.
 **Bouw:**
-- Afvink-script: elke nodesoort en elk veld heeft een plek (§4). Laatste verhuizing met verhuisrapport.
-- Nodes-tab, node-bibliotheek, graph-panelen weg. De game leest alleen nog builds. De oude graph wordt niet gewist, alleen niet meer gebruikt (blijft in Kevins eigen backups).
-- Kevin bouwt in de Werkbank een klein speelbaar gebied: start → NPC met quest → vijanden → loot → vendor → level omhoog → tweede gebied.
-- Speelbaarheidsfixes die daarbij opvallen (knop Uitrusten in de tas, duidelijke questmarkering, dood/respawn).
-**Kevin ziet:** alleen nog `Werkbank | Instellingen`; met een tweede account de hele lus spelen.
-**Klaar als:** afvink-script 100 %; lus gespeeld met 2 accounts; perf niet slechter dan bij de start van Fase 1.
+- **5a:** bouwt op de bestaande vaardigheid- en effect-kern (schade, genezing, mana, wachttijd, gif en genezing over tijd). Een vaardigheid krijgt *vrij vanaf* (level of quest), *op wie* (vijand, of automatisch de meest gewonde speler binnen een aantal meter), mana, wachttijd, bereik en een animatie. Een klasse krijgt een vaste **auto-aanval op vak 1** en een lijst vaardigheden voor vak 2 en 3; elke klasse heeft vanaf level 1 iets voor vak 2. Bestaande characters raken niets kwijt: hun huidige aanval wordt de auto-aanval, de genees-spreuk komt op vak 2. Server: wachttijd per vaardigheid, indeling per character opslaan, elk gebruik controleren. De auto-aanval slaat door zolang je een doel hebt en stopt bij dood, geen doel of te ver weg. Genezen zegt "niemand in bereik" als er niemand is. Een vaardigheid gaat niet door een muur: de server kijkt alleen op het moment van gebruik of er een muur of obstakel tussen zit (gemeten, zodat het licht blijft). Een vijandplek krijgt "af en toe een sterkere" (kans en sterkte als schuifjes, start ongeveer 1 op 10). Een sterkere vijand of baas heeft een schild (icoon boven de naam). Zolang het schild staat, doet de auto-aanval maar weinig schade; vak 2 of 3 breekt het schild, en daarna doet vak 1 weer gewone schade tot het schild na een tijdje terugkomt. Hoe sterk en hoe lang zijn schuifjes. Game: drie knoppen (toets of tikken) en de 📖 vaardighedenkaart in het tas-paneel; een vergrendelde vaardigheid zegt waarom ("vanaf level 5", "na quest …"). Maker-gereedschap: level zetten en XP geven.
+- **5b:** animatie bij elke aanval en genezing, ook bij anderen te zien (zonder clip in het model: korte uithaal met raak-flits en een oranje melding). Quest Builder-beloning "vaardigheid". De oude node-stukken voor vaardigheden (ranks, loadout-regels, ontgrendel-actie) gaan weg. Daarna maakt de CLI de proefinhoud via de editor-route (regel 4): Proef-vaardigheden, een vijandplek met een sterkere, en een lorequest die een vaardigheid geeft.
+**Kevin ziet:** de auto-aanval legt gewone wezens om; bij een sterkere breekt hij met vak 2 of 3 het schild, en daarna gaat het met vak 1 weer vlot. Door een muur heen aanvallen lukt niet. Een Healer redt het solo tegen gewone wezens en geneest vanzelf de meest gewonde. Met de maker-knop naar level 3: er komt een vaardigheid vrij die hij naar vak 3 sleept, en een vergrendelde zegt waarom. De lorequest geeft een vaardigheid. Na opnieuw inloggen staat de indeling er nog, en een tweede account ziet de animaties. Op de telefoon werkt alles met één vinger. In de editor maakt hij zelf een vaardigheid en zet die bij een klasse.
+**CLI controleert:** de server weigert vergrendeld gebruik, te vroeg drukken, vals indelen en dubbel klikken; opnieuw verbinden midden in een gevecht; tests, smoke en laptopmeting.
+**Klaar als:** Kevin speelt dit met 2 accounts en geeft GO.
+
+#### Fase 6 — Groei, schaling en samen vechten
+**Waarom:** level doet nu niets. Zodra het wel telt, moet oudere content toch een gevecht blijven, en moeten laag en hoog samen tegen dezelfde vijand kunnen.
+**Bouw:**
+- **6a Levels die tellen:** XP-curve als grafiek met punten, klasse groeit per level (levens, kracht, pantser, mana, heal-kracht), vijanden krijgen een level, uitrusting krijgt "vanaf level", en een duidelijke level-up (melding en effect). Bestaande characters houden hun XP.
+- **6b Schaling zoals ESO en samen vechten:** tegen een vijand telt iedereen als het level van die vijand, met klasse-stats én uitrusting. Daarbovenop het schuifje "Verschil per level" met een maximum (0 = geen extra voordeel voor een hoger level, alleen het gelijktrekken). De levensbalk blijft gelijk; de server rekent schade en genezing om. Eén gedeelde vijand, geen kopie per speler. De getallen (start 3 % per level, maximaal 20 %) zijn startwaarden en worden pas vastgezet na Kevins speelsessie. Een baas kan op "groepsbaas": meer leven, een grote klap met eerst een rode cirkel op de grond (wegstappen kan; de server bepaalt wie op het raakmoment in de cirkel staat), en een beloning voor iedereen die meedeed.
+**Kevin ziet:** level omhoog = sterker en een nieuwe vaardigheid. Na veel farmen een oude baas: sneller, maar niet in één klap; schaling uit = één klap. Een groep van level 1, 3 en 15 tegen de groepsbaas: iedereen helpt mee en krijgt zijn beloning, en wie uit de rode cirkel stapt, krijgt de klap niet. Schuifje op 0 = iedereen even hard.
+**CLI controleert:** schade, genezing en XP per level, beloning niet dubbel, en wie tijdens de baas wegloopt, de groep verlaat of opnieuw verbindt.
+**Klaar als:** Kevin speelt de oude baas, de gemengde groep en de groepsbaas, en geeft GO.
+
+#### Fase 7 — Balans en maker-controle
+**Waarom:** één plek om alles te meten, en het bewijs dat Kevin de hele lus zonder code kan maken. Hij komt ná de groei (anders valt er niets betrouwbaars te meten) en vóór geld (anders geen controle op geldlekken).
+**Bouw:**
+- Instellingen → ⚖️ Balans: meldingen met doorklik naar de kaart of de plek in de wereld, en een stip in het Contentoverzicht. XP per gebied: eenmalige bronnen als budget, herhaalbare als tempo per uur met de aanname erbij. Sterkte per level (klappen nodig, klappen overleven). Meldingen onder meer: een baas die met alleen de auto-aanval te verslaan is; een sterkere vijand in een gebied waar een klasse nog niets voor vak 2 of 3 heeft; een vaardigheid of quest die nooit te halen is; een beloning die nergens voor dient. Knoppen XP-tempo en Terugkomen, die de server echt toepast.
+- Pickups: de item-kaart toont waar het item ligt, er is geen zone meer nodig, en terugkomtijden en uitrustingsvakken gaan uit de code naar Instellingen.
+- Een lijst per soort van wat nog aan de oude route (nodes) hangt.
+**Kevin ziet:** op een melding klikken en bij de kaart uitkomen; XP-tempo 200 % geeft in de game dubbel XP; de item-kaart zegt "ligt 3× in de wereld". Hij maakt zelf vanaf een lege kaart een korte quest met een zijpad en een lorevondst (NPC, vijand, buit, vaardigheid als beloning), doet SAVE TO GAME en speelt hem. Daarna zet hij de vorige build terug en kloppen characters, quests en tas nog.
+**CLI controleert:** tests voor de meldingen (ontbrekende verwijzing, onhaalbare vaardigheid, te ruime farmbron).
+**Klaar als:** de knoppen werken aantoonbaar in de game, Kevin heeft zijn quest zonder code gemaakt en geeft GO.
+
+#### Fase 8 — Geld en veilig handelen
+**Waarom:** buit geeft nu geen geld, en markt, handel en post hangen nog aan nodes.
+**Bouw:**
+- **8a:** geld in loottabellen; winkelprijs standaard = waarde × opslag (een eigen prijs mag en is te herkennen); terugkopen bij de winkel; geldafvoer (marktbelasting, craftkosten, reiskosten); overzicht van geld erin en eruit per dag; controle op geldlussen volgens de echte voorwaarden (zelfde winkel, voorraad, kosten).
+- **8b:** markt, handel en post in de nieuwe stijl. Een bevestiging zegt precies wat je weggeeft en wat je krijgt. De server doet elke ruil in één keer: geen dubbele items en geen negatief saldo, ook niet bij dubbel klikken, tegelijk accepteren, opnieuw verbinden of een herstart. Een handelslog voor de maker en een limiet tegen spam. De oude schermen gaan weg zodra de nieuwe hetzelfde kunnen.
+**Kevin ziet:** een vijand laat geld vallen; winkel-opslag op 150 % en alle prijzen veranderen mee; met 2 accounts handelen, iets op de markt zetten en post sturen, uitloggen en terug: alles klopt. Op de telefoon zijn prijs en bevestiging goed te lezen.
+**CLI controleert:** dezelfde order of ruil tegelijk, 100× kopen en verkopen in een test zonder geld uit het niets, saldo en tas na een herstart.
+**Klaar als:** Kevin geeft GO. Rood alleen bij een aantoonbare geldlus.
+**Daarna: de oude nodes weg** zodra het afvink-script 100 % haalt: de Nodes-tab en de node-servercode gaan weg. De oude tabellen blijven tot Kevin zegt dat ze weg mogen.
+
+#### Fase 9 — Beroepen en uitrusting
+**Waarom:** nu kan elke crafting-NPC alle recepten, er zijn geen beroepen of recepten om te leren, en er is geen pad naar betere uitrusting.
+**Bouw:**
+- **9a verzamelen:** een beroep-kaart (naam, icoon, hoogste niveau), en per grondstof het beroep, het niveau en de beroeps-XP.
+- **9b maken:** per recept het beroep, het niveau en hoe je het leert (meteen, kopen, quest, op niveau). Een werkplek hoort bij een NPC of een model. Crafting toont alleen recepten die je kent; een grijs recept zegt waarom en waar de grondstof ligt. De server controleert materiaal, niveau, werkplek en geld in één keer. Maken geeft geen gratis geld- of XP-lus. Balans toont grondstofbronnen, recepten die nooit te halen zijn, en of er per levelbereik uitrusting te vinden of te maken is.
+**Kevin ziet:** een recept op niveau 5 is grijs en zegt waarom; na verzamelen wordt het wit; het kan alleen bij de juiste smid; daarna maken, aantrekken en verkopen. Tot slot maakt hij zelf een tweede beroep zonder code.
+**CLI controleert:** de server weigert verkeerde NPC, te laag niveau en geen materiaal, zonder dat er iets verdwijnt.
+**Klaar als:** Kevin speelt het, heeft zelf het tweede beroep gemaakt en geeft GO.
+
+#### Fase 10 — Levende wereld en de hele route
+**Waarom:** NPC's staan stil, er is geen dag en nacht, lore zit alleen in quests, en niemand heeft de game nog van begin tot eind gespeeld. (Het verhaal zelf loopt al vanaf Fase 5 mee via de Quest Builder.)
+**Bouw:**
+- **10a NPC's en tijd:** de bestaande vijandpatrouille en animaties zijn de basis. Tijd van de dag (licht en lucht kleuren mee, geen extra schaduwen); NPC-gedrag (stil, rondwandelen, route, dagschema, winkel open of dicht); een NPC stopt als je praat en zegt soms een praatje; de server laat een NPC alleen lopen als er een speler dichtbij is, met een maximum per vak. Questgevers staan standaard stil.
+- **10b Verhaal in de wereld:** een verhaal-kaart, leesbaar te maken op een model; een 📚 kennisboek; een gebiedsnaam met één zin bij binnenkomst; vlaggen ook op vlakken (begroeiing, blokkade).
+- **Samen veilig spelen:** blokkeren in de chat bestaat al; daar komen dempen en een speler melden bij de maker bij.
+- **Klaar voor andere spelers:** een paar spelers die niet meebouwen spelen mee (Kevin kiest wie). De CLI doet een drukte-test met nep-spelers. Kevin oefent één keer een back-up terugzetten op een proef-omgeving, met zijn bestaande procedure.
+- **De hele route:** Kevin speelt van een nieuw character tot het einde van het hoofdverhaal, en daarna een herhaalbare groepsactiviteit. Wat dan stuk is of mist, wordt in deze fase gerepareerd.
+**Kevin ziet:** de smid loopt zijn route en 's nachts is de winkel dicht; een grafsteen lezen en hem in het kennisboek zien; iemand dempen en melden; de hele route spelen zonder vast te lopen; de testers komen zonder uitleg van hem op gang.
+**CLI controleert:** de meting (servertick met 20 lopende NPC's, fps op de laptop) is niet slechter.
+**Klaar als:** Kevin speelt de hele route, de testers lopen niet vast, en Kevin geeft GO.
+
+**Publiek lanceren** blijft daarna een eigen GO van Kevin, zonder zevende fase. De zware controles (beveiligings- en toegankelijkheidsnormen, privacybeleid) horen bij dat besluit.
+
+**Keuzes die Kevin pas bij de start van die fase maakt:** Fase 6: vorm van de XP-curve, hoogste level en wat je op het hoogste level doet, startwaarden van de schaling, XP per vijand en eenmalige quest-XP vast of meegroeiend, buit in een oud gebied op jouw level of op het level van het gebied (los van XP: een XP-straf komt er niet), en of er een extra moeilijkheidsgraad komt. Fase 7: welke meldingen rood mogen zijn. Fase 8: welke geldafvoer en hoeveel. Fase 9: hoeveel beroepen per character. Fase 10: hoe groot het hoofdverhaal wordt en wat je na het einde doet (lijst vóór de start), een snellere game-dag of de echte klok, een wereldbijbel, en of er een vriendenlijst komt.
+
+**Bewust later:** buffs en negatieve effecten als eigen soort, ranks en upgrades, meer dan 3 vakken, blokkeren of ontwijken als eigen knop (tactiek komt nu uit het schild en de rode cirkel), meeschalende beloningen, PvP, instanties en raids, gilden, huizen, rijdieren, weer, stempels.
 
 ---
 
@@ -444,7 +536,7 @@ Er zijn drie eerdere bouwrondes geweest. Daardoor laadt de game en de editor vee
 | 5 | **`editor.js` is 32.500 regels** | De Werkbank zit verweven met de Nodes-code. Ombouwen kan dingen breken die nu werken, zoals Ctrl+Z en slepen. | De nieuwe Werkbank-delen komen in losse bestanden. Oude delen gaan per fase weg (§8). Na elke fase volgt jouw handtest van wat al werkte. |
 | 6 | **Zware bestanden** | Sommige modellen zijn 4 MB (woodpile, stone_bridge) en textures zijn 1-2 MB. Op de oude laptop telt dat op. | In de Bibliotheek krijgt elke tegel een gewicht-stip (🟢🟡🔴). In Instellingen komt een budget per chunk ("objecten 120/200"). |
 | 7 | **Save draft vs. Save to game** | Het moet altijd duidelijk zijn wat spelers al zien. | SAVE DRAFT bewaart alleen voor de editor. SAVE TO GAME maakt een build en zet die live (met rollback). De teller laat zien hoeveel wijzigingen nog niet live staan. |
-| 8 | **Credits en tijd** | Elke fase is groot. | Elke fase levert eerst één zichtbaar stuk dat jij test. Daarna pas de rest. Geen dubbele testrondes (CLAUDE.md). |
+| 8 | **Credits en tijd** | Elke fase is groot. | Vanaf Fase 5 één grondige nakijkronde per fase (Kevin 10-11): eerst de hele fase af, dan één handtest. Geen dubbele testrondes (CLAUDE.md). |
 | 9 | **Plan loopt weer weg** | Dat gebeurde eerder met ChatGPT en de fases. | Dit document is het enige plan. Een afwijking kan alleen met jouw akkoord, en wordt dan hier opgeschreven met datum. |
 
 ---
@@ -457,7 +549,7 @@ Wat er al is (✅), wat in dit plan zit (📋), en wat nog nergens zit (❗). Bi
 | Onderdeel | Stand | Waar |
 | --- | --- | --- |
 | Inloggen, account | ✅ | – |
-| **Character maken** (naam, uiterlijk kiezen) | ❗ | Fase 5. Instellingen → Speler: welke modellen kiesbaar zijn |
+| **Character maken** (naam, uiterlijk kiezen) | ✅ | Klasse en uiterlijk kiezen (29-10) |
 | Lopen (WASD en klik-om-te-lopen), sprinten, camera | ✅ | Instellingen → Keys / Camera |
 | **Speler-instellingen in de game** (volume, grafiek laag/hoog, toetsen) | ❗ | Fase 4. Het menu in de game zelf, niet de editor |
 | Tas, uitrusting, geld, XP/level | ✅ (Uitrusten-knop ontbreekt) | Fase 5 |
@@ -466,12 +558,12 @@ Wat er al is (✅), wat in dit plan zit (📋), en wat nog nergens zit (❗). Bi
 ### Het spelen
 | Onderdeel | Stand | Waar |
 | --- | --- | --- |
-| **De kernlus:** wat doet de speler in de eerste 15 minuten? | ❗ | **Jouw keuze, zie hieronder** |
+| **De kernlus** | ✅ besloten | Geen "eerste kwartier": één doorlopende flow (§0e). Fase 5 t/m 10 maken de lus compleet |
 | Vechten: doel kiezen, schade-getallen, raak-effect, levensbalk | ✅ deels | Fase 4: schadegetal en raak-effect als vinkje plus slider |
-| Vijanden die patrouilleren | 📋 (`path_behavior_profile` bestaat) | Fase 3: **pad tekenen met een point line** en de vijand erop slepen |
+| Vijanden die patrouilleren | ❔ looproute staat in het schema, niet bekend of het in de game getest is | – |
 | Grondstoffen, craften, vendor | ✅ | Fase 3/4 |
 | Quests en dialogen | ✅ | Fase 4 (tijdlijn) |
-| **Uitleg voor nieuwe spelers** (eerste quest legt de toetsen uit) | ❗ | Fase 5, als quest gemaakt in de Werkbank |
+| **Uitleg voor nieuwe spelers** | 📋 | Hoort bij de gewone hoofdquest, geen tutorial (§0e) |
 | Deuren, kisten, hendels | 📋 (interactable, lootable) | Fase 3 |
 
 ### De wereld
@@ -488,22 +580,23 @@ Wat er al is (✅), wat in dit plan zit (📋), en wat nog nergens zit (❗). Bi
 | Onderdeel | Stand | Waar |
 | --- | --- | --- |
 | Elkaar zien en samen vechten | ✅ | – |
-| **Chat** | ❗ bestaat nog niet | Fase 5 (simpele chat), Instellingen → Chat (aan/uit, filter) |
+| **Chat** | ✅ | Gebouwd (MMO-functies, 3-11) |
 | Party, handel, markt, post | ✅ in code | Instellingen → Spelregels |
 | **Moderatie** (iemand muten of kicken) | ❗ | Na Fase 5, vóór er vreemden meespelen |
 
 ### Voor jou als maker
 | Onderdeel | Stand | Waar |
 | --- | --- | --- |
-| **Spel-check** ✔️: één scherm met groene en grijze icoontjes. Is er een startpunt, minstens 1 quest, 1 vendor, en is elke vijand gekoppeld aan loot? | ❗ | Fase 1 begin, Fase 5 compleet. Naast SAVE TO GAME |
+| **Spel-check** ✔️: één scherm met groene en grijze icoontjes. Is er een startpunt, minstens 1 quest, 1 vendor, en is elke vijand gekoppeld aan loot? | ✅ deels | SAVE TO GAME weigert al echte fouten; het overzicht komt in Fase 7 |
 | ▶ Spelen in de editor | 📋 §5 | Fase 3 |
-| **Balans-overzicht**: hoeveel geld en XP levert een uur spelen op | ❗ | Fase 4, als grafiekje in Instellingen → Spelregels |
+| **Balans-overzicht**: hoeveel geld en XP levert een uur spelen op | 📋 | Fase 7, Instellingen → ⚖️ Balans |
 | FPS en chunk-teller in beeld | 📋 §5 | Fase 1 |
 
 ### Drie keuzes die alleen jij kunt maken
-1. **De kernlus.** Wat doet een speler in de eerste 15 minuten? Bijvoorbeeld: spawnen in Sunny Meadow → de smid geeft een quest → hout hakken → een zwaard craften → Sand Raiders verslaan in de Desert → level 3 → de Peaks gaan open. Dit wordt de testroute voor Fase 5.
-2. **Chat in Fase 5**, of pas later?
-3. **Character maken:** alleen een naam, of ook kiezen tussen een paar modellen?
+Alle drie besloten (10-11):
+1. **De kernlus:** geen "eerste 15 minuten" maar één doorlopende flow (§0e).
+2. **Chat:** gebouwd.
+3. **Character maken:** klasse en uiterlijk kiezen, gebouwd.
 
 ---
 
@@ -514,7 +607,7 @@ Wat er al is (✅), wat in dit plan zit (📋), en wat nog nergens zit (❗). Bi
 | --- | --- | --- |
 | **Veilig verwijderen** | Als je een item weghaalt dat spelers al in hun tas hebben, breekt hun opslag. | Fase 1: verwijderen = archiveren. De Werkbank waarschuwt eerst: "⚠️ 3 spelers hebben dit". |
 | **Bestanden automatisch lichter maken bij uploaden** | Een model van 4 MB en textures van 2 MB maken de laptop traag. | Fase 1/2: bij upload worden textures verkleind (max 1K) en modellen ingepakt. De gewicht-stip laat zien hoeveel het scheelt. |
-| **Maker-gereedschap in de game** | Om te testen moet je nu alles echt spelen. | Fase 3: alleen voor jouw account een klein menu 🛠️ met teleport, item geven, level zetten, onsterfelijk en vijanden resetten. |
+| **Maker-gereedschap in de game** | Om te testen moet je nu alles echt spelen. | Fase 5: level zetten en XP geven, alleen voor jouw account. Teleport, item geven, onsterfelijk en vijanden resetten later. |
 | **Automatische botsing** | Nu stel je per model zelf een botsstraal in. | Fase 3: de botsvorm wordt automatisch uit het model gehaald; met een slider pas je hem aan. |
 | **Veel dezelfde bomen snel tekenen** | Honderden losse bomen maken de laptop traag. | Fase 2/3: gelijke modellen worden één tekenopdracht (instancing), en verre bomen worden simpeler (LOD). |
 
@@ -609,7 +702,7 @@ Elke stap is één commit "Ombouw N". De proef is licht (tests, smoke, browserch
 | 4 | **Aanvallen, loottabellen, vijanden en vijandplekken.** `enemy_archetype` en spawn-nodes worden documenten; oude vijandcode op nodes weg. | vijand aanklikken, Relaties: vijand → loot → item |
 | 5 | **Grondstoffen en grondstofplekken** (ook `node_resource_spawn_…`) | grondstof aanklikken en de wachttijd veranderen |
 | 6 | **Instellingen:** camera, licht, lucht/fog, grafiek, besturing (was "stuk 3") | slider schuiven en het meteen zien |
-| 7+ | Modellen (`model_entity`), NPC's, vendors, quests, dialogen, recepten, stats en valuta; daarna Nodes weg (Fase 5) | |
+| 7+ | Modellen, NPC's, vendors, quests, dialogen en recepten: gedaan (Spelregels zonder nodes, Quest Builder). Nog op de oude route: vaardigheden (Fase 5) en markt, handel en post (Fase 8). De rest volgt uit de CLI-inventaris; daarna Nodes weg (na Fase 8). | |
 
 Na elke stap staat er per onderdeel nog maar één systeem: precies de vroege scheiding die Kevin vraagt.
 
