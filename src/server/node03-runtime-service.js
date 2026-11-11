@@ -93,6 +93,18 @@ function safeJsonParse(text, fallback = null) {
   }
 }
 
+function inventoryVariantKey(row) {
+  const exactState = JSON.stringify({
+    itemId: safeString(row?.item_id, ""),
+    bindState: safeString(row?.bind_state, DEFAULT_BIND_STATE),
+    quality: row?.quality ?? null,
+    durability: row?.durability ?? null,
+    maxDurability: row?.max_durability ?? null,
+    modifiers: safeJsonParse(row?.modifiers_json, [])
+  });
+  return crypto.createHash("sha256").update(exactState).digest("hex").slice(0, 20);
+}
+
 function stableJson(value) {
   return JSON.stringify(value);
 }
@@ -914,12 +926,18 @@ export class Node03RuntimeService {
   // Stap 4 (HUD): weggooien uit de tas. Questitems en wat je draagt blijven altijd.
   destroyItem(ctx, payload, operationId) {
     const instanceId = safeString(payload.itemInstanceId || payload.item_instance_id, "");
+    const stackId = safeString(payload.stackId || payload.stack_id, "");
     let itemId = safeString(payload.itemId || payload.item_id, "");
     let instance = null;
+    let stack = null;
     if (instanceId) {
       instance = this.db.prepare("SELECT * FROM player_item_instances WHERE id = ? AND player_id = ? LIMIT 1").get(instanceId, ctx.profile.id);
       if (!instance || instance.location_type !== "inventory") throw httpError(404, "Item niet gevonden in je tas.");
       itemId = instance.item_id;
+    } else if (stackId) {
+      stack = this.db.prepare("SELECT * FROM player_inventory_stacks WHERE stack_id = ? AND player_id = ? AND quantity > 0 LIMIT 1").get(stackId, ctx.profile.id);
+      if (!stack) throw httpError(404, "Stapel niet gevonden in je tas.");
+      itemId = stack.item_id;
     }
     const item = catalogSection(ctx.catalogs, "items")[itemId] || {};
     const name = displayForItem(ctx.catalogs, itemId);
@@ -930,11 +948,75 @@ export class Node03RuntimeService {
         .run(operationId, now(), instance.id);
       this.recordLedger(operationId, ctx.profile.id, "item_instance", itemId, -1, 1, 0, "item_destroyed", "inventory_hud");
       removed = 1;
+    } else if (stack) {
+      const before = safeInteger(stack.quantity, 0);
+      const take = Math.min(before, clamp(safeInteger(payload.amount || payload.quantity, 1), 1, 1000000));
+      const after = before - take;
+      this.db.prepare("UPDATE player_inventory_stacks SET quantity = ?, revision = revision + 1, updated_at = ? WHERE stack_id = ?")
+        .run(after, now(), stack.stack_id);
+      this.recordLedger(operationId, ctx.profile.id, "item_stack", itemId, -take, before, after, "item_destroyed", "inventory_hud");
+      removed = take;
     } else if (itemId) {
       removed = this.removeInventoryItem(ctx, itemId, clamp(safeInteger(payload.amount || payload.quantity, 1), 1, 1000000), "item_destroyed", "inventory_hud", operationId);
     }
     if (!removed) throw httpError(404, "Item niet gevonden in je tas.");
     return { action: "destroy", message: removed + "× " + name + " weggegooid.", events: [{ type: "destroyed", itemId, amount: removed }], grants: [] };
+  }
+
+  // Tas-selectie: alles wordt binnen dezelfde operation-transactie gevalideerd en verwijderd.
+  // Bij één fout rolt de hele selectie terug; zo verdwijnt nooit ongemerkt maar een deel.
+  destroyItems(ctx, payload, operationId) {
+    const requested = Array.isArray(payload.items) ? payload.items : [];
+    if (!requested.length) throw httpError(400, "Selecteer eerst spullen om weg te gooien.");
+    if (requested.length > 250) throw httpError(400, "Selecteer hooguit 250 vakjes tegelijk.");
+    const seenInstances = new Set();
+    const seenStacks = new Set();
+    const items = requested.map(function (entry) {
+      const itemInstanceId = safeString(entry?.itemInstanceId || entry?.item_instance_id, "");
+      const stackId = safeString(entry?.stackId || entry?.stack_id, "");
+      const itemId = safeString(entry?.itemId || entry?.item_id, "");
+      const amount = clamp(safeInteger(entry?.amount || entry?.quantity, 1), 1, 1000000);
+      if (itemInstanceId) {
+        if (seenInstances.has(itemInstanceId)) throw httpError(400, "Hetzelfde losse item staat dubbel in de selectie.");
+        seenInstances.add(itemInstanceId);
+        return { itemInstanceId, itemId };
+      }
+      if (stackId) {
+        if (seenStacks.has(stackId)) throw httpError(400, "Dezelfde stapel staat dubbel in de selectie.");
+        seenStacks.add(stackId);
+        return { stackId, itemId, amount };
+      }
+      throw httpError(400, "De selectie bevat een ongeldig item.");
+    });
+    for (const entry of items) {
+      let owned = null;
+      if (entry.itemInstanceId) {
+        owned = this.db.prepare("SELECT item_id FROM player_item_instances WHERE id = ? AND player_id = ? AND location_type = 'inventory' LIMIT 1")
+          .get(entry.itemInstanceId, ctx.profile.id);
+      } else {
+        owned = this.db.prepare("SELECT item_id, quantity FROM player_inventory_stacks WHERE stack_id = ? AND player_id = ? AND quantity > 0 LIMIT 1")
+          .get(entry.stackId, ctx.profile.id);
+        if (owned && entry.amount > safeInteger(owned.quantity, 0)) throw httpError(409, "De geselecteerde stapel is intussen veranderd. Selecteer hem opnieuw.");
+      }
+      if (!owned) throw httpError(404, "Een geselecteerd item staat niet meer in je tas.");
+      entry.itemId = owned.item_id;
+      const item = catalogSection(ctx.catalogs, "items")[entry.itemId] || {};
+      if (item.questItem === true || item.category === "quest") throw httpError(409, "Een questitem kun je niet weggooien.");
+    }
+    let removed = 0;
+    const names = [];
+    for (const entry of items) {
+      const result = this.destroyItem(ctx, entry, operationId);
+      removed += safeInteger(result.events?.[0]?.amount, 0);
+      if (result.events?.[0]?.itemId) names.push(displayForItem(ctx.catalogs, result.events[0].itemId));
+    }
+    const uniqueNames = Array.from(new Set(names));
+    return {
+      action: "destroy_many",
+      message: removed + (removed === 1 ? " item" : " items") + " weggegooid" + (uniqueNames.length === 1 ? ": " + uniqueNames[0] : "."),
+      events: [{ type: "destroyed_many", amount: removed }],
+      grants: []
+    };
   }
 
   runtimeEntityIsAvailable(entity) {
@@ -1342,6 +1424,7 @@ export class Node03RuntimeService {
     if (action === "heal") return this.healTarget(ctx, payload, operationId);
     if (action === "skill") return this.useSkill(ctx, payload, operationId);
     if (action === "destroy") return this.destroyItem(ctx, payload, operationId);
+    if (action === "destroy_many") return this.destroyItems(ctx, payload, operationId);
     const error = new Error("Onbekende spelactie: " + (action || "-"));
     error.status = 400;
     throw error;
@@ -2994,6 +3077,8 @@ export class Node03RuntimeService {
         category: item.category || null,
         rarity: item.rarity || null,
         stackable: item.stackable !== false,
+        // Echte uitrusting blijft per exemplaar in de database; deze vlag groepeert alleen exact gelijke exemplaren in de tas.
+        groupIdentical: item.visualStackable === true || item.stackable !== false,
         marketEligible: item.marketEligible === true,
         tags: Array.isArray(item.tags) ? item.tags.slice(0, 12) : [],
         // Stap 4 (HUD): plaatje in de tas en de knoppen Uitrusten / Gebruiken / Weggooien.
@@ -3069,6 +3154,7 @@ export class Node03RuntimeService {
         bindState: row.bind_state,
         durability: row.durability,
         maxDurability: row.max_durability,
+        variantKey: inventoryVariantKey(row),
         // Terugbouw zonder nodes: de tas toont "Uitrusten" bij items met een uitrustingsplek.
         equipSlot: item.equipmentSlotRef && catalogSection(ctx.catalogs, "equipmentSlots")[item.equipmentSlotRef] ? item.equipmentSlotRef : null
       };

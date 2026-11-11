@@ -27,7 +27,7 @@ const ITEM_FIELD_TO_RUNTIME = {
   tags: "tags",
   vendorValue: "vendorBaseValueMinor"
 };
-export const CANONICAL_ITEM_RUNTIME_KEYS = ["id", "worldModelScale"].concat(Object.values(ITEM_FIELD_TO_RUNTIME));
+export const CANONICAL_ITEM_RUNTIME_KEYS = ["id", "worldModelScale", "visualStackable"].concat(Object.values(ITEM_FIELD_TO_RUNTIME));
 
 // Zet een canoniek item om naar de vorm die node03 uit catalogs.items leest. Velden die Canoniek kent
 // komen altijd uit Canoniek (leeg = weg). Legacy-velden die Canoniek niet kent blijven bevroren staan.
@@ -38,10 +38,13 @@ export function runtimeItemFromCanonical(item, legacy = null) {
     else runtime[key] = Array.isArray(item[field]) ? item[field].slice() : item[field];
   }
   runtime.id = item.itemId;
+  delete runtime.visualStackable;
   // Fase 05: uitrusting. Het slot alleen overschrijven als Canoniek er een zet (oude imports houden het legacy-slot).
   if (item.equipSlot) {
     runtime.equipmentSlotRef = item.equipSlot;
-    // Uitrusting is altijd een los stuk (anders geen Uitrusten-knop in de tas).
+    // Uitrusting blijft per exemplaar opgeslagen, zodat slijtage/modifiers later niet verloren gaan.
+    // De maker-checkbox mag identieke exemplaren in de tas wel visueel groeperen.
+    runtime.visualStackable = item.stackable === true;
     runtime.stackable = false;
     runtime.stackLimit = 1;
   }

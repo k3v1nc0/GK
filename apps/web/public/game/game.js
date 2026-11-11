@@ -6,7 +6,7 @@ import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../s
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createActorPresentation } from "./actor-presentation.js?v=20261110-fase5b";
-import { createGkHud } from "./hud/gk-hud.js?v=20261111-fase8";
+import { createGkHud } from "./hud/gk-hud.js?v=20261111-bag2";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -7597,6 +7597,8 @@ async function runNode03Action(action, targetId, extra = {}) {
         action: normalizedAction || action,
         targetId: targetId || null,
         itemId: extra.itemId || null,
+        stackId: extra.stackId || null,
+        items: Array.isArray(extra.items) ? extra.items : null,
         currencyId: extra.currencyId || null,
         amount: extra.amount === null || extra.amount === undefined ? null : Number(extra.amount),
         itemInstanceId: extra.itemInstanceId || null,

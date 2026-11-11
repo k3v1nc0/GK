@@ -18,6 +18,14 @@ test("Geneest gaat mee naar de runtime; 0 = geen knop Gebruiken", () => {
   assert.equal("healAmount" in runtimeItemFromCanonical({ itemId: "item.steen", displayName: "Steen", healAmount: 0 }), false);
 });
 
+test("stapel-checkbox groepeert uitrusting alleen visueel; runtime houdt losse exemplaren", () => {
+  const item = runtimeItemFromCanonical({ itemId: "item.zwaard", displayName: "Zwaard", stackable: true, stackLimit: 99, equipSlot: "equipment_slot.main_hand" });
+  assert.equal(item.stackable, false);
+  assert.equal(item.stackLimit, 1);
+  assert.equal(item.visualStackable, true);
+  assert.equal(runtimeItemFromCanonical({ itemId: "item.zwaard", displayName: "Zwaard", stackable: false, equipSlot: "equipment_slot.main_hand" }).visualStackable, false);
+});
+
 function setup() {
   const db = new DatabaseSync(":memory:");
   for (const file of fs.readdirSync("db/migrations").filter((name) => name.endsWith(".sql")).sort()) db.exec(fs.readFileSync("db/migrations/" + file, "utf8"));
@@ -45,7 +53,7 @@ function setup() {
         "item.brood": { id: "item.brood", displayName: "Brood", category: "consumable", healAmount: 20, iconAssetId: "asset.brood" },
         "item.briefje": { id: "item.briefje", displayName: "Briefje", category: "quest", questItem: true },
         "item.steen": { id: "item.steen", displayName: "Steen", category: "material", vendorBaseValueMinor: 2 },
-        "item.helm": { id: "item.helm", displayName: "Helm", category: "equipment", stackable: false, equipmentSlotRef: "equipment_slot.head", armorBonus: 3, worldModelAssetId: "asset.helm" },
+        "item.helm": { id: "item.helm", displayName: "Helm", category: "equipment", stackable: false, visualStackable: true, equipmentSlotRef: "equipment_slot.head", armorBonus: 3, worldModelAssetId: "asset.helm" },
         "item.zwaard": { id: "item.zwaard", displayName: "Zwaard", category: "equipment", stackable: false, equipmentSlotRef: "equipment_slot.main_hand", attackPowerBonus: 5 }
       },
       equipmentSlots: {
@@ -95,6 +103,31 @@ test("Weggooien: los stuk weg, stapel min één, questitem en gedragen spullen b
   assert.equal(qty("item.steen"), 4);
 });
 
+test("Tas-selectie verwijdert losse exemplaren en een exact stapeldeel samen", () => {
+  const { db, svc, ctx, qty, where } = setup();
+  const result = svc.destroyItems(ctx, { items: [
+    { itemInstanceId: "i.helm" },
+    { stackId: "s3", amount: 3 }
+  ] }, "bulk1");
+  assert.equal(result.events[0].amount, 4);
+  assert.equal(where("i.helm"), "deleted");
+  assert.equal(qty("item.steen"), 2);
+  assert.throws(() => svc.destroyItems(ctx, { items: [{ stackId: "s2", amount: 1 }] }, "bulk2"), (error) => error.status === 409 && /questitem/.test(error.message));
+  assert.equal(qty("item.briefje"), 1);
+});
+
+test("Alleen exact gelijke uitrusting krijgt dezelfde visuele variant", () => {
+  const { db, svc, ctx } = setup();
+  const stamp = new Date().toISOString();
+  const insert = db.prepare("INSERT INTO player_item_instances (id, player_id, item_id, bind_state, quality, durability, max_durability, modifiers_json, location_type, created_at, updated_at) VALUES (?, 'p1', 'item.helm', 'none', 'common', ?, 100, '[]', 'inventory', ?, ?)");
+  insert.run("i.helm2", 80, stamp, stamp);
+  insert.run("i.helm3", 80, stamp, stamp);
+  insert.run("i.helm4", 79, stamp, stamp);
+  const byId = Object.fromEntries(svc.loadInventory(ctx).items.filter((item) => item.instanceId).map((item) => [item.instanceId, item]));
+  assert.equal(byId["i.helm2"].variantKey, byId["i.helm3"].variantKey);
+  assert.notEqual(byId["i.helm2"].variantKey, byId["i.helm4"].variantKey, "andere slijtage verlaat de groep");
+});
+
 test("Catalogus voor de HUD: plaatjes, slot, bonussen, questitem en de vakjes", () => {
   const { svc, ctx } = setup();
   const catalog = svc.loadHudCatalog(ctx);
@@ -104,6 +137,7 @@ test("Catalogus voor de HUD: plaatjes, slot, bonussen, questitem en de vakjes", 
   assert.equal(byId["item.helm"].modelAssetId, "asset.helm");
   assert.equal(byId["item.helm"].equipSlot, "equipment_slot.head");
   assert.equal(byId["item.helm"].armorBonus, 3);
+  assert.equal(byId["item.helm"].groupIdentical, true);
   assert.equal(byId["item.zwaard"].attackPowerBonus, 5);
   assert.equal(byId["item.briefje"].questItem, true);
   assert.equal(byId["item.steen"].vendorValue, 2);

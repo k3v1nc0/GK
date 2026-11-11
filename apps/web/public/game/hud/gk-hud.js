@@ -75,6 +75,8 @@ const COMBAT_MS = 6000;
 
 const DEFAULTS = { panel: null, tab: "bag", filter: "all", scroll: {}, item: null, quest: null, done: false,
   minimap: true, zoom: 1, size: "m", music: true, combatFold: true, debug: false, icoSize: "m", icoAnim: true, icoColor: "color", map: null,
+  // Een gesplitste gewone stapel blijft één serverstapel; alleen de twee tasvakjes worden lokaal onthouden.
+  stackSplits: {},
   // Alleen waarden die de speler zelf in de game wijzigt mogen een gepubliceerde
   // minimapstandaard overschrijven. Oudere opslag bevatte de hele standaardkaart,
   // waardoor latere editorwijzigingen onzichtbaar bleven.
@@ -317,13 +319,14 @@ function loadStore(authored) {
       minimap: mapOverrides.minimap === true && Object.prototype.hasOwnProperty.call(raw || {}, "minimap") ? raw.minimap !== false : authored.minimapVisible,
       zoom: mapOverrides.zoom === true && Object.prototype.hasOwnProperty.call(raw || {}, "zoom") ? Math.max(0, Math.min(2, Math.round(num(raw.zoom, 1)))) : authored.defaultZoomIndex,
       scroll: Object.assign({}, raw?.scroll || {}),
+      stackSplits: raw?.stackSplits && typeof raw.stackSplits === "object" ? Object.assign({}, raw.stackSplits) : {},
       sectionFold: Object.assign({}, DEFAULTS.sectionFold, raw?.sectionFold || {}),
       mapOverrides,
       map: mapStore(raw?.map, authored, mapOverrides)
     });
   } catch {
     return Object.assign({}, DEFAULTS, { minimap: authored.minimapVisible, zoom: authored.defaultZoomIndex,
-      scroll: {}, sectionFold: Object.assign({}, DEFAULTS.sectionFold), mapOverrides: {}, map: mapStore(null, authored) });
+      scroll: {}, stackSplits: {}, sectionFold: Object.assign({}, DEFAULTS.sectionFold), mapOverrides: {}, map: mapStore(null, authored) });
   }
 }
 
@@ -414,6 +417,9 @@ export function createGkHud(api) {
     lootSeen: null,         // wat er in de tas zat: sleutel -> { itemId, qty }
     newKeys: new Set(),     // nieuw in de tas sinds je de tas niet meer open had
     bagWasOpen: false,
+    bagSelect: false,       // selectiestand om meerdere tasvakjes tegelijk weg te gooien
+    bagSelection: new Set(),
+    bagAnchor: "",         // eerste vakje van een Shift-bereik
     // Fase 8b: welke ruil je al gezien hebt (zodat het tabblad Ruilen één keer vanzelf opengaat).
     swapSeen: ""
   };
@@ -2371,7 +2377,8 @@ export function createGkHud(api) {
     const view = m === "trade" ? "trade" : m === "craft" ? "craft" : store.tab;
     // Kevin 11-11: zolang de tas open staat blijven de "nieuw"-stempels staan; dicht = gezien.
     if (view === "bag") ui.bagWasOpen = true; else bagSeen();
-    const parts = [view, store.filter, store.item, store.quest, store.done, store.sectionFold, ui.sure, d.busy, ui.trade, ui.craft, store.minimap, store.music, store.size, store.combatFold, store.debug, store.icoSize, store.icoColor, store.icoAnim];
+    const parts = [view, store.filter, store.item, store.quest, store.done, store.sectionFold, ui.sure, d.busy, ui.trade, ui.craft, store.minimap, store.music, store.size, store.combatFold, store.debug, store.icoSize, store.icoColor, store.icoAnim,
+      ui.bagSelect, Array.from(ui.bagSelection).sort(), store.stackSplits];
     // Healing (2-11): levens/mana veranderen elke seconde (regeneratie); de tas hoeft daarvoor niet opnieuw getekend te worden.
     if (view === "bag" || view === "trade" || view === "craft" || view === "gear") parts.push(d.s03?.inventory, d.s03?.equipment, d.s03?.currencies, d.s03?.catalog, Object.keys(d.s03?.itemCooldowns || {}));
     if (view === "gear") parts.push(d.s03?.stats);
@@ -2437,12 +2444,51 @@ export function createGkHud(api) {
 
   function inventoryEntries() {
     const items = data().s03?.inventory?.items || [];
-    return items.map(function (entry) {
+    const visible = [];
+    const identical = new Map();
+    for (const entry of items) {
       const def = catalogItem(entry.itemId) || {};
       const key = entry.kind === "instance" ? "inst:" + entry.instanceId : "stack:" + entry.itemId;
       // Stap 4: questitems staan altijd in het eigen vak 🔑 Quest.
-      return { key, entry, def, category: def.questItem ? "quest" : (def.category || entry.category || "misc"), name: def.displayName || entry.displayName || entry.itemId };
-    }).sort(function (a, b) {
+      const item = { key, entry, def, memberKeys: [key], category: def.questItem ? "quest" : (def.category || entry.category || "misc"), name: def.displayName || entry.displayName || entry.itemId };
+      // Alleen de maker-checkbox én een exacte servervingerafdruk mogen losse exemplaren visueel groeperen.
+      // De database-exemplaren en hun individuele slijtage/modifiers blijven volledig intact.
+      if (entry.kind === "instance" && def.groupIdentical === true && entry.variantKey) {
+        const groupKey = entry.itemId + ":" + entry.variantKey;
+        const group = identical.get(groupKey);
+        if (group) {
+          group.entry.instanceIds.push(entry.instanceId);
+          group.entry.quantity += 1;
+          group.memberKeys.push(key);
+          continue;
+        }
+        item.key = "group:" + entry.instanceId;
+        item.entry = Object.assign({}, entry, { kind: "group", quantity: 1, instanceIds: [entry.instanceId] });
+        identical.set(groupKey, item);
+      }
+      visible.push(item);
+    }
+    const splitVisible = [];
+    for (const item of visible) {
+      const quantity = item.entry.kind === "stack" ? Math.max(0, Math.round(num(item.entry.quantity, 0))) : 0;
+      const splitId = item.entry.stackId || item.entry.itemId;
+      const splitAt = Math.round(num(store.stackSplits?.[splitId], 0));
+      if (quantity > 1 && splitAt > 0 && splitAt < quantity) {
+        splitVisible.push(Object.assign({}, item, {
+          key: item.key + ":left",
+          entry: Object.assign({}, item.entry, { quantity: splitAt, sourceQuantity: quantity, splitId, splitPart: "left" })
+        }));
+        splitVisible.push(Object.assign({}, item, {
+          key: item.key + ":right",
+          entry: Object.assign({}, item.entry, { quantity: quantity - splitAt, sourceQuantity: quantity, splitId, splitPart: "right" })
+        }));
+      } else {
+        splitVisible.push(Object.assign({}, item, {
+          entry: item.entry.kind === "stack" ? Object.assign({}, item.entry, { sourceQuantity: quantity, splitId }) : item.entry
+        }));
+      }
+    }
+    return splitVisible.sort(function (a, b) {
       const order = ["equipment", "consumable", "material", "quest", "misc", "custom"];
       return order.indexOf(a.category) - order.indexOf(b.category) || a.name.localeCompare(b.name) || a.key.localeCompare(b.key);
     });
@@ -2454,11 +2500,12 @@ export function createGkHud(api) {
   }
   function bagCell(item, extra = {}) {
     const def = item.def;
-    const qty = item.entry.kind === "stack" ? num(item.entry.quantity, 1) : 1;
-    const isNew = ui.newKeys.has(item.key);
-    return h("button", { type: "button", class: "gkCell" + (extra.on ? " gkOn" : "") + (extra.no ? " gkNo" : "") + (isNew ? " gkCellNew" : ""), "data-act": extra.act || "item", "data-key": item.key,
-      "data-rarity": def.rarity || item.entry.rarity || "common", title: item.name + (isNew ? " (nieuw)" : ""), "data-drag": extra.drag || null },
-    [itemVisual(item.entry.itemId), isNew ? h("span", { class: "gkCellNewTag", text: "nieuw" }) : null, qty > 1 ? h("b", { text: fmt(qty) }) : null,
+    const qty = ["stack", "group"].includes(item.entry.kind) ? num(item.entry.quantity, 1) : 1;
+    const isNew = item.memberKeys.some(function (key) { return ui.newKeys.has(key); });
+    return h("button", { type: "button", class: "gkCell" + (extra.on ? " gkOn gkSelected" : "") + (extra.no ? " gkNo" : "") + (isNew ? " gkCellNew" : ""), "data-act": extra.act || "item", "data-key": item.key,
+      "data-rarity": def.rarity || item.entry.rarity || "common", title: item.name + (isNew ? " (nieuw)" : ""), "data-drag": extra.drag || null, disabled: extra.disabled ? true : null },
+    [itemVisual(item.entry.itemId), extra.on ? h("span", { class: "gkCellPick" }, [ico("check-mark", "plain")]) : null,
+      isNew ? h("span", { class: "gkCellNewTag", text: "nieuw" }) : null, qty > 1 ? h("b", { text: fmt(qty) }) : null,
       num(def.useCooldownS) > 0 ? h("em", { class: "gkCd", "data-cd": item.entry.itemId, hidden: true }) : null]);
   }
   function emptyCells(count, min = 20) {
@@ -2476,26 +2523,60 @@ export function createGkHud(api) {
       for (let i = 0; i < missing; i += 1) grid.append(h("div", { class: "gkCell gkEmpty gkPad", "aria-hidden": "true" }));
     }
   }
-  function bagFoot(count) {
+  function bagFoot(slotCount, itemCount) {
     const list = currencies();
     const main = list[0];
-    return h("div", { class: "gkFoot" }, [main ? coin(main.amount, main.currencyId) : null, h("span", { text: count + (count === 1 ? " ding" : " dingen") })]);
+    const slots = slotCount + (slotCount === 1 ? " vak" : " vakken");
+    const items = itemCount + (itemCount === 1 ? " stuk" : " stuks");
+    return h("div", { class: "gkFoot" }, [main ? coin(main.amount, main.currencyId) : null, h("span", { text: slots + " · " + items })]);
+  }
+
+  function bagEntryQuantity(item) {
+    return ["stack", "group"].includes(item?.entry?.kind) ? Math.max(1, Math.round(num(item.entry.quantity, 1))) : 1;
+  }
+
+  function selectedBagEntries(all = inventoryEntries()) {
+    const byKey = new Map(all.map(function (item) { return [item.key, item]; }));
+    return Array.from(ui.bagSelection).map(function (key) { return byKey.get(key); }).filter(Boolean);
+  }
+
+  function bagSelectionBar(all) {
+    const selected = selectedBagEntries(all);
+    const count = selected.reduce(function (sum, item) { return sum + bagEntryQuantity(item); }, 0);
+    const sure = ui.sure === "destroy-selection";
+    return h("div", { class: "gkBagActions" }, [
+      h("strong", { text: count ? fmt(count) + " geselecteerd" : "Tik spullen aan" }),
+      h("button", { type: "button", class: "gkBtn", "data-act": "bag-select-clear", disabled: selected.length ? null : true }, "Selectie wissen"),
+      h("button", { type: "button", class: "gkBtn gkWarn" + (sure ? " gkSure" : ""), "data-act": "bag-destroy", disabled: selected.length ? null : true },
+        [ico("trash-can", "plain"), sure ? " Zeker? Tik nog eens" : " Weggooien"])
+    ]);
   }
 
   function sheetBag() {
     const all = inventoryEntries();
+    const availableKeys = new Set(all.map(function (item) { return item.key; }));
+    for (const key of Array.from(ui.bagSelection)) if (!availableKeys.has(key)) ui.bagSelection.delete(key);
     const presentFilters = FILTERS.filter(function (filter) {
       return filter.id === "all" || all.some(function (item) { return filterMatch(item.category, filter.id); });
     });
     if (!presentFilters.some(function (filter) { return filter.id === store.filter; })) store.filter = "all";
-    const filters = h("div", { class: "gkFilters", role: "tablist" }, presentFilters.map(function (filter) {
+    const filterButtons = presentFilters.map(function (filter) {
       return h("button", { type: "button", class: "gkFilter" + (filter.id === store.filter ? " gkOn" : ""), "data-act": "filter", "data-id": filter.id, title: filter.title }, [ico(filter.icon)]);
-    }));
+    });
+    filterButtons.push(h("button", { type: "button", class: "gkFilter gkBagSelect" + (ui.bagSelect ? " gkOn" : ""), "data-act": "bag-select", title: ui.bagSelect ? "Selecteren stoppen" : "Meerdere spullen selecteren" }, [ico("check-mark")]));
+    const filters = h("div", { class: "gkFilters", role: "tablist" }, filterButtons);
     const shown = all.filter(function (item) { return filterMatch(item.category, store.filter); });
     const body = h("div", { class: "gkBody" });
     if (!all.length) body.append(emptyNote("knapsack", "Je tas is nog leeg. Pak iets op of verzamel iets in de wereld."));
-    else body.append(h("div", { class: "gkGrid" }, shown.map(function (item) { return bagCell(item, { on: item.key === store.item }); }).concat(emptyCells(shown.length))));
-    const parts = [head("knapsack", "Tas", filters), body, bagFoot(all.length)];
+    else body.append(h("div", { class: "gkGrid" }, shown.map(function (item) {
+      const questItem = item.def.questItem === true || item.category === "quest";
+      return bagCell(item, ui.bagSelect
+        ? { act: "bag-pick", on: ui.bagSelection.has(item.key), no: questItem, disabled: questItem }
+        : { on: item.key === store.item });
+    }).concat(emptyCells(shown.length))));
+    const parts = [head("knapsack", "Tas", filters), body];
+    if (ui.bagSelect) parts.push(bagSelectionBar(all));
+    parts.push(bagFoot(all.length, all.reduce(function (sum, item) { return sum + bagEntryQuantity(item); }, 0)));
     const detail = itemDetail(store.item);
     if (detail) parts.push(detail);
     return parts;
@@ -2503,6 +2584,23 @@ export function createGkHud(api) {
 
   function emptyNote(icon, text) {
     return h("div", { class: "gkEmptyNote" }, [ico(icon), text]);
+  }
+
+  function stackSplitControl(item) {
+    if (!item || item.entry.kind !== "stack") return null;
+    const total = Math.max(0, Math.round(num(item.entry.sourceQuantity, item.entry.quantity)));
+    if (total < 2) return null;
+    const splitId = item.entry.splitId || item.entry.stackId || item.entry.itemId;
+    const saved = Math.round(num(store.stackSplits?.[splitId], 0));
+    const value = saved > 0 && saved < total ? saved : Math.max(1, Math.floor(total / 2));
+    return h("div", { class: "gkStackSplit" }, [
+      h("label", null, [h("span", { "data-stack-split-label": "", text: "Verdeling: " + value + " / " + (total - value) }),
+        h("input", { type: "range", min: 1, max: total - 1, step: 1, value, "data-stack-split": splitId, "data-total": total })]),
+      h("div", { class: "gkStackSplitBtns" }, [
+        h("button", { type: "button", class: "gkBtn", "data-act": "stack-split", "data-key": item.key }, saved ? "Verdeling aanpassen" : "In twee stapels"),
+        saved ? h("button", { type: "button", class: "gkBtn", "data-act": "stack-join", "data-id": splitId }, "Samenvoegen") : null
+      ])
+    ]);
   }
 
   // Item-kaart onderin het paneel: plaatje, naam, wat het doet en de knoppen.
@@ -2561,18 +2659,21 @@ export function createGkHud(api) {
           disabled: busy ? true : null }, [ico("swap-bag", "plain"), already ? "Nog een erbij (" + fmt(already.quantity) + ")" : "Aanbieden"]));
       }
       if (!def.questItem && !options.sell) {
+        buttons.push(h("button", { type: "button", class: "gkBtn", "data-act": "select-all-item", "data-id": itemId, disabled: busy ? true : null },
+          [ico("check-mark", "plain"), "Alles van dit item selecteren"]));
         const sure = ui.sure === "destroy:" + key;
         buttons.push(h("button", { type: "button", class: "gkBtn gkWarn" + (sure ? " gkSure" : ""), "data-act": "destroy", "data-key": key, disabled: busy ? true : null },
-          [ico("trash-can", "plain"), sure ? "Zeker? Tik nog eens" : "Weggooien"]));
+          [ico("trash-can", "plain"), sure ? "Zeker? Tik nog eens" : item?.entry.kind === "group" && item.entry.quantity > 1 ? "Eén weggooien" : "Weggooien"]));
       }
     }
-    const qty = item?.entry.kind === "stack" ? num(item.entry.quantity, 1) : 1;
+    const qty = item ? bagEntryQuantity(item) : 1;
     const line = [RARITY_LABEL[rarity] || "", CATEGORY_LABEL[def.category] || "", qty > 1 ? qty + " stuks" : "", equipped ? "Gedragen: " + (equipped.slotName || "") : ""].filter(Boolean).join(" · ");
     return h("div", { class: "gkDetail", role: "dialog", "data-key": key, "data-item-id": itemId }, [
       h("div", { class: "gkDetailIcon" }, [h("div", { class: "gkCell", "data-rarity": rarity }, [itemVisual(itemId, equipped?.slotId)])]),
       h("h3", { class: "gkRarity-" + rarity }, [h("span", { text: title }), h("button", { type: "button", class: "gkClose", "data-act": "detail-close", title: "Sluiten" }, [ico("cancel")])]),
       h("p", { text: line }),
       stats.length ? h("div", { class: "gkStats" }, stats) : null,
+      stackSplitControl(item),
       buttons.length ? h("div", { class: "gkBtns" }, buttons) : null
     ]);
   }
@@ -3960,11 +4061,65 @@ export function createGkHud(api) {
     return false;
   }
   function itemPayload(key) {
-    if (key.startsWith("inst:")) {
-      const item = inventoryEntries().find(function (entry) { return entry.key === key; });
-      return { itemInstanceId: key.slice(5), itemId: item?.entry.itemId || null };
+    const item = inventoryEntries().find(function (entry) { return entry.key === key; }) || null;
+    if (!item) return key.startsWith("inst:") ? { itemInstanceId: key.slice(5) } : { itemId: key.replace(/^stack:/, "").replace(/:(left|right)$/, "") };
+    if (item.entry.kind === "instance") return { itemInstanceId: item.entry.instanceId, itemId: item.entry.itemId };
+    if (item.entry.kind === "group") return { itemInstanceId: item.entry.instanceIds[0], itemId: item.entry.itemId };
+    return { stackId: item.entry.stackId || null, itemId: item.entry.itemId };
+  }
+
+  function destroyPayloadsFor(entries) {
+    const instances = new Map();
+    const stacks = new Map();
+    for (const item of entries) {
+      if (item.entry.kind === "group") {
+        for (const instanceId of item.entry.instanceIds || []) instances.set(instanceId, { itemInstanceId: instanceId, itemId: item.entry.itemId });
+      } else if (item.entry.kind === "instance") {
+        instances.set(item.entry.instanceId, { itemInstanceId: item.entry.instanceId, itemId: item.entry.itemId });
+      } else if (item.entry.kind === "stack") {
+        const stackId = item.entry.stackId;
+        const previous = stacks.get(stackId) || { stackId, itemId: item.entry.itemId, amount: 0 };
+        previous.amount += bagEntryQuantity(item);
+        stacks.set(stackId, previous);
+      }
     }
-    return { itemId: key.replace(/^stack:/, "") };
+    return Array.from(instances.values()).concat(Array.from(stacks.values()));
+  }
+
+  function confirmDestroy(entries, confirmKey) {
+    const order = { common: 0, uncommon: 1, rare: 2, epic: 3, legendary: 4, quest: 5 };
+    const rarity = entries.reduce(function (highest, item) {
+      const candidate = item.entry.rarity || item.def.rarity || "common";
+      return num(order[candidate], 0) > num(order[highest], 0) ? candidate : highest;
+    }, "common");
+    const count = entries.reduce(function (sum, item) { return sum + bagEntryQuantity(item); }, 0);
+    if (rarity === "epic") {
+      return String(window.prompt("Er zit epische uitrusting in deze selectie. Typ WEGGOOIEN om " + count + " item(s) definitief weg te gooien.") || "").trim() === "WEGGOOIEN";
+    }
+    if (rarity === "legendary") {
+      const phrase = "VERWIJDER " + count;
+      return String(window.prompt("Dit bevat legendarische uitrusting. Typ exact: " + phrase) || "").trim() === phrase;
+    }
+    if (rarity === "rare") {
+      if (!confirmTwice(confirmKey)) return false;
+      return window.confirm("Deze selectie bevat zeldzame uitrusting. Wil je " + count + " item(s) echt weggooien?");
+    }
+    return confirmTwice(confirmKey);
+  }
+
+  function destroyBagSelection() {
+    const selected = selectedBagEntries();
+    if (!selected.length || !confirmDestroy(selected, "destroy-selection")) return;
+    const items = destroyPayloadsFor(selected);
+    if (!items.length) return;
+    for (const item of items) if (item.stackId) delete store.stackSplits[item.stackId];
+    Promise.resolve(api.run03("destroy_many", null, { items })).finally(function () {
+      ui.bagSelect = false;
+      ui.bagSelection.clear();
+      store.item = null;
+      save();
+      renderSheet();
+    });
   }
   function attack() {
     ui.combatAt = performance.now();
@@ -4012,7 +4167,62 @@ export function createGkHud(api) {
       case "bag": openTab("bag"); break;
       case "close": if (ui.trade || ui.craft) endService(); else setPanel("closed"); break;
       case "filter": store.filter = id; store.item = null; save(); renderSheet(); break;
+      case "bag-select":
+        ui.bagSelect = !ui.bagSelect;
+        ui.bagSelection.clear();
+        ui.bagAnchor = "";
+        store.item = null;
+        ui.sure = "";
+        save();
+        renderSheet();
+        break;
+      case "bag-pick":
+        if (event.shiftKey && ui.bagAnchor) {
+          const keys = Array.from(root.querySelectorAll('[data-act="bag-pick"]:not([disabled])')).map(function (cell) { return cell.dataset.key || ""; });
+          const from = keys.indexOf(ui.bagAnchor);
+          const to = keys.indexOf(key);
+          if (from >= 0 && to >= 0) {
+            for (const selectedKey of keys.slice(Math.min(from, to), Math.max(from, to) + 1)) ui.bagSelection.add(selectedKey);
+          } else {
+            ui.bagSelection.add(key);
+            ui.bagAnchor = key;
+          }
+        } else {
+          if (ui.bagSelection.has(key)) ui.bagSelection.delete(key); else ui.bagSelection.add(key);
+          ui.bagAnchor = key;
+        }
+        ui.sure = "";
+        renderSheet();
+        break;
+      case "bag-select-clear": ui.bagSelection.clear(); ui.bagAnchor = ""; ui.sure = ""; renderSheet(); break;
+      case "bag-destroy": destroyBagSelection(); break;
+      case "select-all-item": {
+        const matches = inventoryEntries().filter(function (item) {
+          return item.entry.itemId === id && item.def.questItem !== true && item.category !== "quest";
+        });
+        if (!matches.length) break;
+        ui.bagSelect = true;
+        ui.bagSelection.clear();
+        matches.forEach(function (item) { ui.bagSelection.add(item.key); });
+        ui.bagAnchor = matches[0].key;
+        store.item = null;
+        ui.sure = "";
+        renderSheet();
+        break;
+      }
       case "item": {
+        if (event.shiftKey) {
+          const shifted = inventoryEntries().find(function (entry) { return entry.key === key; }) || null;
+          if (!shifted || shifted.def.questItem === true || shifted.category === "quest") break;
+          ui.bagSelect = true;
+          ui.bagSelection.clear();
+          ui.bagSelection.add(key);
+          ui.bagAnchor = key;
+          store.item = null;
+          ui.sure = "";
+          renderSheet();
+          break;
+        }
         // Kevin 5-11: een brief (item dat een quest start) opent meteen het gesprek met de brief.
         const reading = !ui.trade && !ui.craft ? catalogItem(itemPayload(key).itemId) : null;
         if (reading?.reads) { store.item = null; ui.story = { kind: "letter", itemId: reading.itemId }; ui.dockPick = "talk"; save(); applyLayout(); render(); break; }
@@ -4028,7 +4238,31 @@ export function createGkHud(api) {
       case "equip": api.run03("equip", null, itemPayload(key)); store.item = null; save(); break;
       case "unequip": api.run03("unequip", null, { slotId: id }); store.item = null; save(); break;
       case "use": api.run03("use", null, { itemId: id }); break;
-      case "destroy": if (confirmTwice("destroy:" + key)) { api.run03("destroy", null, Object.assign(itemPayload(key), { amount: 1 })); } break;
+      case "destroy": {
+        const item = inventoryEntries().find(function (entry) { return entry.key === key; }) || null;
+        if (!item) break;
+        const one = Object.assign({}, item, { entry: Object.assign({}, item.entry, { quantity: 1 }) });
+        if (confirmDestroy([one], "destroy:" + key)) api.run03("destroy", null, Object.assign(itemPayload(key), { amount: 1 }));
+        break;
+      }
+      case "stack-split": {
+        const input = el.closest(".gkDetail")?.querySelector("[data-stack-split]");
+        if (!input) break;
+        const splitId = String(input.dataset.stackSplit || "");
+        const total = Math.max(0, Math.round(num(input.dataset.total, 0)));
+        const at = Math.max(1, Math.min(total - 1, Math.round(num(input.value, 1))));
+        if (splitId && total > 1) store.stackSplits[splitId] = at;
+        store.item = null;
+        save();
+        renderSheet();
+        break;
+      }
+      case "stack-join":
+        if (id) delete store.stackSplits[id];
+        store.item = null;
+        save();
+        renderSheet();
+        break;
       case "quests-done": store.done = !store.done; save(); renderSheet(); break;
       case "section": store.sectionFold[id] = !store.sectionFold[id]; save(); renderSheet(); break;
       case "quest-go": api.run04("node04:move_marker", id, { questId: el.dataset.quest || null }); break;
@@ -4284,12 +4518,74 @@ export function createGkHud(api) {
     });
   }
 
+  // Mobiel: lang indrukken begint selecteren; daarna over vakjes vegen voegt ze veilig toe.
+  // De selectie voert zelf geen actie uit: weggooien blijft achter de bevestigingsknop zitten.
+  function startBagTouchSelection(event, cell) {
+    if (!cell || cell.disabled || event.pointerType === "mouse" || event.button > 0) return false;
+    const start = { x: event.clientX, y: event.clientY };
+    let active = false;
+    let cancelled = false;
+    const selectCell = function (target) {
+      if (!target || target.disabled) return;
+      const key = target.dataset.key || "";
+      if (!key || ui.bagSelection.has(key)) return;
+      const item = inventoryEntries().find(function (entry) { return entry.key === key; }) || null;
+      if (!item || item.def.questItem === true || item.category === "quest") return;
+      ui.bagSelection.add(key);
+      if (!ui.bagAnchor) ui.bagAnchor = key;
+      ui.sure = "";
+      renderSheet();
+    };
+    const timer = window.setTimeout(function () {
+      if (cancelled) return;
+      active = true;
+      if (!ui.bagSelect) {
+        ui.bagSelect = true;
+        ui.bagSelection.clear();
+        ui.bagAnchor = "";
+        store.item = null;
+      }
+      root.classList.add("gkBagSweeping");
+      selectCell(cell);
+      if (typeof navigator.vibrate === "function") navigator.vibrate(18);
+    }, 450);
+    const move = function (moveEvent) {
+      const distance = Math.hypot(moveEvent.clientX - start.x, moveEvent.clientY - start.y);
+      if (!active) {
+        if (distance > 12) { cancelled = true; window.clearTimeout(timer); }
+        return;
+      }
+      moveEvent.preventDefault();
+      const hit = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY);
+      const next = hit && typeof hit.closest === "function" ? hit.closest('[data-act="bag-pick"]') : null;
+      if (next && root.contains(next)) selectCell(next);
+    };
+    const up = function () {
+      cancelled = true;
+      window.clearTimeout(timer);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      root.classList.remove("gkBagSweeping");
+      if (active) {
+        ui.dragJustEnded = true;
+        window.setTimeout(function () { ui.dragJustEnded = false; }, 0);
+      }
+    };
+    window.addEventListener("pointermove", move, { passive: false });
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    return true;
+  }
+
   // Slepen in de winkel: een waar naar je tas = kopen, iets uit je tas naar de waren = verkopen.
   function onPointerDown(event) {
     // MMO (3-11): naast het menu tikken = menu dicht; lang drukken op een teamlid = menu.
     if (event.target === menuShade) { event.preventDefault(); closeMenu(); return; }
     const mateEl = event.target && typeof event.target.closest === "function" ? event.target.closest("[data-mate]") : null;
     if (mateEl && root.contains(mateEl)) startMateHold(event, mateEl);
+    const bagCell = event.target && typeof event.target.closest === "function" ? event.target.closest('[data-act="item"], [data-act="bag-pick"]') : null;
+    if (bagCell && root.contains(bagCell) && startBagTouchSelection(event, bagCell)) return;
     const source = event.target && typeof event.target.closest === "function" ? event.target.closest("[data-drag]") : null;
     if (!source || !root.contains(source) || event.button > 0) return;
     const start = { x: event.clientX, y: event.clientY };
@@ -4379,6 +4675,14 @@ export function createGkHud(api) {
 
   root.addEventListener("click", onClick);
   root.addEventListener("input", function (event) {
+    const split = event.target && typeof event.target.closest === "function" ? event.target.closest("[data-stack-split]") : null;
+    if (split && root.contains(split)) {
+      const total = Math.max(0, Math.round(num(split.dataset.total, 0)));
+      const value = Math.max(1, Math.min(total - 1, Math.round(num(split.value, 1))));
+      const label = split.closest("label")?.querySelector("[data-stack-split-label]");
+      if (label) label.textContent = "Verdeling: " + value + " / " + (total - value);
+      return;
+    }
     const input = event.target && typeof event.target.closest === "function" ? event.target.closest("[data-craft-search]") : null;
     if (!input || !root.contains(input)) return;
     ui.craftSearch = String(input.value || "");

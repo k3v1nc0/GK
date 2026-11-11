@@ -420,6 +420,10 @@
 .gkCell .gkPrice { position: absolute; left: 3px; right: 3px; bottom: 2px; display: flex; justify-content: center; align-items: center; gap: 2px; font-size: 11px; font-weight: 800; text-shadow: 0 1px 2px #000; }
 .gkCell .gkPrice .gkIco { width: 12px; height: 12px; }
 .gkCell.gkOn { box-shadow: var(--gk-glow); }
+.gkCell.gkSelected { border-color: var(--gk-good); box-shadow: 0 0 0 2px rgba(74, 222, 128, 0.55), var(--gk-glow); }
+.gkCellPick { position: absolute; left: 3px; top: 3px; z-index: 2; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--gk-good); color: #07120b; box-shadow: 0 1px 4px #000; }
+.gkCellPick .gkIco { width: 13px; height: 13px; }
+.gkBagSweeping .gkGrid { touch-action: none; user-select: none; }
 .gkCell.gkWorn::after { content: ""; position: absolute; top: 4px; left: 4px; width: 8px; height: 8px; border-radius: 50%; background: var(--gk-good); box-shadow: 0 0 0 2px #0b1220; }
 .gkCell.gkNo { opacity: 0.45; }
 .gkCell[data-rarity="uncommon"] { border-color: rgba(62, 207, 90, 0.75); }
@@ -442,6 +446,12 @@
 .gkStat { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 8px; background: rgba(255, 255, 255, 0.06); font-size: 12px; }
 .gkStat .gkIco { width: 14px; height: 14px; }
 .gkBtns { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; }
+.gkBagActions { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 7px; padding: 7px 9px; border-top: 1px solid var(--gk-line); background: rgba(8, 13, 23, 0.78); }
+.gkBagActions strong { margin-right: auto; font-size: 12px; }
+.gkStackSplit { grid-column: 1 / -1; display: grid; gap: 7px; padding: 8px; border: 1px solid var(--gk-line); border-radius: 9px; background: rgba(8, 13, 23, 0.55); }
+.gkStackSplit label { display: grid; gap: 5px; font-size: 12px; color: var(--gk-muted); }
+.gkStackSplit input[type="range"] { width: 100%; accent-color: var(--gk-gold); }
+.gkStackSplitBtns { display: flex; flex-wrap: wrap; gap: 7px; }
 .gkBtn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 42px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--gk-line2);
   background: linear-gradient(180deg, #24406a, #172a47); font-weight: 800; flex: 1 1 auto; }
 .gkBtn .gkIco { width: 20px; height: 20px; }
