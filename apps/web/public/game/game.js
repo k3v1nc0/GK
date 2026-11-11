@@ -1,4 +1,4 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261110-fase5b";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261111-namefix1";
 import { nextPlayerRouteWaypoint } from "../shared/player-path-client.js?v=20261108-roads9";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20261106-perf1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
@@ -6,7 +6,7 @@ import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../s
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createActorPresentation } from "./actor-presentation.js?v=20261110-fase5b";
-import { createGkHud } from "./hud/gk-hud.js?v=20261110-fase5b";
+import { createGkHud } from "./hud/gk-hud.js?v=20261111-namefix1";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,

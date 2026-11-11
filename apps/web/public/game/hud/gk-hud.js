@@ -3024,12 +3024,20 @@ export function createGkHud(api) {
         labels.append(el);
         labelPool.set(anchor.id, el);
       }
-      // Kevin 10-11: een vijand krijgt zijn sterkte-cijfer voor de naam (1 = gewoon, 2 = twee keer zo sterk).
-      const nameSig = anchor.strength ? anchor.strength + "|" + anchor.name : anchor.name;
+      const hasHp = anchor.health !== null && anchor.health !== undefined;
+      // Een vijand krijgt één kopregel: sterkte-cijfer, naam en (als het staat) het schild.
+      const nameSig = [anchor.strength || "", anchor.name, anchor.shield ? "shield" : "", hasHp ? "hp" : ""].join("|");
       if (el.dataset.sig !== nameSig) {
         el.dataset.sig = nameSig;
-        if (anchor.strength) el.replaceChildren(h("span", { class: "gkLvl" + (anchor.strength > 1 ? " gkLvlUp" : ""), text: String(anchor.strength) }), document.createTextNode(anchor.name));
-        else el.textContent = anchor.name;
+        const head = h("span", { class: "gkLabelHead" });
+        if (anchor.strength) head.append(h("span", { class: "gkLvl" + (anchor.strength > 1 ? " gkLvlUp" : ""), text: String(anchor.strength) }));
+        head.append(h("span", { class: "gkLabelName", text: anchor.name }));
+        if (anchor.shield) head.append(h("span", { class: "gkStrongIcon", text: "🛡️" }));
+        const children = [head];
+        const healthText = hasHp ? h("span", { class: "gkHealthText" }) : null;
+        if (hasHp) children.push(h("span", { class: "gkHealth" }, [h("span", { class: "gkHealthFill" }), healthText]));
+        el.replaceChildren(...children);
+        el.gkHealthText = healthText;
       }
       const fontSize = Math.max(8, Math.min(48, num(anchor.fontSizePx, 13)));
       const fontSizeCss = fontSize + "px";
@@ -3037,13 +3045,17 @@ export function createGkHud(api) {
       // Naam-tags niet verbergen bij overlap met de HUD; ze horen altijd zichtbaar te blijven.
       if (el.style.visibility) el.style.visibility = "";
       const kind = own || (anchor.entityKind === "escort" ? "escort" : markerKind(anchor)) || "other";
-      const hasHp = anchor.health !== null && anchor.health !== undefined;
-      const className = "gkLabel gkLabel--" + kind + (anchor.selected ? " gkOn" : "") + (anchor.available === false ? " gkDim" : "") + (anchor.shield ? " gkShield" : "") + (hasHp ? " gkHp" : "");
+      // Niet `gkHp`: die klasse hoort bij de grote spelerbalk en knipt de naamtag op 18 px af.
+      const className = "gkLabel gkLabel--" + kind + (anchor.selected ? " gkOn" : "") + (anchor.available === false ? " gkDim" : "") + (anchor.shield ? " gkShield" : "") + (hasHp ? " gkHasHealth" : "");
       if (el.className !== className) el.className = className;
       // Stap 8: levensbalk onder de naam van een NPC die je begeleidt (Kevin 10-11: en van elke vijand).
       if (hasHp) {
         const hp = Math.round(anchor.health * 100) + "%";
         if (el.style.getPropertyValue("--gk-hp") !== hp) el.style.setProperty("--gk-hp", hp);
+        const current = Number.isFinite(Number(anchor.healthCurrent)) ? Math.max(0, Math.round(Number(anchor.healthCurrent))) : Math.round(anchor.health * 100);
+        const maximum = Number.isFinite(Number(anchor.healthMax)) ? Math.max(1, Math.round(Number(anchor.healthMax))) : 100;
+        const value = current + "/" + maximum;
+        if (el.gkHealthText && el.gkHealthText.textContent !== value) el.gkHealthText.textContent = value;
       }
       const left = snapToScreenPixel(anchor.x - labelRect.left) + "px";
       const top = snapToScreenPixel(anchor.y - labelRect.top) + "px";

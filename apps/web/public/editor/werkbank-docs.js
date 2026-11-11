@@ -194,7 +194,14 @@ export function createDocBench(options = {}) {
   }
 
   async function persistDoc(kind, doc, body, label) {
-    const clean = cleanBody(body);
+    // Een ouder singleton-document kan nog velden bevatten die intussen naar een
+    // andere instellingenkaart zijn verhuisd. Stuur alleen het huidige schema;
+    // anders weigert de strikte validator iedere wijziging aan de hele kaart.
+    const fields = bench.spec(kind)?.fields || null;
+    const current = fields
+      ? Object.fromEntries(Object.entries(body || {}).filter(([key]) => Object.prototype.hasOwnProperty.call(fields, key)))
+      : body;
+    const clean = cleanBody(current);
     try {
       let result;
       if (doc) {

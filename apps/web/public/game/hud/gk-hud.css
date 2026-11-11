@@ -209,23 +209,30 @@
 
 /* Namen blijven bestaan bij HUD-overlap, maar liggen visueel achter de panelen. */
 .gkLabels { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 0; }
-.gkLabel { position: absolute; left: 0; top: 0; padding: 0 2px 4px; white-space: nowrap; font-size: 13px; font-weight: 700; letter-spacing: 0.01em; color: #e6edf5;
-  text-shadow: 0 0 2px #000, 0 1px 2px #000, 0 0 4px rgba(0, 0, 0, 0.8); transform: translate(-50%, -100%); }
+.gkLabel { position: absolute; left: 0; top: 0; height: auto; overflow: visible; padding: 0 2px 4px; white-space: nowrap; font-size: 13px; font-weight: 700; letter-spacing: 0.01em; color: #e6edf5;
+  background: transparent; border: 0; box-shadow: none; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9); transform: translate(-50%, -100%); }
+.gkLabelHead { display: flex; align-items: center; justify-content: center; gap: 4px; }
+.gkLabelName { display: inline-block; }
 .gkLabel--npc { color: #ffd34d; }
 .gkLabel--enemy { color: #ff7a7a; }
 /* Stap 8: een NPC die je begeleidt: groene naam met een levensbalk eronder. */
 .gkLabel--escort { color: #b9f6c5; }
-.gkLabel.gkHp::after { content: ""; display: block; width: 46px; height: 5px; margin: 2px auto 0; border-radius: 3px; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7);
-  background: linear-gradient(90deg, #ef4444 var(--gk-hp, 100%), rgba(20, 20, 20, 0.75) var(--gk-hp, 100%)); }
-.gkLabel--escort.gkHp::after { background: linear-gradient(90deg, #4ade80 var(--gk-hp, 100%), rgba(20, 20, 20, 0.75) var(--gk-hp, 100%)); }
+.gkHealth { position: relative; display: block; width: 68px; height: 9px; margin: 3px auto 0; overflow: hidden; border-radius: 3px;
+  background: rgba(80, 28, 28, 0.72); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.28); color: #fff; text-shadow: 0 1px 1px rgba(0, 0, 0, 0.9); }
+.gkHealthFill { position: absolute; inset: 0 auto 0 0; width: var(--gk-hp, 100%); background: #d93636; }
+.gkHealthText { position: relative; z-index: 1; display: block; font-size: 0.54em; font-weight: 400; line-height: 9px; text-align: center; letter-spacing: 0; }
+.gkLabel--escort .gkHealth { background: rgba(24, 76, 45, 0.72); }
+.gkLabel--escort .gkHealthFill { background: #36b864; }
 /* Kevin 10-11: sterkte-cijfer voor de naam van een vijand (oranje als hij sterker is dan gewoon) */
-.gkLvl { display: inline-block; min-width: 1.25em; margin-right: 4px; padding: 0 3px; border-radius: 4px; font-size: 0.85em; line-height: 1.25; text-align: center;
-  color: #e6edf5; background: rgba(15, 20, 28, 0.78); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25); text-decoration: none; }
-.gkLvl.gkLvlUp { color: #1a1206; background: #ffb347; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5); }
+.gkLvl { display: inline-block; min-width: 1.25em; padding: 0 3px; border-radius: 4px; font-size: 0.85em; line-height: 1.25; text-align: center;
+  font-weight: 500; color: #e6edf5; background: transparent; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.45); text-decoration: none; }
+.gkLvl.gkLvlUp { color: #1a1206; background: #ffb347; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35); }
+.gkStrongIcon { display: inline-block; flex: none; font-size: 0.92em; font-weight: 400; line-height: 1; text-decoration: none; }
 .gkLabel--resource { color: #a7e98a; }
 .gkLabel--pickup { color: #9fe8ff; }
 .gkLabel--portal { color: #d6a4ff; }
-.gkLabel.gkOn { color: #ffffff; text-decoration: underline; text-underline-offset: 3px; }
+.gkLabel.gkOn { color: #ffffff; }
+.gkLabel.gkOn .gkLabelName { text-decoration: underline; text-underline-offset: 3px; }
 .gkLabel.gkDim { opacity: 0.55; }
 .gkHud[data-size="s"] .gkLabel { font-size: 12px; }
 .gkHud[data-size="l"] .gkLabel { font-size: 15px; }
@@ -909,8 +916,6 @@
 .gkCard.gkMaker strong { display: flex; align-items: center; gap: 6px; }
 .gkCard.gkMaker strong .gkIco { width: 18px; height: 18px; }
 .gkFx--skill { color: #ffb347; font-size: 13px; }
-.gkLabel.gkShield::before { content: "🛡️"; display: block; text-align: center; font-size: 1.15em; line-height: 1.1; }
-
 /* Kevin 10-11: telefoon rechtop: de knoppen in een blokje rechtsonder (vak 3 en 2 boven, tas/doen/aanvallen onder),
    zodat er links ruimte blijft voor de meldingen en je de game nog ziet. */
 .gkHud[data-orient="port"] .gkActions { display: grid; grid-template-columns: repeat(3, auto); grid-template-areas: ". s3 s2" "bag do atk"; gap: 8px; align-items: center; justify-items: center; }

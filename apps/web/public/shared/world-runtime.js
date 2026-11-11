@@ -16035,6 +16035,8 @@ function resolveChunkDebugCenter(policy) {
         shield: target.shield === true,
         // Stap 8: een begeleide NPC toont zijn levens onder zijn naam. Kevin 10-11: elke vijand ook, met zijn sterkte-cijfer ervoor.
         health: (target.escort === true || target.entityKind === "enemy") && Number(target.healthMax) > 0 ? Math.max(0, Math.min(1, Number(target.healthCurrent) / Number(target.healthMax))) : null,
+        healthCurrent: (target.escort === true || target.entityKind === "enemy") && Number(target.healthMax) > 0 ? Math.max(0, Math.round(Number(target.healthCurrent) || 0)) : null,
+        healthMax: (target.escort === true || target.entityKind === "enemy") && Number(target.healthMax) > 0 ? Math.max(1, Math.round(Number(target.healthMax))) : null,
         strength: target.entityKind === "enemy" ? Math.max(1, Math.round(Number(target.strength) || 1)) : null
       });
     }
