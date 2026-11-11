@@ -4,6 +4,7 @@ import { assertDeveloperActionAllowed, normalizedActionPayloadHash } from "./act
 import { runOperation } from "./persistence/operation-contract.js";
 import { QUEST_NEARBY_M, pointInArea, worldEventWindow } from "../../apps/web/public/shared/quest-graph.js";
 import { WorldFlags } from "./world-flags.js";
+import { combatRulesFromProject, scaledXp } from "./runtime/player-effects.js";
 
 
 function now() {
@@ -2074,7 +2075,8 @@ export class Node04QuestRuntimeService {
   }
 
   grantXp(ctx, amount, operationId, sourceRef, reason) {
-    const grantAmount = Math.max(0, safeInteger(amount, 0));
+    // Fase 7: XP-tempo (Instellingen > Balans) geldt ook voor quest-XP.
+    const grantAmount = scaledXp(Math.max(0, safeInteger(amount, 0)), combatRulesFromProject(ctx.project).xpRatePct);
     if (grantAmount <= 0) return null;
     const progressionPolicy = policiesOfType(ctx.project, "player_progression_rules")[0] || {};
     const curveRef = progressionPolicy.xpCurveRef || "stat_curve.player_xp";

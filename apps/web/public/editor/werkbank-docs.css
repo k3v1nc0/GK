@@ -304,3 +304,13 @@
 .qbMap { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .qbMap .wbdSelect { width: 170px; }
 .qbArea { width: 170px; }
+
+/* Fase 7: Instellingen > ⚖️ Balans (meldingen, XP per gebied, sterkte per level, oude route). */
+.wbdBalance { display: grid; gap: 8px; padding-top: 8px; border-top: 1px dashed var(--wbd-line); }
+.wbdBalance > .wbdGhost { justify-self: start; }
+.wbdFinding { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--wbd-line); border-left-width: 4px; border-radius: 8px; background: #0b121b; }
+.wbdFinding.red { border-left-color: #ff6b6b; }
+.wbdFinding.orange { border-left-color: var(--wbd-accent); }
+.wbdFinding .wbdGhost { justify-self: start; }
+.wbdFinding .wbdNote { margin: 0; }
+.wbdFindingText { color: var(--wbd-text); font-size: 12px; line-height: 1.45; }

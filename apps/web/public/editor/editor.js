@@ -11,7 +11,7 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261106-perf1";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261106-perf1";
-import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261111-fase6";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261111-fase7";
 import { createAssetPicker } from "./mini-asset-picker.js?v=20261106-thumbs150";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
 import { createDocDrop, docKeyFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261108-portals1";
@@ -912,6 +912,8 @@ const docBench = createDocBench({
     return Number.isFinite(y) ? Object.assign({}, body, { y: Math.round(y * 100) / 100 }) : body;
   },
   settingsCardExtra: function (kind, host) { settingsCardExtra(kind, host); },
+  // Fase 7: klikken op een melding of een plek in ⚖️ Balans opent die kaart in de Werkbank.
+  openDoc: function (docKey) { openDocFromBalance(docKey); },
   onChanged: function () {
     updateDocPendingBadge();
     // 🛣️ De Weg staat niet in de 3D-wereld zelf (alleen de punten en lijnen erover): niet de hele wereld opnieuw laden.
@@ -16649,6 +16651,18 @@ function focusDoc(docKey, newKind = null) {
   renderWorkbench();
 }
 
+// Fase 7 (⚖️ Balans): naar de Werkbank, de kaart open en de camera naar de plek in de wereld.
+function openDocFromBalance(docKey) {
+  const doc = docBench.doc(docKey);
+  if (!doc) return;
+  setEditorMode("workbench");
+  if (PLACED_DOC_KINDS.has(doc.kind)) selectPlacedDoc(docKey); else focusDoc(docKey);
+  const body = doc.body || {};
+  const x = Number.isFinite(Number(body.x)) ? Number(body.x) : Number.isFinite(Number(body.xMm)) ? Number(body.xMm) / 1000 : null;
+  const z = Number.isFinite(Number(body.z)) ? Number(body.z) : Number.isFinite(Number(body.zMm)) ? Number(body.zMm) / 1000 : null;
+  if (x !== null && z !== null && typeof runtime?.focusGroundPoint === "function") runtime.focusGroundPoint(x, z);
+}
+
 function renderDocFocusPanel() {
   const root = el.workbenchSelectionPanel;
   root.innerHTML = "";
@@ -18301,9 +18315,12 @@ function renderDocOverview() {
   titleText.textContent = "Contentoverzicht";
   const subtitle = document.createElement("div");
   subtitle.className = "workbenchSubtitle";
-  subtitle.textContent = selected
+  subtitle.textContent = (selected
     ? "Gekozen: " + (selected.body.displayName || selected.docKey) + ". 🔗 = gebruikt deze kaart, ⬅️ = wordt erdoor gebruikt."
-    : "Klik een kaart: dan zie je waar hij mee verbonden is.";
+    : "Klik een kaart: dan zie je waar hij mee verbonden is.")
+    // Fase 7: een stip bij een kaart met een melding uit ⚖️ Balans (🔴 kapot, 🟠 advies).
+    + " 🔴 of 🟠 = melding in Instellingen → ⚖️ Balans.";
+  if (!docBench.balance) docBench.loadBalance().then(function () { if (state.editorMode === "workbench") renderDocOverview(); });
   title.append(titleText, subtitle);
   toolbar.appendChild(title);
   root.appendChild(toolbar);
@@ -18332,7 +18349,8 @@ function renderDocOverview() {
       body.className = "workbenchOverviewCardBody";
       const name = document.createElement("div");
       name.className = "workbenchRelationValue";
-      name.textContent = (usedBy.has(doc.docKey) ? "🔗 " : uses.has(doc.docKey) ? "⬅️ " : "") + (doc.body.displayName || doc.body[spec.idField] || doc.docKey);
+      const dot = docBench.balanceDot(doc.docKey);
+      name.textContent = (dot ? dot + " " : "") + (usedBy.has(doc.docKey) ? "🔗 " : uses.has(doc.docKey) ? "⬅️ " : "") + (doc.body.displayName || doc.body[spec.idField] || doc.docKey);
       body.appendChild(name);
       card.appendChild(body);
       card.addEventListener("click", function () {

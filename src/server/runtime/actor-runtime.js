@@ -16,6 +16,7 @@ import { computeHeal, regenStep } from "../../../apps/web/public/shared/effect-m
 import { createNavigator } from "./navigation.js";
 import { playerAbilityFromSection } from "../authoring/actor-compiler.js";
 import { lineOfSightBlocked } from "./line-of-sight.js";
+import { scaledRespawnMs } from "./player-effects.js";
 
 export const ACTOR_INSTANCE_PREFIX = "actor:";
 export const RESOURCE_INSTANCE_PREFIX = "res:";
@@ -158,6 +159,8 @@ export class ActorRuntime {
     this.section = canonical?.data?.actors || null;
     // Fase 5: schild-regels (Instellingen > Genezen en effecten).
     this.combatSettings = canonical?.data?.game?.combat || null;
+    // Fase 7: de knop Terugkomen (Instellingen > Balans).
+    this.respawnRatePct = canonical?.data?.game?.balance?.respawnRatePct ?? 100;
     this.loadSpawns(nowMs);
     return this.section;
   }
@@ -998,7 +1001,7 @@ export class ActorRuntime {
     }
     return {
       kind: "attack", instanceId: actor.id, actorId: actor.def.actorId, x: actor.x, z: actor.z, spawnKey: actor.spawnKey, occurrence: actor.occurrence, playerId: ctx.playerId,
-      damage, hpAfter, killed, respawnAtMs: killed ? ctx.nowMs + (actor.group ? QUEST_CORPSE_MS : actor.def.respawnMs) : null, rewards, buildId: this.buildId, label: this.labelOf(actor),
+      damage, hpAfter, killed, respawnAtMs: killed ? ctx.nowMs + (actor.group ? QUEST_CORPSE_MS : scaledRespawnMs(actor.def.respawnMs, this.respawnRatePct)) : null, rewards, buildId: this.buildId, label: this.labelOf(actor),
       auto, abilityId: ability.abilityId || null, shieldUp, shieldBreak, shieldBackMs: rules.backMs,
       questSpawn: actor.group ? { groupId: actor.group.id, questId: actor.group.questId, spawnId: actor.group.spawnId } : null
     };
@@ -1067,7 +1070,7 @@ export class ActorRuntime {
       kind: "gather", instanceId: resource.id, resourceId: resource.def.resourceId, x: resource.x, z: resource.z, spawnKey: resource.spawnKey, occurrence: resource.occurrence, playerId: ctx.playerId,
       claimKey: personal ? resource.id + "|" + ctx.playerId + "|" + ctx.operationId : resource.id,
       items: rollLoot(section.lootTables, resource.def.lootTableId, lootSeed(this.buildId, personal ? resource.id + "|" + ctx.operationId : resource.id, ctx.playerId)),
-      respawnAtMs: ctx.nowMs + resource.def.respawnMs, buildId: this.buildId, label, personal,
+      respawnAtMs: ctx.nowMs + scaledRespawnMs(resource.def.respawnMs, this.respawnRatePct), buildId: this.buildId, label, personal,
       eventKey: personal ? resource.id + ":" + ctx.operationId : resource.id
     };
     this.pending.set(ctx.operationId, plan);

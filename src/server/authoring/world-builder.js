@@ -12,6 +12,7 @@ import { OBJECTIVE_KINDS } from "../../../apps/web/public/shared/quest-graph.js"
 import { settingsValues } from "./game-compiler.js";
 import { xpTotals } from "../../../apps/web/public/shared/level-math.js";
 import { partyValues } from "../../shared/authoring/kinds/party.js";
+import { balanceValues, equipmentSlotsFrom, respawnPoliciesFrom } from "../../shared/authoring/kinds/balance.js";
 import { chatValues } from "../../shared/authoring/kinds/chat.js";
 import { areaBoundsMm } from "../../../apps/web/public/shared/spatial.js";
 import { heightfieldForWorld } from "../../../apps/web/public/shared/movement-kernel.js";
@@ -23,24 +24,12 @@ export const WORLD_ZONE_ID = "zone.world";
 export const WORLD_SPAWN_ID = "spawn.world.start";
 export const WORLD_SOURCE = "authoring-build";
 
-// Vaste keuzes (systeem in code) die de Werkbank laat kiezen: pickup "Terugkomen" en item "Uitrusting".
-export const RESPAWN_POLICIES = Object.freeze([
-  { id: "respawn_policy.fast", displayName: "Snel (30 s - 1 min)", minDelayMs: 30000, maxDelayMs: 60000 },
-  { id: "respawn_policy.standard", displayName: "Gewoon (1 - 2 min)", minDelayMs: 60000, maxDelayMs: 120000 },
-  { id: "respawn_policy.slow", displayName: "Langzaam (5 - 10 min)", minDelayMs: 300000, maxDelayMs: 600000 },
-  { id: "respawn_policy.rare", displayName: "Zeldzaam (30 - 60 min)", minDelayMs: 1800000, maxDelayMs: 3600000 }
-]);
-export const EQUIPMENT_SLOTS = Object.freeze([
-  { id: "equipment_slot.head", displayName: "Hoofd" },
-  { id: "equipment_slot.chest", displayName: "Borst" },
-  { id: "equipment_slot.hands", displayName: "Handen" },
-  { id: "equipment_slot.legs", displayName: "Benen" },
-  { id: "equipment_slot.feet", displayName: "Voeten" },
-  { id: "equipment_slot.main_hand", displayName: "Wapenhand" },
-  { id: "equipment_slot.off_hand", displayName: "Andere hand" },
-  { id: "equipment_slot.neck", displayName: "Ketting" },
-  { id: "equipment_slot.ring", displayName: "Ring" }
-]);
+// Fase 7: de keuzes voor pickup "Terugkomen" en item "Uitrusting" komen uit Instellingen (Terugkomtijden en
+// Uitrustingsvakken). Zonder kaart gelden de standaarden uit het schema. De ID's zijn vast.
+const respawnPolicyRows = (body) => respawnPoliciesFrom(body).map((policy) => ({ id: policy.id, displayName: policy.displayName,
+  minDelayMs: policy.seconds * 1000, maxDelayMs: policy.seconds * 1000 }));
+export const RESPAWN_POLICIES = Object.freeze(respawnPolicyRows(null));
+export const EQUIPMENT_SLOTS = Object.freeze(equipmentSlotsFrom(null));
 
 // Lege catalogusdelen die de spelserver verwacht (worden per ombouwstap gevuld vanuit kaarten).
 const CATALOG_SECTIONS = ["definitions", "tags", "values", "textTemplates", "localization", "items", "itemModifiers", "resources",
@@ -197,13 +186,13 @@ export function liftWorldOntoTerrain(world, heightfield) {
   });
 }
 
-function catalogs() {
+function catalogs(game = null) {
   const result = Object.fromEntries(CATALOG_SECTIONS.map((section) => [section, {}]));
-  for (const policy of RESPAWN_POLICIES) {
+  for (const policy of respawnPolicyRows(game?.respawn || null)) {
     result.respawnPolicies[policy.id] = Object.assign({ respawnPolicyId: policy.id, internalLabel: "", description: "", definitionVersion: 1, tags: [], enabled: true, jitterMode: "uniform",
       maxAliveDefault: 1, corpseDurationMs: 15000, despawnDistance: 120, resetEncounterOnWipe: true, oneTimeSpawn: false, persistentDefeatFlagRef: null }, policy);
   }
-  EQUIPMENT_SLOTS.forEach((slot, index) => {
+  equipmentSlotsFrom(game?.equipment || null).forEach((slot, index) => {
     result.equipmentSlots[slot.id] = Object.assign({ slotId: slot.id, internalLabel: "", description: "", definitionVersion: 1, tags: [], enabled: true,
       allowedItemTags: { all: [], any: [], none: [] }, maxItems: 1, conflictingSlotRefs: [], uiOrder: index }, slot);
   });
@@ -288,7 +277,7 @@ export function baseRuntimeWorld(data = {}, options = {}) {
     assets,
     buildId: options.buildId || null,
     gameProject: {
-      schemaVersion: WORLD_FORMAT_VERSION, project, chunkGrid: clone(CHUNK_GRID), camera: clone(camera), catalogs: catalogs(), zones,
+      schemaVersion: WORLD_FORMAT_VERSION, project, chunkGrid: clone(CHUNK_GRID), camera: clone(camera), catalogs: catalogs(data?.game || null), zones,
       campaigns: campaigns(), playerRules: { id: "player_rules.main", policies: [], byType: {} },
       ui: { id: "ui.main", ui: [], modules: [], minimap: [], layouts: [] }, runtime: { activeZoneId: WORLD_ZONE_ID, startSpawnId: WORLD_SPAWN_ID }
     },
@@ -587,6 +576,7 @@ function withGame(world, source, options) {
   // schema-standaarden gelden.
   const hud = Object.assign(settingsValues("hud_settings", null), settingsValues("minimap_settings", null), game?.hud || {}, game?.minimap || {});
   const combat = game?.combat || settingsValues("combat_settings", null);
+  const balance = balanceValues(game?.balance || null);
   const npcs = game?.npcs || [];
   const quests = game?.quests || [];
   const recipes = game?.recipes || [];
@@ -753,7 +743,9 @@ function withGame(world, source, options) {
       shieldAutoPct: Number.isFinite(Number(combat.shieldAutoPct)) ? Number(combat.shieldAutoPct) : 25, shieldBackMs: Math.max(1, Number(combat.shieldBackS) || 15) * 1000,
       // Fase 6: schaling (iedereen telt als het level van de vijand) en het schuifje Verschil per level.
       levelScaling: combat.levelScaling !== false, levelDiffPct: Number.isFinite(Number(combat.levelDiffPct)) ? Number(combat.levelDiffPct) : 3,
-      levelDiffMaxPct: Number.isFinite(Number(combat.levelDiffMaxPct)) ? Number(combat.levelDiffMaxPct) : 20 }],
+      levelDiffMaxPct: Number.isFinite(Number(combat.levelDiffMaxPct)) ? Number(combat.levelDiffMaxPct) : 20,
+      // Fase 7: de knoppen van Instellingen > Balans (XP-tempo en Terugkomen).
+      xpRatePct: balance.xpRatePct, respawnRatePct: balance.respawnRatePct }],
     // Groep (MMO) (3-11): Instellingen > Groep. Zonder kaart de standaard; server en game lezen dit.
     party_rules: [Object.assign({ id: "rules.party" }, game?.party || partyValues(null))],
     chat_rules: [Object.assign({ id: "rules.chat" }, game?.chat || chatValues(null))]

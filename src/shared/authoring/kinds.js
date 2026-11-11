@@ -17,6 +17,7 @@ import { NETWORK_KINDS } from "./kinds/network.js";
 import { WATER_WALK_KINDS } from "./kinds/water-walk.js";
 import { PARTY_KINDS } from "./kinds/party.js";
 import { CHAT_KINDS } from "./kinds/chat.js";
+import { BALANCE_KINDS } from "./kinds/balance.js";
 import { PORTAL_KINDS } from "./kinds/portal.js";
 import { effectFields } from "./kinds/effect-fields.js";
 import { AREA_SETTING_SPECS, AREA_SOORT_ORDER, AREA_SOORTEN, areaSettingsIssues, areaSoort } from "./kinds/area.js";
@@ -178,9 +179,11 @@ export const CANONICAL_KINDS = {
       itemRef: { type: "ref", refKind: "item_definition", required: true, audience: "client", label: "Item",
         ui: ui("🎒", "ref", "werkbank"), default: null,
         help: help("Welk item hier op de grond ligt.", "Sleep een item uit de Bibliotheek op dit vak.", "Verkeerd item → sleep een ander item erop.") },
-      zoneRef: { type: "id", required: true, maxLength: 120, audience: "client", label: "Zone",
-        ui: ui("🗺️", "select", "viewport", { optionsFrom: "zones", more: true }), default: null,
-        help: help("In welke zone de pickup ligt (verdwijnt in Fase 2: dan is er één wereld).", "Wordt vanzelf gekozen als je hem in de 3D-view zet.", "Pickup niet te zien → controleer of je in de goede zone kijkt.") },
+      // Fase 7: er is één wereld, een pickup heeft geen zone meer nodig. Het veld blijft alleen bestaan voor oude kaarten
+      // (verborgen: hideWhen op een veld dat altijd gevuld is); de wereldbouwer legt elke pickup in de wereld.
+      zoneRef: { type: "id", required: false, maxLength: 120, audience: "client", label: "Zone (oud)",
+        ui: ui("🗺️", "select", "viewport", { optionsFrom: "zones", more: true, hideWhen: "pickupId" }), default: null,
+        help: help("Oud veld: er is één wereld, een pickup heeft geen zone meer nodig.", "Leeg laten.", "Niets: dit veld doet niets meer.") },
       x: { type: "number", required: true, min: -100000, max: 100000, audience: "client", label: "X",
         ui: ui("↔️", "slider", "viewport", { step: 0.1, unit: "m" }), default: 0,
         help: help("Waar de pickup ligt (links-rechts).", "Sleep het icoon in de 3D-view.", "Ligt in een muur → sleep hem naar een open plek.") },
@@ -337,7 +340,8 @@ export const CANONICAL_KINDS = {
   ...NETWORK_KINDS,
   ...WATER_WALK_KINDS,
   ...PARTY_KINDS,
-  ...CHAT_KINDS
+  ...CHAT_KINDS,
+  ...BALANCE_KINDS
 };
 
 // Velden per Area-vorm. Een veld van een andere vorm is een fout (geen half-ingevulde vormen).

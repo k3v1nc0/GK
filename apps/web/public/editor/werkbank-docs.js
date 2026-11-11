@@ -76,6 +76,8 @@ export function createDocBench(options = {}) {
   const beforeSave = options.beforeSave || null;
   // Mag onder een instellingenkaart iets extra's tekenen (bijv. "🎮 Game ernaast" bij Verbinding).
   const settingsCardExtra = options.settingsCardExtra || null;
+  // Fase 7: op een melding of een plek klikken opent die kaart (editor.js: Werkbank + camera naar de plek).
+  const openDoc = options.openDoc || null;
   const pendingSaves = new Set();
 
   const bench = {
@@ -213,6 +215,7 @@ export function createDocBench(options = {}) {
         onUndoable({ label, docKey: result.docKey, kind, before: null, after: clone(clean) });
       }
       await bench.load();
+      bench.clearBalance();
       setStatus(label + " opgeslagen. Druk SAVE TO GAME om het in de game te zetten.", "success");
       onChanged();
       return result;
@@ -231,6 +234,7 @@ export function createDocBench(options = {}) {
       await command({ command: "archive", docKey: doc.docKey }, doc.revision);
       onUndoable({ label: label || "Weggehaald", docKey: doc.docKey, kind: doc.kind, archive: true });
       await bench.load();
+      bench.clearBalance();
       setStatus((label || "Weggehaald") + ". ↶ zet het terug.", "success");
       onChanged();
       return true;
@@ -1033,6 +1037,7 @@ export function createDocBench(options = {}) {
       });
       actions.append(archive);
     }
+    if (!isNew && kind === "item_definition") host.append(pickupPlaces(doc));
     if (!isNew && kind === "actor_archetype") host.append(actorTrial(body));
     if (!isNew && kind === "loot_table") host.append(lootTrial(body));
     if (actions.childElementCount) host.append(actions);
@@ -1041,6 +1046,138 @@ export function createDocBench(options = {}) {
       bench.renderForm(host, { kind, docKey: isNew ? null : doc.docKey, title, onDone, place, skip, only, bare, onSaved, labels });
     }
   };
+
+  // ---------- Fase 7: waar ligt dit item in de wereld? ----------
+
+  // Op de item-kaart: "✨ Ligt 3× in de wereld", met een knop per plek (klik = erheen in de 3D-view).
+  function pickupPlaces(doc) {
+    const pickups = bench.docs("pickup").filter((pickup) => pickup.body.itemRef === doc.docKey);
+    const box = el("div", { class: "wbdGroup" });
+    box.append(el("div", { class: "wbdNote", text: pickups.length
+      ? "✨ Ligt " + pickups.length + "× in de wereld. Sleep dit item uit de Bibliotheek op de 3D-view om er een bij te leggen."
+      : "✨ Ligt nergens in de wereld. Sleep dit item uit de Bibliotheek op de 3D-view om het neer te leggen." }));
+    if (!pickups.length) return box;
+    const list = el("div", { class: "wbdChildList" });
+    for (const pickup of pickups) {
+      const where = "x " + Math.round(Number(pickup.body.x) || 0) + ", z " + Math.round(Number(pickup.body.z) || 0);
+      const button = el("button", { type: "button", class: "wbdGhost", text: "📍 " + where + (pickup.body.amount > 1 ? " (" + pickup.body.amount + "×)" : "") });
+      button.addEventListener("click", () => { if (openDoc) openDoc(pickup.docKey); });
+      list.append(button);
+    }
+    box.append(list);
+    return box;
+  }
+
+  // ---------- Fase 7: Instellingen > ⚖️ Balans ----------
+
+  bench.balance = null;
+  let balanceLoading = null;
+
+  bench.clearBalance = function clearBalance() { bench.balance = null; };
+
+  bench.loadBalance = function loadBalance() {
+    if (bench.balance) return Promise.resolve(bench.balance);
+    if (balanceLoading) return balanceLoading;
+    balanceLoading = api("/api/authoring/balance").then((data) => {
+      bench.balance = data && data.report ? data : { report: { findings: [], counts: { red: 0, orange: 0 }, xpByArea: [], strength: [] }, legacy: [] };
+      return bench.balance;
+    }).catch(() => {
+      bench.balance = { report: { findings: [], counts: { red: 0, orange: 0 }, xpByArea: [], strength: [] }, legacy: [], failed: true };
+      return bench.balance;
+    }).finally(() => { balanceLoading = null; });
+    return balanceLoading;
+  };
+
+  // 🔴 of 🟠 voor een kaart (het Contentoverzicht zet er een stip bij).
+  bench.balanceDot = function balanceDot(docKey) {
+    const findings = bench.balance?.report?.findings || [];
+    let dot = null;
+    for (const finding of findings) {
+      if (finding.docKey !== docKey) continue;
+      if (finding.severity === "red") return "🔴";
+      dot = "🟠";
+    }
+    return dot;
+  };
+
+  function renderBalanceReport(host, rerender) {
+    const data = bench.balance;
+    if (!data) {
+      host.append(el("div", { class: "wbdNote", text: "⚖️ Balans wordt bekeken…" }));
+      bench.loadBalance().then(rerender);
+      return;
+    }
+    const report = data.report || {};
+    const box = el("div", { class: "wbdBalance" });
+    if (data.failed) box.append(el("div", { class: "wbdNote", text: "Het rapport kon niet worden opgehaald. Druk op ↻ Opnieuw bekijken." }));
+    const again = el("button", { type: "button", class: "wbdGhost", text: "↻ Opnieuw bekijken" });
+    again.addEventListener("click", () => { bench.clearBalance(); rerender(); });
+    box.append(again);
+
+    // Meldingen: rood = aantoonbaar kapot, oranje = advies.
+    const counts = report.counts || { red: 0, orange: 0 };
+    box.append(el("div", { class: "wbdHead" }, [el("span", { class: "wbdHeadIcon", text: counts.red ? "🔴" : counts.orange ? "🟠" : "🟢" }),
+      el("div", { class: "wbdHeadText" }, [el("div", { class: "wbdHeadKind", text: "Meldingen" }),
+        el("div", { class: "wbdHeadName", text: counts.red ? counts.red + " kapot, " + counts.orange + " advies" : counts.orange ? counts.orange + " advies" : "Alles klopt" })])]));
+    if (!(report.findings || []).length) box.append(el("div", { class: "wbdNote", text: "🟢 Niets kapot en geen adviezen." }));
+    for (const finding of report.findings || []) {
+      const row = el("div", { class: "wbdFinding " + (finding.severity === "red" ? "red" : "orange") });
+      row.append(el("div", { class: "wbdFindingText", text: (finding.severity === "red" ? "🔴 " : "🟠 ") + finding.message }));
+      if (finding.docKey && openDoc) {
+        const go = el("button", { type: "button", class: "wbdGhost", text: "➡️ Open de kaart" });
+        go.addEventListener("click", () => openDoc(finding.docKey));
+        row.append(go);
+      }
+      box.append(row);
+    }
+
+    // XP per gebied: eenmalig als budget, herhaalbaar als tempo per uur.
+    box.append(el("div", { class: "wbdHead" }, [el("span", { class: "wbdHeadIcon", text: "⭐" }),
+      el("div", { class: "wbdHeadText" }, [el("div", { class: "wbdHeadKind", text: "XP per gebied" }),
+        el("div", { class: "wbdHeadName", text: "Hoogste level: " + (report.maxLevel || 1) })])]));
+    box.append(el("div", { class: "wbdNote", text: report.assumption || "" }));
+    if (!(report.xpByArea || []).length) box.append(el("div", { class: "wbdNote", text: "Nog geen vijanden of quests die XP geven." }));
+    for (const area of report.xpByArea || []) {
+      const lines = [el("div", { class: "wbdFindingText", text: "🗺️ " + area.name })];
+      lines.push(el("div", { class: "wbdNote", text: "Eenmalig: " + area.onceXp + " XP uit " + area.onceCount + " quest(s) = " + area.onceLevels + " level(s). "
+        + "Blijven doen: " + area.hourXp + " XP per uur = " + area.hourLevels + " level(s) per uur (" + area.enemyCount + " vijandplek(ken), " + area.repeatQuestCount + " herhaalbare quest(s))." }));
+      const row = el("div", { class: "wbdFinding" }, lines);
+      if (area.top) {
+        const go = el("button", { type: "button", class: "wbdGhost", text: "➡️ " + area.top.name + " (" + area.top.text + ")" });
+        if (openDoc) go.addEventListener("click", () => openDoc(area.top.docKey));
+        row.append(go);
+      }
+      box.append(row);
+    }
+
+    // Sterkte per level: klappen nodig en klappen overleven, op het level van de vijand.
+    box.append(el("div", { class: "wbdHead" }, [el("span", { class: "wbdHeadIcon", text: "💪" }),
+      el("div", { class: "wbdHeadText" }, [el("div", { class: "wbdHeadKind", text: "Sterkte per level" }),
+        el("div", { class: "wbdHeadName", text: (report.strength || []).length + " vijand(en)" })])]));
+    if (!(report.strength || []).length) box.append(el("div", { class: "wbdNote", text: "Nog geen vijanden." }));
+    for (const enemy of report.strength || []) {
+      const text = (enemy.classes || []).map((cls) => cls.name + ": " + (cls.hitsNeeded === null ? "geen aanval" : cls.hitsNeeded + " klappen nodig")
+        + ", " + (cls.hitsSurvive === null ? "wordt niet geraakt" : cls.hitsSurvive + " klappen overleven")).join(" · ");
+      const row = el("div", { class: "wbdFinding" }, [
+        el("div", { class: "wbdFindingText", text: "👹 " + enemy.name + " — level " + enemy.level + (enemy.groupBoss ? ", groepsbaas" : "") + (enemy.shield ? ", altijd een schild" : "") + ", " + enemy.health + " levens" }),
+        el("div", { class: "wbdNote", text: text || "Nog geen klassen." })]);
+      if (openDoc) {
+        const go = el("button", { type: "button", class: "wbdGhost", text: "➡️ Open de kaart" });
+        go.addEventListener("click", () => openDoc(enemy.docKey));
+        row.append(go);
+      }
+      box.append(row);
+    }
+
+    // Wat nog aan de oude route (nodes) hangt.
+    const legacy = data.legacy || [];
+    const total = legacy.reduce((sum, row) => sum + row.count, 0);
+    box.append(el("div", { class: "wbdHead" }, [el("span", { class: "wbdHeadIcon", text: total ? "📦" : "✅" }),
+      el("div", { class: "wbdHeadText" }, [el("div", { class: "wbdHeadKind", text: "Nog aan de oude route (nodes)" }),
+        el("div", { class: "wbdHeadName", text: total ? total + " nodes in " + legacy.length + " soorten" : "Niets meer in nodes" })])]));
+    if (total) box.append(el("div", { class: "wbdNote", text: legacy.map((row) => row.label + " " + row.count).join(" · ") }));
+    host.append(box);
+  }
 
   // ---------- Proef (rekent in de browser met dezelfde regels als de server, schrijft niets) ----------
 
@@ -1143,6 +1280,8 @@ export function createDocBench(options = {}) {
     // Instellingen met meerdere kaarten (bijv. Klassen): lijst + nieuw + bewerken op dezelfde plek.
     if (bench.spec(bench.settingsView) && !bench.spec(bench.settingsView).singleton) return renderChildKind(host, bench.settingsView);
     bench.renderForm(host, { kind: bench.settingsView, place: "instellingen" });
+    // Fase 7: onder de knoppen van Balans staat het rapport (meldingen, XP per gebied, sterkte per level).
+    if (bench.settingsView === "balance_settings") renderBalanceReport(host, () => bench.renderSettingsCard(host, rerender));
     if (settingsCardExtra) settingsCardExtra(bench.settingsView, host);
   };
 

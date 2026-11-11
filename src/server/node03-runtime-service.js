@@ -6,7 +6,7 @@ import { computeDamage } from "../../apps/web/public/shared/combat-math.js";
 import { equipBonusAt, levelEdgePct, statAtLevel, toRealPool } from "../../apps/web/public/shared/level-math.js";
 import { isActorInstanceId, isResourceInstanceId } from "./runtime/actor-runtime.js";
 import { computeHeal, describeEffect, effectBonuses, effectFromSource } from "../../apps/web/public/shared/effect-math.js";
-import { applyEffect, clearEffectsForDeath, combatRulesFromProject, itemCooldowns, itemReadyInMs, loadActiveEffects, planEffect, publicEffects, setItemCooldown } from "./runtime/player-effects.js";
+import { applyEffect, clearEffectsForDeath, combatRulesFromProject, itemCooldowns, itemReadyInMs, loadActiveEffects, planEffect, publicEffects, scaledRespawnMs, scaledXp, setItemCooldown } from "./runtime/player-effects.js";
 import { abilityFromSection, classSkillIdsFromSection, playerAbilityFromSection } from "./authoring/actor-compiler.js";
 import { arrivalPoint, isUnlocked, nearestRespawnPortal, portalNear, portalRulesOf, portalsOf, portalVisibleFor, publicPortalState,
   storeUnlock, travelCost, unlockedPortalIds, withinUnlockRange } from "./runtime/portal-runtime.js";
@@ -376,6 +376,11 @@ export class Node03RuntimeService {
   // Healing (2-11): regeneratie en zwevende getallen (1x per seconde in de worldtick).
   vitals() {
     return this.mmoService?.vitalsRuntime || null;
+  }
+
+  // Fase 7: de terugkomtijd van dit beleid, met de knop Terugkomen (Instellingen > Balans) erover.
+  respawnDelay(ctx, respawnPolicyRef) {
+    return scaledRespawnMs(respawnDelayMs(ctx.catalogs, respawnPolicyRef), this.combatRules(ctx.project).respawnRatePct);
   }
 
   combatRules(project = null) {
@@ -1277,7 +1282,7 @@ export class Node03RuntimeService {
       merged.healthCurrent = wasAlive ? clamp(safeNumber(current.healthCurrent, desired.healthMax), 0, desired.healthMax) : 0;
       if (!merged.respawnPolicyRef) merged.respawnAt = null;
       if (!wasAlive && merged.respawnPolicyRef && !Number.isFinite(currentRespawnTime)) {
-        merged.respawnAt = addMs(respawnDelayMs(ctx.catalogs, merged.respawnPolicyRef));
+        merged.respawnAt = addMs(this.respawnDelay(ctx, merged.respawnPolicyRef));
       }
       if (!wasAlive && merged.respawnPolicyRef && Number.isFinite(currentRespawnTime) && currentRespawnTime <= Date.now()) {
         merged.alive = true;
@@ -1293,7 +1298,7 @@ export class Node03RuntimeService {
       merged.status = available ? "available" : current.status;
       if (!merged.respawnPolicyRef) merged.respawnAt = null;
       if (!available && merged.respawnPolicyRef && !Number.isFinite(currentRespawnTime)) {
-        merged.respawnAt = addMs(respawnDelayMs(ctx.catalogs, merged.respawnPolicyRef));
+        merged.respawnAt = addMs(this.respawnDelay(ctx, merged.respawnPolicyRef));
       }
       if (!available && merged.respawnPolicyRef && Number.isFinite(currentRespawnTime) && currentRespawnTime <= Date.now()) {
         merged.available = true;
@@ -1546,7 +1551,7 @@ export class Node03RuntimeService {
       enemy.alive = false;
       enemy.status = "dead";
       enemy.defeatedBy = ctx.profile.id;
-      enemy.respawnAt = enemy.respawnPolicyRef ? addMs(respawnDelayMs(ctx.catalogs, enemy.respawnPolicyRef)) : null;
+      enemy.respawnAt = enemy.respawnPolicyRef ? addMs(this.respawnDelay(ctx, enemy.respawnPolicyRef)) : null;
       grants = grants.concat(this.grantLootTable(ctx, enemy.lootTableRef, operationId, enemy.instanceId, "enemy_defeated"));
       const xpGrant = this.grantXpForEnemy(ctx, enemy, operationId);
       if (xpGrant) grants.push(xpGrant);
@@ -1623,7 +1628,7 @@ export class Node03RuntimeService {
     resource.available = false;
     resource.status = "depleted";
     resource.depletedBy = ctx.profile.id;
-    resource.respawnAt = resource.respawnPolicyRef ? addMs(respawnDelayMs(ctx.catalogs, resource.respawnPolicyRef)) : null;
+    resource.respawnAt = resource.respawnPolicyRef ? addMs(this.respawnDelay(ctx, resource.respawnPolicyRef)) : null;
     resource.updatedAt = now();
     this.saveEntityState(ctx, resource);
     this.recordGameplayEvent(ctx, "resource_gathered", "player", resource.instanceId, { grants });
@@ -1666,7 +1671,7 @@ export class Node03RuntimeService {
       ? [this.grantCurrency(ctx, pickup.currencyRef, amount, "pickup_claimed", pickup.instanceId, operationId)]
       : this.grantItem(ctx, pickup.itemRef, amount, "pickup_claimed", pickup.instanceId, operationId);
     if (personal) {
-      const respawnAt = pickup.claimMode === "once" ? null : addMs(respawnDelayMs(ctx.catalogs, pickup.respawnPolicyRef));
+      const respawnAt = pickup.claimMode === "once" ? null : addMs(this.respawnDelay(ctx, pickup.respawnPolicyRef));
       this.db.prepare(`
         INSERT INTO player_pickup_claims (player_id, instance_id, claimed_at, respawn_at) VALUES (?, ?, ?, ?)
         ON CONFLICT(player_id, instance_id) DO UPDATE SET claimed_at = excluded.claimed_at, respawn_at = excluded.respawn_at
@@ -1675,7 +1680,7 @@ export class Node03RuntimeService {
       pickup.available = false;
       pickup.status = "claimed";
       pickup.claimedBy = ctx.profile.id;
-      pickup.respawnAt = pickup.respawnPolicyRef ? addMs(respawnDelayMs(ctx.catalogs, pickup.respawnPolicyRef)) : null;
+      pickup.respawnAt = pickup.respawnPolicyRef ? addMs(this.respawnDelay(ctx, pickup.respawnPolicyRef)) : null;
       pickup.updatedAt = now();
       this.saveEntityState(ctx, pickup);
     }
@@ -2241,6 +2246,8 @@ export class Node03RuntimeService {
   }
 
   grantXpAmount(ctx, amount, reason, sourceRef, operationId) {
+    // Fase 7: XP-tempo (Instellingen > Balans). De maker-knop "+XP" geeft precies wat er staat.
+    if (reason !== "maker_xp") amount = scaledXp(amount, this.combatRules(ctx.project).xpRatePct);
     if (amount <= 0) return null;
     const policy = policiesOfType(ctx.project, "xp_source_rule")[0] || {};
     const progressionPolicy = policiesOfType(ctx.project, "player_progression_rules")[0] || {};

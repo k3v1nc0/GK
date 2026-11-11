@@ -7,6 +7,24 @@ export const DEFAULT_COMBAT_RULES = Object.freeze({
   regenDelayMs: 5000, effectStacking: "refresh", maxEffects: 8, clearBuffsOnDeath: true, levelUpRestore: true, shieldAutoPct: 25, shieldBackMs: 15000
 });
 
+// Fase 7: een tempo-knop in procenten (10..1000; alles anders = 100).
+export function ratePct(value) {
+  const pct = Math.round(Number(value));
+  return Number.isFinite(pct) && pct > 0 ? Math.max(10, Math.min(1000, pct)) : 100;
+}
+
+// XP met het XP-tempo erover (minstens 1 als er iets te krijgen was).
+export function scaledXp(amount, pct) {
+  const base = Math.max(0, Math.round(Number(amount) || 0));
+  return base > 0 ? Math.max(1, Math.round(base * ratePct(pct) / 100)) : 0;
+}
+
+// Een terugkomtijd met de knop Terugkomen erover: 200 % = half zo lang wachten (minstens 1 s).
+export function scaledRespawnMs(ms, pct) {
+  const base = Math.max(0, Math.round(Number(ms) || 0));
+  return base > 0 ? Math.max(1000, Math.round(base * 100 / ratePct(pct))) : 0;
+}
+
 // De regels uit de spelwereld (kaart Instellingen > Genezen en effecten), met standaard als die er niet is.
 export function combatRulesFromProject(project) {
   const rule = project?.playerRules?.byType?.combat_rules?.[0] || {};
@@ -22,7 +40,10 @@ export function combatRulesFromProject(project) {
     // Fase 6: schaling zoals ESO en het schuifje Verschil per level (met een maximum).
     levelScaling: rule.levelScaling !== false,
     levelDiffPct: Number.isFinite(Number(rule.levelDiffPct)) ? Math.max(0, Math.min(50, Number(rule.levelDiffPct))) : 3,
-    levelDiffMaxPct: Number.isFinite(Number(rule.levelDiffMaxPct)) ? Math.max(0, Math.min(500, Number(rule.levelDiffMaxPct))) : 20
+    levelDiffMaxPct: Number.isFinite(Number(rule.levelDiffMaxPct)) ? Math.max(0, Math.min(500, Number(rule.levelDiffMaxPct))) : 20,
+    // Fase 7: Instellingen > Balans. 100 = zoals de kaarten; 200 = dubbel XP / twee keer zo snel terug.
+    xpRatePct: ratePct(rule.xpRatePct),
+    respawnRatePct: ratePct(rule.respawnRatePct)
   };
 }
 

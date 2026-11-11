@@ -6,7 +6,10 @@ import { DocumentRepository } from "./document-repository.js";
 import { CutoverGuard } from "./cutover-guard.js";
 import { CUTOVER_DOMAINS, cutoverRows, finalizeDomain, legacyInventory, planDomain } from "./legacy-import.js";
 import { BuildService, compileCanonical } from "./build-service.js";
-import { equipmentSlotSummaries, knownEquipmentSlotIds, knownRespawnPolicyIds, respawnPolicySummaries, zoneSummaries } from "./runtime-overlay.js";
+import { knownEquipmentSlotIds, knownRespawnPolicyIds, zoneSummaries } from "./runtime-overlay.js";
+import { equipmentSlotsFrom, respawnPoliciesFrom } from "../../shared/authoring/kinds/balance.js";
+import { balanceReport, legacyNodeCounts } from "./balance-report.js";
+import { NODE_TYPES } from "../../shared/node-types.js";
 import { baseRuntimeWorld, buildRuntimeWorld } from "./world-builder.js";
 import { previewMembership } from "../preview/preview-service.js";
 
@@ -132,6 +135,11 @@ export class AuthoringRoutes {
   // niet tegen een oude node-wereld.
   validationWorld() {
     return baseRuntimeWorld({});
+  }
+
+  // Fase 7: de inhoud van een instellingenkaart (of null als Kevin hem nog niet maakte).
+  settingsBody(kind) {
+    try { return this.documents.allDocuments().find((doc) => doc.kind === kind && !doc.archived)?.body || null; } catch { return null; }
   }
 
   assetTypes() {
@@ -261,13 +269,29 @@ export class AuthoringRoutes {
         // Kaarten van een soort die niet meer bestaat (bijv. de oude kaart Speler) blijven in de database, maar niet in beeld.
         }).filter((doc) => Object.prototype.hasOwnProperty.call(CANONICAL_KINDS, doc.kind)),
         zones: zoneSummaries(world),
-        respawnPolicies: respawnPolicySummaries(world),
-        equipmentSlots: equipmentSlotSummaries(world),
+        // Fase 7: de keuzes komen uit Instellingen (Terugkomtijden en Uitrustingsvakken), niet meer uit de code.
+        respawnPolicies: respawnPoliciesFrom(this.settingsBody("respawn_settings")).map((policy) => ({ id: policy.id, label: policy.displayName })),
+        equipmentSlots: equipmentSlotsFrom(this.settingsBody("equipment_settings")).map((slot) => ({ id: slot.id, label: slot.displayName })),
         assets: this.assetSummaries(),
         cutover: cutoverRows(this.db),
         release: this.builds.release(),
         builds: this.builds.listBuilds(10),
         audit: this.builds.audit(10)
+      });
+    }
+
+    // Fase 7: het Balans-rapport (meldingen, XP per gebied, sterkte per level) en wat nog aan de oude route hangt.
+    // Alleen lezen: geen build, geen pointer, geen spelerstate.
+    if (method === "GET" && path === "/api/authoring/balance") {
+      const docs = this.documents.allDocuments();
+      let buildErrors = [];
+      try { buildErrors = compileCanonical(docs, this.publishOptions(this.validationWorld())).errors || []; } catch (error) { buildErrors = [{ code: "COMPILE", docKey: null, message: error?.message || "Build mislukt." }]; }
+      let graph = null;
+      try { graph = this.repository && typeof this.repository.getGraph === "function" ? this.repository.getGraph() : null; } catch { graph = null; }
+      return this.sendJson(res, 200, {
+        ok: true,
+        report: balanceReport(docs, { buildErrors }),
+        legacy: legacyNodeCounts(graph, (type) => NODE_TYPES[type]?.label || type)
       });
     }
 

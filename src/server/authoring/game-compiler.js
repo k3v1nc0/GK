@@ -5,13 +5,14 @@ import { CANONICAL_KINDS } from "../../shared/authoring/kinds.js";
 import { networkValues } from "../../shared/authoring/kinds/network.js";
 import { waterWalkValues } from "../../shared/authoring/kinds/water-walk.js";
 import { partyValues } from "../../shared/authoring/kinds/party.js";
+import { balanceValues } from "../../shared/authoring/kinds/balance.js";
 import { portalSettingsValues } from "../../shared/authoring/kinds/portal.js";
 import { chatValues } from "../../shared/authoring/kinds/chat.js";
 import { hasOwnSteps, questGraphIssues, questStartIssues, questRepeatOf, questStartMode, questSteps, worldEventEvery, worldEventLasts } from "../../../apps/web/public/shared/quest-graph.js";
 import { areaPointsMeters, areaSoort } from "../../shared/authoring/kinds/area.js";
 
 export const GAME_SECTION_VERSION = "gk-game-1";
-export const GAME_DOC_KINDS = Object.freeze(["currency", "player_class", "hud_settings", "minimap_settings", "combat_settings", "network_settings", "water_walk_settings", "party_settings", "chat_settings", "npc", "quest", "recipe", "placed_model", "world_flag", "portal", "portal_settings"]);
+export const GAME_DOC_KINDS = Object.freeze(["currency", "player_class", "hud_settings", "minimap_settings", "combat_settings", "network_settings", "water_walk_settings", "party_settings", "chat_settings", "balance_settings", "respawn_settings", "equipment_settings", "npc", "quest", "recipe", "placed_model", "world_flag", "portal", "portal_settings"]);
 
 const idFromRef = (ref) => String(ref || "").replace(/^[a-z_]+:/, "");
 const kindOfRef = (ref) => String(ref || "").split(":")[0];
@@ -111,6 +112,10 @@ export function compileGameSection(documents, options = {}) {
   const party = partyDoc ? partyValues(partyDoc.body) : null;
   const chatDoc = of("chat_settings")[0] || null;
   const chat = chatDoc ? chatValues(chatDoc.body) : null;
+  // Fase 7: Balans (XP-tempo, Terugkomen), Terugkomtijden en Uitrustingsvakken: alleen als de kaart er is.
+  const balanceDoc = of("balance_settings")[0] || null;
+  const respawnDoc = of("respawn_settings")[0] || null;
+  const equipmentDoc = of("equipment_settings")[0] || null;
 
   const npcs = of("npc").map((doc) => {
     const label = "NPC " + doc.body.displayName;
@@ -318,7 +323,10 @@ export function compileGameSection(documents, options = {}) {
 
   return {
     server: Object.assign({ schema: GAME_SECTION_VERSION, currencies, player, hud, minimap, combat, network, waterWalk, party, chat, npcs, quests, recipes, placedModels },
-      questAreas.length ? { questAreas } : {}, flags.length ? { flags } : {}, portals.length || portalDoc ? { portals, portalRules } : {}),
+      questAreas.length ? { questAreas } : {}, flags.length ? { flags } : {}, portals.length || portalDoc ? { portals, portalRules } : {},
+      balanceDoc ? { balance: balanceValues(balanceDoc.body) } : {},
+      respawnDoc ? { respawn: settingsValues("respawn_settings", respawnDoc.body) } : {},
+      equipmentDoc ? { equipment: settingsValues("equipment_settings", equipmentDoc.body) } : {}),
     errors
   };
 }
