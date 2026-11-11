@@ -13,6 +13,8 @@ import { settingsValues } from "./game-compiler.js";
 import { xpTotals } from "../../../apps/web/public/shared/level-math.js";
 import { partyValues } from "../../shared/authoring/kinds/party.js";
 import { balanceValues, equipmentSlotsFrom, respawnPoliciesFrom } from "../../shared/authoring/kinds/balance.js";
+import { economyValues } from "../../shared/authoring/kinds/economy.js";
+import { tradeValues } from "../../shared/authoring/kinds/trade.js";
 import { chatValues } from "../../shared/authoring/kinds/chat.js";
 import { areaBoundsMm } from "../../../apps/web/public/shared/spatial.js";
 import { heightfieldForWorld } from "../../../apps/web/public/shared/movement-kernel.js";
@@ -577,6 +579,10 @@ function withGame(world, source, options) {
   const hud = Object.assign(settingsValues("hud_settings", null), settingsValues("minimap_settings", null), game?.hud || {}, game?.minimap || {});
   const combat = game?.combat || settingsValues("combat_settings", null);
   const balance = balanceValues(game?.balance || null);
+  // Fase 8: 💰 Geld. Zonder kaart gelden de standaarden uit het schema.
+  const economy = economyValues(game?.economy || null);
+  // Fase 8b: 🤝 Handel (ruilen, markt en post). Vervangt de oude policy-nodes.
+  const trade = tradeValues(game?.trade || null);
   const npcs = game?.npcs || [];
   const quests = game?.quests || [];
   const recipes = game?.recipes || [];
@@ -747,6 +753,9 @@ function withGame(world, source, options) {
       // Fase 7: de knoppen van Instellingen > Balans (XP-tempo en Terugkomen).
       xpRatePct: balance.xpRatePct, respawnRatePct: balance.respawnRatePct }],
     // Groep (MMO) (3-11): Instellingen > Groep. Zonder kaart de standaard; server en game lezen dit.
+    // Fase 8: geldregels (winkelprijzen, terugkopen, marktbelasting, craftkosten).
+    economy_rules: [Object.assign({ id: "rules.economy" }, economy)],
+    trade_rules: [Object.assign({ id: "rules.trade" }, trade)],
     party_rules: [Object.assign({ id: "rules.party" }, game?.party || partyValues(null))],
     chat_rules: [Object.assign({ id: "rules.chat" }, game?.chat || chatValues(null))]
   } };

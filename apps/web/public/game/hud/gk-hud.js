@@ -48,6 +48,8 @@ const TABS = [
   { id: "skills", icon: "spell-book", title: "Vaardigheden", module: "hotbar_hud", key: "KeyK" },
   { id: "quests", icon: "scroll-unfurled", title: "Quests", module: "quest_tracker_hud", key: "KeyL" },
   { id: "money", icon: "two-coins", title: "Geld", module: "wallet_hud", key: null },
+  // Fase 8b: alleen zichtbaar zolang er een ruil met een speler loopt.
+  { id: "swap", icon: "swap-bag", title: "Ruilen", module: null, key: null, onlyTrade: true },
   { id: "chars", icon: "pointy-hat", title: "Characters", module: null, key: "KeyP" },
   { id: "settings", icon: "cog", title: "Instellingen", module: null, key: null },
   { id: "logout", icon: "exit-door", title: "Uitloggen", module: null, key: null }
@@ -411,7 +413,9 @@ export function createGkHud(api) {
     xpGainAt: 0,
     lootSeen: null,         // wat er in de tas zat: sleutel -> { itemId, qty }
     newKeys: new Set(),     // nieuw in de tas sinds je de tas niet meer open had
-    bagWasOpen: false
+    bagWasOpen: false,
+    // Fase 8b: welke ruil je al gezien hebt (zodat het tabblad Ruilen één keer vanzelf opengaat).
+    swapSeen: ""
   };
   let saveTimer = 0;
   // Verbinding met de server (zelfde lampje als in de editor): groen = verbonden, oranje = bezig, rood = niet.
@@ -692,7 +696,10 @@ export function createGkHud(api) {
     return found?.displayName || currencyId || "";
   }
   function visibleTabs() {
-    return TABS.filter(function (tab) { return !tab.module || has(tab.module); });
+    return TABS.filter(function (tab) {
+      if (tab.onlyTrade) return Boolean(openTrade());
+      return !tab.module || has(tab.module);
+    });
   }
   function healthOf(s03) {
     const health = s03?.stats?.health || {};
@@ -867,6 +874,7 @@ export function createGkHud(api) {
   // ---- rendering ----
   function render() {
     watchQuestStarts();
+    watchTrade();
     applyLayout();
     renderUnit();
     renderParty();
@@ -1104,6 +1112,14 @@ export function createGkHud(api) {
     return h("button", { type: "button", class: "gkMenuItem" + (extra ? " " + extra : ""), "data-act": act, "data-id": id || null, disabled: why ? true : null, role: "menuitem" },
       [ico(icon), h("span", null, [h("b", { text: label }), why ? h("small", { text: why }) : null])]);
   }
+  // Fase 8b: Ruilen in het spelermenu (staat het uit in Instellingen > 🤝 Handel, dan zegt de regel waarom).
+  function swapMenuItem(playerId) {
+    const rules = tradeData()?.rules || null;
+    const off = rules && rules.tradeOn === false;
+    const running = Boolean(openTrade());
+    return menuItem("swap-invite", playerId, "swap-bag", "Ruilen", "",
+      off ? "Ruilen staat uit in deze wereld" : running ? "Je hebt al een ruil lopen" : "");
+  }
   function renderMenu() {
     const m = ui.menu;
     menuCard.hidden = !m;
@@ -1143,6 +1159,7 @@ export function createGkHud(api) {
         items.push(ui.sure === "kick:" + m.id ? menuItem("party-kick", m.id, "exit-door", "Zeker? Tik nog eens", "gkWarn")
           : menuItem("party-kick", m.id, "exit-door", "Uit de groep zetten"));
       }
+      if (mate.online && !blockedNow) items.push(swapMenuItem(m.id));
     } else {
       let why = "";
       if (blockedNow) why = "Je hebt deze speler geblokkeerd";
@@ -1150,6 +1167,7 @@ export function createGkHud(api) {
       else if (party && members.length >= num(party.maxMembers, 99)) why = "Je groep is vol";
       items.push(menuItem("party-invite", m.id, "three-friends", "Uitnodigen voor groep", "", why));
       if (!blockedNow) items.push(menuItem("chat-whisper", m.id, "lips", "Fluisteren"));
+      if (!blockedNow) items.push(swapMenuItem(m.id));
     }
     // MMO stap 2 (3-11): blokkeren (twee keer tikken) of weer deblokkeren.
     if (m.id !== "group") {
@@ -1161,7 +1179,7 @@ export function createGkHud(api) {
       h("div", { class: "gkMenuName" }, [h("b", { text: m.name }), sub ? h("small", { text: sub }) : null]),
       h("button", { type: "button", class: "gkClose", "data-act": "menu-close", title: "Sluiten (Esc)" }, [ico("cancel")])]);
     menuCard.replaceChildren(head, ...items);
-    if (!items.length) menuCard.append(h("div", { class: "gkMenuNote", text: "Meer opties (praten, handelen) komen later." }));
+    if (!items.length) menuCard.append(h("div", { class: "gkMenuNote", text: "Meer opties komen later." }));
     // Naast de vinger of muis (niet eronder) en altijd binnen het scherm.
     const area = game.getBoundingClientRect();
     const width = menuCard.offsetWidth || 230;
@@ -2360,7 +2378,8 @@ export function createGkHud(api) {
     if (view === "trade") parts.push(api.vendor(ui.trade?.vendorId));
     if (view === "craft") parts.push(api.station(ui.craft?.stationId), d.s05?.crafting?.jobs);
     if (view === "quests") parts.push(d.s04?.quests, d.s04?.trackedQuest?.questId);
-    if (view === "money") parts.push(d.s03?.currencies);
+    if (view === "money") parts.push(d.s03?.currencies, d.s05?.trade);
+    if (view === "swap") parts.push(d.s05?.trade, d.s03?.catalog);
     if (view === "skills") parts.push(d.s03?.skills?.slots, (d.s03?.skills?.list || []).map(function (e) { return e.abilityId + (e.unlocked ? "" : ":" + e.lock); }), d.s03?.skills?.auto, d.s03?.progression?.level, d.isAdmin);
     if (view === "chars") parts.push(ui.chars, ui.charsBusy);
     if (view === "settings") parts.push(d.isAdmin, d.defeated, store.floatNums, store.nameWorld, store.namePlayers, store.nameSelf,
@@ -2375,7 +2394,7 @@ export function createGkHud(api) {
     const scrollTop = viewChanged ? num(store.scroll[scrollKey]) : (oldBody ? oldBody.scrollTop : num(store.scroll[scrollKey]));
     const oldTop = sheet.querySelector(".gkSplitTop");
     const topScroll = !viewChanged && oldTop ? oldTop.scrollTop : 0;
-    const built = view === "bag" ? sheetBag() : view === "gear" ? sheetGear() : view === "skills" ? sheetSkills() : view === "quests" ? sheetQuests() : view === "money" ? sheetMoney()
+    const built = view === "bag" ? sheetBag() : view === "gear" ? sheetGear() : view === "skills" ? sheetSkills() : view === "quests" ? sheetQuests() : view === "money" ? sheetMoney() : view === "swap" ? sheetSwap()
       : view === "chars" ? sheetChars() : view === "settings" ? sheetSettings() : view === "logout" ? sheetLogout() : view === "trade" ? sheetTrade() : sheetCraft();
     replaceSheetChildren(built);
     if (!viewChanged) sheet.style.animation = "none";
@@ -2533,6 +2552,13 @@ export function createGkHud(api) {
         const waiting = cooldownLeft(itemId) > 0;
         buttons.push(h("button", { type: "button", class: "gkBtn gkGo", "data-act": "use", "data-id": itemId, disabled: busy || waiting ? true : null },
           [ico(def.effect ? "sparkles" : "heart-plus", "plain"), "Gebruiken", h("em", { class: "gkCd gkCdBtn", "data-cd": itemId, hidden: true })]));
+      }
+      // Fase 8b: staat er een ruil open, dan kun je dit item erin leggen.
+      const swap = openTrade();
+      if (swap && swap.state === "open" && !options.sell && def.tradable !== false) {
+        const already = (swap.give || []).find(function (line) { return line.itemId === itemId; }) || null;
+        buttons.push(h("button", { type: "button", class: "gkBtn gkGo", "data-act": "swap-give", "data-id": itemId, "data-key": String(Math.max(1, num(already?.quantity, 0) + 1)),
+          disabled: busy ? true : null }, [ico("swap-bag", "plain"), already ? "Nog een erbij (" + fmt(already.quantity) + ")" : "Aanbieden"]));
       }
       if (!def.questItem && !options.sell) {
         const sure = ui.sure === "destroy:" + key;
@@ -2717,10 +2743,95 @@ export function createGkHud(api) {
 
   function sheetMoney() {
     const list = currencies();
+    // Fase 8b: staat er een ruil open, dan kun je hier geld in de ruil leggen.
+    const swap = openTrade();
+    const swapping = swap && swap.state === "open" ? swap : null;
+    const busy = Boolean(data().busy?.n05);
     const body = h("div", { class: "gkBody" }, [h("div", { class: "gkList" }, list.length ? list.map(function (c) {
-      return h("div", { class: "gkCard gkMoney" }, [h("span", { class: "gkMoneyIcon" }, [currencyVisual(c.currencyId)]), h("strong", { text: c.displayName }), h("b", { text: fmt(c.amount) })]);
+      const card = h("div", { class: "gkCard gkMoney" }, [h("span", { class: "gkMoneyIcon" }, [currencyVisual(c.currencyId)]), h("strong", { text: c.displayName }), h("b", { text: fmt(c.amount) })]);
+      if (!swapping) return card;
+      const offered = num((swapping.give || []).find(function (line) { return line.currencyId === c.currencyId; })?.quantity, 0);
+      return h("div", null, [card, h("div", { class: "gkMoneySwap" }, [
+        h("input", { type: "number", class: "gkMoneyAmount", "data-swap-amount": c.currencyId, min: "0", max: String(Math.max(0, c.amount + offered)),
+          value: String(offered), "aria-label": c.displayName + " in de ruil" }),
+        h("button", { type: "button", class: "gkBtn gkGo", "data-act": "swap-money", "data-id": c.currencyId, disabled: busy ? true : null },
+          [ico("swap-bag", "plain"), "In de ruil"])])]);
     }) : [emptyNote("two-coins", "Er is nog geen geld in deze wereld.")])]);
     return [head("two-coins", "Geld"), body];
+  }
+
+  // Een nieuwe ruil opent zelf het tabblad Ruilen, zodat niemand een vraag mist.
+  function watchTrade() {
+    const trade = openTrade();
+    const id = trade ? trade.tradeId : "";
+    if (ui.swapSeen === id) return;
+    ui.swapSeen = id;
+    if (!trade) {
+      if (store.tab === "swap") { store.tab = "bag"; save(); }
+      return;
+    }
+    if (trade.waitingForMe) toast(trade.partnerName + " wil met je ruilen.", { icon: "swap-bag" });
+    store.tab = "swap";
+    save();
+    setPanel("open");
+  }
+
+  // ---- Fase 8b: ruilen met een speler ----
+  // De bevestiging zegt precies wat je geeft en wat je krijgt. Verandert er iets, dan vervallen beide ja's.
+  function tradeData() {
+    return data().s05?.trade || null;
+  }
+  function openTrade() {
+    const list = tradeData()?.sessions || [];
+    return list.find(function (entry) { return entry.state === "open"; }) || list.find(function (entry) { return entry.state === "invited"; }) || null;
+  }
+  function tradeLineRow(line) {
+    return h("div", { class: "gkCell", "data-rarity": (line.itemId ? catalogItem(line.itemId)?.rarity : "") || "common",
+      title: line.displayName + (line.quantity > 1 ? " ×" + fmt(line.quantity) : "") },
+    [line.itemId ? itemVisual(line.itemId) : currencyVisual(line.currencyId),
+      line.quantity > 1 ? h("span", { class: "gkQty", text: "×" + fmt(line.quantity) }) : null]);
+  }
+  function sheetSwap() {
+    const trade = openTrade();
+    if (!trade) return [head("swap-bag", "Ruilen"), h("div", { class: "gkBody" }, [emptyNote("swap-bag", "Er loopt geen ruil. Houd een speler ingedrukt (of rechtsklik) en kies Ruilen.")])];
+    const d = data();
+    const busy = Boolean(d.busy?.n05);
+    const body = h("div", { class: "gkBody", "data-swap": trade.tradeId });
+    if (trade.state === "invited") {
+      body.append(h("div", { class: "gkSwapNote", text: trade.waitingForMe
+        ? trade.partnerName + " wil met je ruilen."
+        : "Gevraagd aan " + trade.partnerName + ". Wachten tot " + trade.partnerName + " ja zegt." }));
+      body.append(h("div", { class: "gkBtns" }, [
+        trade.waitingForMe ? h("button", { type: "button", class: "gkBtn gkGo", "data-act": "swap-accept", "data-id": trade.tradeId, disabled: busy ? true : null },
+          [ico("check-mark", "plain"), "Ruilen met " + trade.partnerName]) : null,
+        h("button", { type: "button", class: "gkBtn gkWarn", "data-act": "swap-cancel", "data-id": trade.tradeId, disabled: busy ? true : null },
+          [ico("cancel", "plain"), trade.waitingForMe ? "Nee" : "Afbreken"])]));
+      return [head("swap-bag", "Ruilen met " + trade.partnerName), body];
+    }
+    // Wat jij neerlegt: tik in je tas op een item en kies Aanbieden; hier haal je het er weer uit.
+    body.append(h("div", { class: "gkSwapSide" }, [h("div", { class: "gkSwapHead" }, [ico("knapsack", "plain"), h("span", { text: "Jij geeft" })]),
+      trade.give.length
+        ? h("div", { class: "gkGrid gkSwapGrid" }, trade.give.map(function (line) {
+          return h("button", { type: "button", class: "gkCell", "data-act": "swap-take", "data-id": (line.itemId ? "item:" + line.itemId : "currency:" + line.currencyId),
+            "data-rarity": (line.itemId ? catalogItem(line.itemId)?.rarity : "") || "common", title: "Uit de ruil halen: " + line.displayName, disabled: busy ? true : null },
+          [line.itemId ? itemVisual(line.itemId) : currencyVisual(line.currencyId),
+            line.quantity > 1 ? h("span", { class: "gkQty", text: "×" + fmt(line.quantity) }) : null]);
+        }))
+        : h("div", { class: "gkSwapNote", text: "Nog niets. Open je tas, tik een item en kies Aanbieden." })]));
+    body.append(h("div", { class: "gkSwapSide" }, [h("div", { class: "gkSwapHead" }, [ico("three-friends", "plain"), h("span", { text: trade.partnerName + " geeft" })]),
+      trade.get.length ? h("div", { class: "gkGrid gkSwapGrid" }, trade.get.map(tradeLineRow))
+        : h("div", { class: "gkSwapNote", text: trade.partnerName + " heeft nog niets neergelegd." })]));
+    // Dit is de bevestiging: precies dit geef je weg en precies dit krijg je terug.
+    body.append(h("div", { class: "gkSwapConfirm" }, [ico("scroll-unfurled", "plain"), h("strong", { text: trade.confirmText })]));
+    body.append(h("div", { class: "gkSwapNote", text: trade.iConfirmed
+      ? (trade.theyConfirmed ? "Beiden ja." : "Jij hebt ja gezegd. Nu " + trade.partnerName + " nog.")
+      : (trade.theyConfirmed ? trade.partnerName + " heeft ja gezegd. Bevestig jij ook?" : "Verandert er iets, dan vervallen beide ja's.") }));
+    body.append(h("div", { class: "gkBtns" }, [
+      h("button", { type: "button", class: "gkBtn gkGo", "data-act": "swap-confirm", "data-id": trade.tradeId, "data-rev": String(trade.revision),
+        disabled: busy || trade.iConfirmed ? true : null }, [ico("check-mark", "plain"), trade.iConfirmed ? "Ja gezegd" : "Ja, ruilen"]),
+      h("button", { type: "button", class: "gkBtn gkWarn", "data-act": "swap-cancel", "data-id": trade.tradeId, disabled: busy ? true : null },
+        [ico("cancel", "plain"), "Afbreken"])]));
+    return [head("swap-bag", "Ruilen met " + trade.partnerName), body];
   }
 
   // Fase 5: 📖 vaardigheden. Vak 1 = vaste auto-aanval; de rest sleep je naar vak 2 of 3 (of tik op 2/3).
@@ -2886,10 +2997,28 @@ export function createGkHud(api) {
     const top = h("div", { class: "gkBody" }, [offers.length ? wares : emptyNote("shop", "Deze winkel verkoopt niets.")]);
     const selected = offers.find(function (offer) { return offer.offerId === ui.trade.offerId; });
     if (selected) {
+      // Fase 8: zegt erbij of de prijs automatisch uit de waarde van het item komt, en wat de winkel ervoor teruggeeft.
+      const priceNote = [selected.sellPriceAuto ? "prijs automatisch" : "eigen prijs",
+        selected.buyPriceMinor > 0 ? "winkel geeft " + fmt(selected.buyPriceMinor) + " terug" : ""].filter(Boolean).join(" · ");
       top.append(h("div", { class: "gkBar" }, [h("div", { class: "gkCell", "data-rarity": catalogItem(selected.itemRef)?.rarity || "common" }, [itemVisual(selected.itemRef)]),
         h("span", { text: (selected.displayName || selected.itemRef) + (selected.owned ? " · je hebt er " + fmt(selected.owned) : "") }),
+        h("small", { class: "gkPriceNote", text: priceNote }),
         h("button", { type: "button", class: "gkBtn gkGo", "data-act": "buy", "data-id": selected.offerId, disabled: d.busy?.n05 || !selected.canBuy ? true : null },
           [ico("two-coins", "plain"), "Kopen ", coin(selected.sellPriceMinor, selected.sellCurrencyRef)])]));
+    }
+    // Fase 8: wat je hier verkocht hebt, kun je voor dezelfde prijs terugkopen.
+    const back = Array.isArray(vendor.buyBack) ? vendor.buyBack : [];
+    if (back.length) {
+      const list = h("div", { class: "gkGrid gkBuyBack" }, back.map(function (row) {
+        return h("button", { type: "button", class: "gkCell" + (row.canBuy ? "" : " gkNo"), "data-act": "buyback", "data-id": row.id,
+          "data-rarity": catalogItem(row.itemId)?.rarity || "common",
+          title: (row.displayName || row.itemId) + " terugkopen voor " + fmt(row.priceMinor),
+          disabled: d.busy?.n05 || !row.canBuy ? true : null },
+        [itemVisual(row.itemId), row.quantity > 1 ? h("span", { class: "gkQty", text: "\u00d7" + fmt(row.quantity) }) : null,
+          h("span", { class: "gkPrice" }, [currencyVisual(row.currencyRef), fmt(row.priceMinor)])]);
+      }));
+      top.append(h("div", { class: "gkBuyBackHead" }, [ico("swap-bag", "plain"), h("span", { text: "Terugkopen (wat je net verkocht)" })]));
+      top.append(list);
     }
     return [top];
   }
@@ -2928,6 +3057,14 @@ export function createGkHud(api) {
           h("span", { class: "gkCraftThumbLabel", text: fmt(ingredient.owned) + "/" + fmt(ingredient.required) })
         ]));
       });
+      if (recipe.moneyCost) {
+        // Fase 8: craften kost ook geld (Instellingen > Geld > Kosten om te maken).
+        const paid = num(recipe.moneyCost.owned) >= num(recipe.moneyCost.amount);
+        strip.append(h("div", { class: "gkCraftThumb gkCell " + (paid ? "gkOk" : "gkMiss"), title: "Kosten om te maken: " + (recipe.moneyCost.displayName || "geld") }, [
+          currencyVisual(recipe.moneyCost.currencyId),
+          h("span", { class: "gkCraftThumbLabel", text: fmt(recipe.moneyCost.owned) + "/" + fmt(recipe.moneyCost.amount) })
+        ]));
+      }
       row.append(strip);
       list.append(row);
     }
@@ -3994,6 +4131,36 @@ export function createGkHud(api) {
       case "ware": if (ui.trade) { ui.trade.offerId = ui.trade.offerId === id ? null : id; store.item = null; renderTalk(); } break;
       case "buy": if (ui.trade) api.run05("vendor_buy", { vendorId: ui.trade.vendorId, offerId: id, quantity: 1 }); break;
       case "sell": if (ui.trade && id) api.run05("vendor_sell", { vendorId: ui.trade.vendorId, offerId: id, quantity: 1 }); break;
+      case "buyback": if (ui.trade && id) api.run05("vendor_buy_back", { vendorId: ui.trade.vendorId, entryId: id }); break;
+      // Fase 8b: ruilen met een speler.
+      case "swap-invite": closeMenu(); api.run05("trade_invite", { targetPlayerId: id }); break;
+      case "swap-accept": api.run05("trade_accept", { tradeId: id }); break;
+      case "swap-cancel": api.run05("trade_cancel", { tradeId: id }); break;
+      case "swap-confirm": {
+        const swap = openTrade();
+        if (swap) api.run05("trade_confirm", { tradeId: id, revision: swap.revision });
+        break;
+      }
+      case "swap-give": {
+        const swap = openTrade();
+        const qty = Math.max(1, num(key, 1));
+        if (swap && id) api.run05("trade_offer", { tradeId: swap.tradeId, itemId: id, quantity: qty });
+        break;
+      }
+      case "swap-take": {
+        const swap = openTrade();
+        if (!swap || !id) break;
+        const parts = String(id).split(":");
+        api.run05("trade_offer", Object.assign({ tradeId: swap.tradeId, quantity: 0 },
+          parts[0] === "currency" ? { currencyId: parts.slice(1).join(":") } : { itemId: parts.slice(1).join(":") }));
+        break;
+      }
+      case "swap-money": {
+        const swap = openTrade();
+        const field = root.querySelector('[data-swap-amount="' + String(id).replace(/"/g, "") + '"]');
+        if (swap && id) api.run05("trade_offer", { tradeId: swap.tradeId, currencyId: id, quantity: Math.max(0, Math.round(num(field?.value, 0))) });
+        break;
+      }
       case "craft": if (ui.craft) api.run05("craft", { stationId: ui.craft.stationId, recipeId: id }); break;
       case "claim": api.run05("crafting:claim", { jobId: id }); break;
       case "set":

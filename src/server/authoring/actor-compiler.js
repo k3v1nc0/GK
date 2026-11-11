@@ -126,6 +126,9 @@ export function compileActorSection(documents, options = {}) {
         if (needRef(doc, entry.itemRef, "item_definition", label)) entries.push(Object.assign({ itemId: idFromRef(entry.itemRef) }, base));
       } else if (entry.tableRef) {
         if (needRef(doc, entry.tableRef, "loot_table", label)) entries.push(Object.assign({ lootTableId: idFromRef(entry.tableRef) }, base));
+      } else if (entry.currencyRef) {
+        // Fase 8: geld uit een loottabel.
+        if (needRef(doc, entry.currencyRef, "currency", label)) entries.push(Object.assign({ currencyId: idFromRef(entry.currencyRef) }, base));
       }
     });
     lootTables[doc.body.lootTableId] = { displayName: doc.body.displayName, entries };

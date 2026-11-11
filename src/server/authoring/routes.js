@@ -8,7 +8,7 @@ import { CUTOVER_DOMAINS, cutoverRows, finalizeDomain, legacyInventory, planDoma
 import { BuildService, compileCanonical } from "./build-service.js";
 import { knownEquipmentSlotIds, knownRespawnPolicyIds, zoneSummaries } from "./runtime-overlay.js";
 import { equipmentSlotsFrom, respawnPoliciesFrom } from "../../shared/authoring/kinds/balance.js";
-import { balanceReport, legacyNodeCounts } from "./balance-report.js";
+import { balanceReport, legacyNodeCounts, moneyPerDay, tradeLog } from "./balance-report.js";
 import { NODE_TYPES } from "../../shared/node-types.js";
 import { baseRuntimeWorld, buildRuntimeWorld } from "./world-builder.js";
 import { previewMembership } from "../preview/preview-service.js";
@@ -291,7 +291,10 @@ export class AuthoringRoutes {
       return this.sendJson(res, 200, {
         ok: true,
         report: balanceReport(docs, { buildErrors }),
-        legacy: legacyNodeCounts(graph, (type) => NODE_TYPES[type]?.label || type)
+        legacy: legacyNodeCounts(graph, (type) => NODE_TYPES[type]?.label || type),
+        // Fase 8: geld erin en eruit per dag (uit het grootboek) en het handelslogboek.
+        money: moneyPerDay(this.db),
+        trades: tradeLog(this.db)
       });
     }
 

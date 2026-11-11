@@ -6,6 +6,7 @@
 // - strength: per vijand en klasse: klappen nodig (vak 1) en klappen overleven, op het level van de vijand.
 import { CANONICAL_KINDS } from "../../shared/authoring/kinds.js";
 import { EQUIPMENT_SLOT_DEFS, balanceValues, equipmentSlotsFrom } from "../../shared/authoring/kinds/balance.js";
+import { economyValues, shopBuyPrice, shopSellPrice } from "../../shared/authoring/kinds/economy.js";
 import { cleanXpCurve, statAtLevel, xpCostAt } from "../../../apps/web/public/shared/level-math.js";
 import { computeDamage } from "../../../apps/web/public/shared/combat-math.js";
 import { questRepeatOf, questStartMode, questSteps } from "../../../apps/web/public/shared/quest-graph.js";
@@ -38,6 +39,7 @@ export function balanceReport(documents, { buildErrors = [] } = {}) {
   const curve = cleanXpCurve(project.xpCurve, maxLevel);
   const costAt = (level) => xpCostAt(curve, Math.max(1, Math.min(maxLevel, int(level, 1))), xpPerLevel);
   const balance = balanceValues(one("balance_settings"));
+  const economy = economyValues(one("economy_settings"));
   const xpRate = balance.xpRatePct / 100;
   const respawnRate = balance.respawnRatePct / 100;
   const slotsOn = new Set(equipmentSlotsFrom(one("equipment_settings")).map((slot) => slot.id));
@@ -177,6 +179,35 @@ export function balanceReport(documents, { buildErrors = [] } = {}) {
     }
   }
 
+  // ---- Rood 5: een geldlus. Ergens goedkoop kopen en duurder (terug)verkopen = geld uit het niets.
+  // De winkels hebben onbeperkte voorraad, dus één keer kan al eindeloos.
+  const shops = of("npc").filter((npc) => Array.isArray(npc.body.shopOffers) && npc.body.shopOffers.length && npc.body.shopCurrencyRef);
+  const prices = new Map(); // itemRef -> { buy: {price, shop}, sell: {price, shop} } per valuta
+  for (const npc of shops) {
+    const currency = npc.body.shopCurrencyRef;
+    for (const row of npc.body.shopOffers) {
+      const item = byKey.get(row?.ref);
+      if (!item || item.kind !== "item_definition") continue;
+      const value = int(item.body.vendorValue, 0);
+      const buyHere = shopSellPrice(value, row.price, economy.shopMarkupPct);
+      const sellHere = shopBuyPrice(value, row.buyBack, economy.shopBuyPct);
+      const key = row.ref + "|" + currency;
+      const entry = prices.get(key) || { itemRef: row.ref, currency, buy: null, sell: null };
+      if (buyHere > 0 && (!entry.buy || buyHere < entry.buy.price)) entry.buy = { price: buyHere, shop: nameOf(npc), docKey: npc.docKey };
+      if (sellHere > 0 && (!entry.sell || sellHere > entry.sell.price)) entry.sell = { price: sellHere, shop: nameOf(npc), docKey: npc.docKey };
+      prices.set(key, entry);
+    }
+  }
+  for (const entry of prices.values()) {
+    if (!entry.buy || !entry.sell || entry.sell.price < entry.buy.price) continue;
+    const itemName = nameOfRef(entry.itemRef);
+    const where = entry.buy.docKey === entry.sell.docKey
+      ? "bij " + entry.buy.shop
+      : "bij " + entry.buy.shop + " en verkopen bij " + entry.sell.shop;
+    add("red", "MONEY_LOOP", entry.sell.docKey, "Geldlus: " + itemName + " kost " + entry.buy.price + " " + nameOfRef(entry.currency)
+      + " " + where + " en levert " + entry.sell.price + " op. Spelers kunnen zo eindeloos geld maken. Maak de terugkoopprijs lager of de winkelprijs hoger (Instellingen → 💰 Geld).");
+  }
+
   // ---- XP per gebied ----
   const regions = of("region").sort((a, b) => nameOf(a).localeCompare(nameOf(b)));
   const regionAt = (xMm, zMm, ref = null) => {
@@ -272,8 +303,38 @@ export function balanceReport(documents, { buildErrors = [] } = {}) {
     findings,
     counts: { red: findings.filter((finding) => finding.severity === "red").length, orange: findings.filter((finding) => finding.severity === "orange").length },
     xpByArea, strength, classes: classRows.map((cls) => ({ docKey: cls.docKey, name: cls.name })),
-    balance, maxLevel, assumption: BALANCE_ASSUMPTION
+    balance, economy, maxLevel, assumption: BALANCE_ASSUMPTION
   };
+}
+
+// Fase 8: geld erin en eruit per dag, uit het grootboek (economy_ledger). Alleen lezen.
+export function moneyPerDay(db, { days = 14 } = {}) {
+  if (!db || typeof db.prepare !== "function") return { days: [], reasons: [] };
+  try {
+    return moneyPerDayRows(db, days);
+  } catch {
+    // Een verse projectdatabase heeft nog geen grootboek: dan is er simpelweg niets te melden.
+    return { days: [], reasons: [] };
+  }
+}
+
+function moneyPerDayRows(db, days) {
+  const rows = db.prepare(`
+    SELECT substr(created_at, 1, 10) AS day, asset_id AS currencyId,
+      SUM(CASE WHEN delta_real > 0 THEN delta_real ELSE 0 END) AS inAmount,
+      SUM(CASE WHEN delta_real < 0 THEN -delta_real ELSE 0 END) AS outAmount
+    FROM economy_ledger WHERE asset_kind = 'currency'
+    GROUP BY day, currencyId ORDER BY day DESC, currencyId ASC LIMIT ?
+  `).all(Math.max(1, Math.min(120, Math.round(Number(days) || 14))) * 6);
+  const reasons = db.prepare(`
+    SELECT reason, asset_id AS currencyId,
+      SUM(CASE WHEN delta_real > 0 THEN delta_real ELSE 0 END) AS inAmount,
+      SUM(CASE WHEN delta_real < 0 THEN -delta_real ELSE 0 END) AS outAmount
+    FROM economy_ledger WHERE asset_kind = 'currency'
+    GROUP BY reason, currencyId ORDER BY (inAmount + outAmount) DESC LIMIT 20
+  `).all();
+  const clean = (list) => list.map((row) => Object.assign({}, row, { inAmount: Math.round(Number(row.inAmount) || 0), outAmount: Math.round(Number(row.outAmount) || 0) }));
+  return { days: clean(rows), reasons: clean(reasons) };
 }
 
 // Lijst per soort van wat nog als node bestaat (de oude route). Alleen tellen; schrijft niets.
@@ -285,4 +346,50 @@ export function legacyNodeCounts(graph, titleOf = (type) => type) {
   }
   return Array.from(counts, ([type, count]) => ({ type, label: String(titleOf(type) || type), count }))
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+}
+
+// Fase 8b: het handelslogboek voor de maker. Alleen lezen: wie ruilde wat met wie, en wat ging er over de markt.
+// Geen namen uit de code: de spelersnamen komen uit de database.
+export function tradeLog(db, { limit = 40 } = {}) {
+  if (!db || typeof db.prepare !== "function") return { swaps: [], market: [], busiest: [] };
+  try {
+    return tradeLogRows(db, limit);
+  } catch {
+    // Zonder handelstabellen (verse projectdatabase) is er nog niets geruild.
+    return { swaps: [], market: [], busiest: [] };
+  }
+}
+
+function tradeLogRows(db, limit) {
+  const max = Math.max(1, Math.min(200, Math.round(Number(limit) || 40)));
+  const nameOf = (id) => {
+    try { return db.prepare("SELECT display_name FROM player_profiles WHERE id = ? LIMIT 1").get(id)?.display_name || "Speler"; } catch { return "Speler"; }
+  };
+  const swaps = db.prepare(`
+    SELECT id, player_a_id, player_b_id, completed_at
+    FROM direct_trade_sessions WHERE state = 'completed'
+    ORDER BY completed_at DESC LIMIT ?
+  `).all(max).map((row) => {
+    const lines = db.prepare("SELECT owner_player_id, asset_kind, asset_id, quantity_minor FROM direct_trade_offers WHERE trade_session_id = ? ORDER BY asset_kind ASC, asset_id ASC")
+      .all(row.id);
+    const side = (ownerId) => lines.filter((line) => line.owner_player_id === ownerId)
+      .map((line) => ({ kind: line.asset_kind === "currency" ? "currency" : "item", id: line.asset_id, quantity: Math.max(1, Math.round(Number(line.quantity_minor) || 1)) }));
+    return { tradeId: row.id, at: row.completed_at, aName: nameOf(row.player_a_id), bName: nameOf(row.player_b_id), aGave: side(row.player_a_id), bGave: side(row.player_b_id) };
+  });
+  const market = db.prepare(`
+    SELECT id, order_id, buyer_player_id, seller_player_id, quantity, currency_id, gross_amount_minor, tax_amount_minor, seller_amount_minor, created_at
+    FROM market_trades ORDER BY created_at DESC LIMIT ?
+  `).all(max).map((row) => ({
+    tradeId: row.id, at: row.created_at, buyerName: nameOf(row.buyer_player_id), sellerName: nameOf(row.seller_player_id),
+    itemId: db.prepare("SELECT item_id FROM market_orders WHERE id = ? LIMIT 1").get(row.order_id)?.item_id || "",
+    quantity: Math.max(1, Math.round(Number(row.quantity) || 1)), currencyId: row.currency_id,
+    gross: Math.round(Number(row.gross_amount_minor) || 0), tax: Math.round(Number(row.tax_amount_minor) || 0), toSeller: Math.round(Number(row.seller_amount_minor) || 0)
+  }));
+  // Wie het drukst handelt: handig om een bot of een lek te zien.
+  const busiest = db.prepare(`
+    SELECT player_id, COUNT(*) AS total FROM operation_idempotency
+    WHERE operation_type IN ('trade_confirm', 'trade:confirm', 'market_list', 'market:create', 'market_buy', 'market:buy')
+    GROUP BY player_id ORDER BY total DESC LIMIT 5
+  `).all().map((row) => ({ name: nameOf(row.player_id), total: Math.round(Number(row.total) || 0) }));
+  return { swaps, market, busiest };
 }

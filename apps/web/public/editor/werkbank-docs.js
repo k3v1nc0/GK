@@ -13,6 +13,16 @@ import { openQuestBuilder } from "./quest-builder.js?v=20261110-fase5";
 
 const DOC_MIME = "application/x-gk-doc";
 
+// Fase 8: waarom er geld bij kwam of wegging, in gewone woorden (grootboek-redenen).
+const REASON_TEXT = {
+  actor_defeated: "Vijand verslagen", resource_gathered: "Verzameld", pickup_claimed: "Opgepakt", quest_reward: "Questbeloning",
+  vendor_buy: "Gekocht in een winkel", vendor_sell: "Verkocht aan een winkel", vendor_buy_back: "Teruggekocht",
+  market_sale: "Verkocht op de markt", market_purchase: "Gekocht op de markt", market_tax: "Marktbelasting",
+  market_listing_fee: "Kosten om op de markt te zetten", crafting_cost: "Craftkosten", crafting_input: "Grondstoffen (craften)",
+  crafting_output: "Gemaakt met craften", portal_travel: "Reiskosten", trade: "Geruild met een speler", mail_claim: "Uit de post",
+  starting_character: "Startgeld", hud_debug_add: "Maker: geld erbij", maker_xp: "Maker"
+};
+
 // Wat de Bibliotheek als filtertabs toont (volgorde = schema-volgorde van soorten met plek "werkbank").
 // Plek-soorten (pickup, region, ...) zet je in de 3D-view (stuk 2), die staan niet als kaart in de Bibliotheek.
 // Een placed_model is een losse wereldinstantie, geen herbruikbare Bibliotheek-kaart.
@@ -502,24 +512,33 @@ export function createDocBench(options = {}) {
     const wrap = el("div", { class: "wbdLoot" });
     const commit = () => onChange(rows.length ? rows.map((entry) => Object.assign({}, entry)) : null);
     rows.forEach((entry, index) => {
-      const ref = entry.itemRef || entry.tableRef || "";
+      const ref = entry.itemRef || entry.tableRef || entry.currencyRef || "";
       const target = bench.doc(ref);
       const slot = dropSlot({
-        value: ref, filled: Boolean(ref), icon: entry.tableRef ? "🎁" : "🎒", name: target ? docName(target) : ref,
+        value: ref, filled: Boolean(ref), icon: entry.tableRef ? "🎁" : entry.currencyRef ? "🪙" : "🎒", name: target ? docName(target) : ref,
         thumbPath: docThumbAsset(target)?.thumbnailPath || "", emptyText: "Sleep item",
         accepts: (transfer) => Array.from(transfer.types || []).includes(DOC_MIME),
         onDrop: (transfer) => {
           const docKey = transfer.getData(DOC_MIME);
-          delete entry.itemRef; delete entry.tableRef;
+          delete entry.itemRef; delete entry.tableRef; delete entry.currencyRef;
           if (docKey.startsWith("item_definition:")) entry.itemRef = docKey;
           else if (docKey.startsWith("loot_table:")) entry.tableRef = docKey;
-          else { setStatus("Sleep een item of een loottabel.", "error"); return; }
+          // Fase 8: geld uit een loottabel.
+          else if (docKey.startsWith("currency:")) entry.currencyRef = docKey;
+          else { setStatus("Sleep een item, een valuta of een loottabel.", "error"); return; }
           commit();
         },
         onClear: null,
         pickerOptions: bench.docs("item_definition").map((doc) => ({ value: doc.docKey, label: "🎒 " + docName(doc) }))
+          .concat(bench.docs("currency").map((doc) => ({ value: doc.docKey, label: "🪙 " + docName(doc) })))
           .concat(bench.docs("loot_table").map((doc) => ({ value: doc.docKey, label: "🎁 " + docName(doc) }))),
-        onPick: (docKey) => { delete entry.itemRef; delete entry.tableRef; if (docKey.startsWith("loot_table:")) entry.tableRef = docKey; else entry.itemRef = docKey; commit(); }
+        onPick: (docKey) => {
+          delete entry.itemRef; delete entry.tableRef; delete entry.currencyRef;
+          if (docKey.startsWith("loot_table:")) entry.tableRef = docKey;
+          else if (docKey.startsWith("currency:")) entry.currencyRef = docKey;
+          else entry.itemRef = docKey;
+          commit();
+        }
       });
       const chanceField = { type: "integer", min: 1, max: 10000, ui: { step: 100, unit: "%", scale: 100 } };
       const chance = sliderControl(chanceField, entry.chanceBp ?? 10000, (next) => { entry.chanceBp = Math.max(1, next || 1); commit(); });
@@ -1179,6 +1198,102 @@ export function createDocBench(options = {}) {
     host.append(box);
   }
 
+  // ---------- Fase 8: Instellingen > 💰 Geld: geld erin en eruit ----------
+
+  function renderMoneyReport(host, rerender) {
+    const data = bench.balance;
+    if (!data) {
+      host.append(el("div", { class: "wbdNote", text: "💰 Geld wordt bekeken…" }));
+      bench.loadBalance().then(rerender);
+      return;
+    }
+    const money = data.money || { days: [], reasons: [] };
+    const names = new Map(bench.docs("currency").map((doc) => [doc.body.currencyId, docName(doc)]));
+    const nameOf = (id) => names.get(id) || id;
+    const box = el("div", { class: "wbdBalance" });
+    const again = el("button", { type: "button", class: "wbdGhost", text: "↻ Opnieuw bekijken" });
+    again.addEventListener("click", () => { bench.clearBalance(); rerender(); });
+    box.append(again);
+    box.append(el("div", { class: "wbdHead" }, [el("span", { class: "wbdHeadIcon", text: "📈" }),
+      el("div", { class: "wbdHeadText" }, [el("div", { class: "wbdHeadKind", text: "Geld erin en eruit" }),
+        el("div", { class: "wbdHeadName", text: money.days.length ? "Per dag, nieuwste eerst" : "Nog geen geld verdiend of besteed" })])]));
+    for (const row of money.days) {
+      box.append(el("div", { class: "wbdFinding" }, [
+        el("div", { class: "wbdFindingText", text: "📅 " + row.day + " · " + nameOf(row.currencyId) }),
+        el("div", { class: "wbdNote", text: "Erin: " + row.inAmount + " · Eruit: " + row.outAmount + " · Verschil: " + (row.inAmount - row.outAmount > 0 ? "+" : "") + (row.inAmount - row.outAmount) })]));
+    }
+    // Waar komt het vandaan en waar gaat het heen (de grootste redenen).
+    if (money.reasons.length) {
+      box.append(el("div", { class: "wbdHead" }, [el("span", { class: "wbdHeadIcon", text: "🧾" }),
+        el("div", { class: "wbdHeadText" }, [el("div", { class: "wbdHeadKind", text: "Waarvandaan en waarnaartoe" }),
+          el("div", { class: "wbdHeadName", text: money.reasons.length + " soorten" })])]));
+      const lines = money.reasons.map((row) => REASON_TEXT[row.reason] || row.reason)
+        .map((label, index) => label + ": +" + money.reasons[index].inAmount + " / −" + money.reasons[index].outAmount + " " + nameOf(money.reasons[index].currencyId));
+      box.append(el("div", { class: "wbdNote", text: lines.join(" · ") }));
+    }
+    // De geldlussen staan in ⚖️ Balans; hier alleen een verwijzing als er een is.
+    const loops = (data.report?.findings || []).filter((finding) => finding.code === "MONEY_LOOP");
+    for (const loop of loops) {
+      const row = el("div", { class: "wbdFinding red" }, [el("div", { class: "wbdFindingText", text: "🔴 " + loop.message })]);
+      if (loop.docKey && openDoc) {
+        const go = el("button", { type: "button", class: "wbdGhost", text: "➡️ Open de kaart" });
+        go.addEventListener("click", () => openDoc(loop.docKey));
+        row.append(go);
+      }
+      box.append(row);
+    }
+    host.append(box);
+  }
+
+  // ---------- Fase 8b: Instellingen > 🤝 Handel: het handelslogboek ----------
+
+  function renderTradeLog(host, rerender) {
+    const data = bench.balance;
+    if (!data) {
+      host.append(el("div", { class: "wbdNote", text: "🤝 Handel wordt bekeken…" }));
+      bench.loadBalance().then(rerender);
+      return;
+    }
+    const log = data.trades || { swaps: [], market: [], busiest: [] };
+    const itemNames = new Map(bench.docs("item_definition").map((doc) => [doc.body.itemId, docName(doc)]));
+    const moneyNames = new Map(bench.docs("currency").map((doc) => [doc.body.currencyId, docName(doc)]));
+    const lineText = (entry) => (entry.quantity > 1 ? entry.quantity + "× " : "")
+      + (entry.kind === "currency" ? (moneyNames.get(entry.id) || entry.id) : (itemNames.get(entry.id) || entry.id));
+    const sideText = (list) => (list.length ? list.map(lineText).join(", ") : "niets");
+    const dayText = (stamp) => String(stamp || "").replace("T", " ").slice(0, 16);
+    const box = el("div", { class: "wbdBalance" });
+    const again = el("button", { type: "button", class: "wbdGhost", text: "↻ Opnieuw bekijken" });
+    again.addEventListener("click", () => { bench.clearBalance(); rerender(); });
+    box.append(again);
+    box.append(el("div", { class: "wbdNote", text: "Deze kaart is nu de enige plek voor ruilen, markt en post. Oude Trade/Market/Mail Policy-nodes van de oude route doen niets meer; wat er nog aan nodes staat zie je bij ⚖️ Balans." }));
+    box.append(el("div", { class: "wbdHead" }, [el("span", { class: "wbdHeadIcon", text: "🤝" }),
+      el("div", { class: "wbdHeadText" }, [el("div", { class: "wbdHeadKind", text: "Geruild tussen spelers" }),
+        el("div", { class: "wbdHeadName", text: log.swaps.length ? log.swaps.length + " ruilen, nieuwste eerst" : "Nog niemand heeft geruild" })])]));
+    for (const swap of log.swaps) {
+      box.append(el("div", { class: "wbdFinding" }, [
+        el("div", { class: "wbdFindingText", text: "🤝 " + swap.aName + " gaf " + sideText(swap.aGave) + " aan " + swap.bName }),
+        el("div", { class: "wbdNote", text: dayText(swap.at) + " · " + swap.bName + " gaf " + sideText(swap.bGave) })]));
+    }
+    box.append(el("div", { class: "wbdHead" }, [el("span", { class: "wbdHeadIcon", text: "🏪" }),
+      el("div", { class: "wbdHeadText" }, [el("div", { class: "wbdHeadKind", text: "Verkocht op de markt" }),
+        el("div", { class: "wbdHeadName", text: log.market.length ? log.market.length + " verkopen" : "Nog niets verkocht op de markt" })])]));
+    for (const sale of log.market) {
+      const money = moneyNames.get(sale.currencyId) || sale.currencyId;
+      box.append(el("div", { class: "wbdFinding" }, [
+        el("div", { class: "wbdFindingText", text: "🏪 " + sale.buyerName + " kocht " + (sale.quantity > 1 ? sale.quantity + "× " : "")
+          + (itemNames.get(sale.itemId) || sale.itemId) + " van " + sale.sellerName }),
+        el("div", { class: "wbdNote", text: dayText(sale.at) + " · betaald " + sale.gross + " " + money
+          + " · belasting " + sale.tax + " · naar de verkoper " + sale.toSeller })]));
+    }
+    if (log.busiest.length) {
+      box.append(el("div", { class: "wbdHead" }, [el("span", { class: "wbdHeadIcon", text: "🛡️" }),
+        el("div", { class: "wbdHeadText" }, [el("div", { class: "wbdHeadKind", text: "Wie handelt het meest" }),
+          el("div", { class: "wbdHeadName", text: "Handig om een bot of een lek te zien" })])]));
+      box.append(el("div", { class: "wbdNote", text: log.busiest.map((row) => row.name + ": " + row.total).join(" · ") }));
+    }
+    host.append(box);
+  }
+
   // ---------- Proef (rekent in de browser met dezelfde regels als de server, schrijft niets) ----------
 
   const idOf = (ref) => String(ref || "").replace(/^[a-z_]+:/, "");
@@ -1215,11 +1330,15 @@ export function createDocBench(options = {}) {
       const runtime = {};
       for (const [id, table] of Object.entries(tables)) {
         runtime[id] = { entries: (table.entries || []).map((entry) => Object.assign({ chanceBp: entry.chanceBp, minQty: entry.minQty, maxQty: entry.maxQty },
-          entry.itemRef ? { itemId: idOf(entry.itemRef) } : { lootTableId: idOf(entry.tableRef) })) };
+          entry.itemRef ? { itemId: idOf(entry.itemRef) } : entry.currencyRef ? { currencyId: idOf(entry.currencyRef) } : { lootTableId: idOf(entry.tableRef) })) };
       }
       const totals = new Map();
-      for (let i = 0; i < 100; i += 1) for (const drop of rollLoot(runtime, body.lootTableId, "proef|" + i)) totals.set(drop.itemId, (totals.get(drop.itemId) || 0) + drop.quantity);
-      const names = new Map(bench.docs("item_definition").map((doc) => [doc.body.itemId, doc.body.displayName]));
+      for (let i = 0; i < 100; i += 1) for (const drop of rollLoot(runtime, body.lootTableId, "proef|" + i)) {
+        const key = drop.currencyId ? "🪙" + drop.currencyId : drop.itemId;
+        totals.set(key, (totals.get(key) || 0) + drop.quantity);
+      }
+      const names = new Map(bench.docs("item_definition").map((doc) => [doc.body.itemId, doc.body.displayName])
+        .concat(bench.docs("currency").map((doc) => ["🪙" + doc.body.currencyId, doc.body.displayName])));
       return totals.size ? "🎁 Gemiddeld per keer: " + Array.from(totals, ([id, total]) => (names.get(id) || id) + " " + (total / 100).toFixed(2)).join(", ") : "Niets gevallen in 100 keer.";
     });
   }
@@ -1282,6 +1401,10 @@ export function createDocBench(options = {}) {
     bench.renderForm(host, { kind: bench.settingsView, place: "instellingen" });
     // Fase 7: onder de knoppen van Balans staat het rapport (meldingen, XP per gebied, sterkte per level).
     if (bench.settingsView === "balance_settings") renderBalanceReport(host, () => bench.renderSettingsCard(host, rerender));
+    // Fase 8: onder de knoppen van Geld staat wat erin en eruit ging per dag.
+    if (bench.settingsView === "economy_settings") renderMoneyReport(host, () => bench.renderSettingsCard(host, rerender));
+    // Fase 8b: onder de knoppen van Handel staat het handelslogboek.
+    if (bench.settingsView === "trade_settings") renderTradeLog(host, () => bench.renderSettingsCard(host, rerender));
     if (settingsCardExtra) settingsCardExtra(bench.settingsView, host);
   };
 

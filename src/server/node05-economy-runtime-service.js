@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import { assertDeveloperActionAllowed, normalizedActionPayloadHash } from "./action-security.js";
 import { runOperation } from "./persistence/operation-contract.js";
 import { partyRulesFromProject } from "./runtime/party-runtime.js";
+import { economyValues, shopBuyPrice, shopSellPrice } from "../shared/authoring/kinds/economy.js";
+import { tradeValues } from "../shared/authoring/kinds/trade.js";
 
 function now() {
   return new Date().toISOString();
@@ -28,10 +30,6 @@ function safeInteger(value, fallback = 0) {
 function safeNumber(value, fallback = 0) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
-}
-
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
 }
 
 function round(value) {
@@ -70,6 +68,11 @@ function policiesOfType(project, type) {
 
 function firstPolicy(project, type, fallback = {}) {
   return policiesOfType(project, type)[0] || fallback;
+}
+
+// Fase 8: de geldregels uit Instellingen > 💰 Geld (zonder kaart de standaarden uit het schema).
+function economyRules(project) {
+  return economyValues(policiesOfType(project, "economy_rules")[0] || null);
 }
 
 function uiModules(project) {
@@ -247,6 +250,8 @@ export class Node05EconomyRuntimeService {
     if (action === "crafting:claim" || action === "claim_craft_job") return this.claimCraftingJob(ctx, payload, operationId);
     if (action === "vendor_buy" || action === "vendor:buy") return this.vendorBuy(ctx, payload, operationId);
     if (action === "vendor_sell" || action === "vendor:sell") return this.vendorSell(ctx, payload, operationId);
+    // Fase 8: terugkopen wat je net verkocht.
+    if (action === "vendor_buy_back" || action === "vendor:buy_back") return this.vendorBuyBack(ctx, payload, operationId);
     if (action === "party_create" || action === "party:create") return this.createParty(ctx, operationId);
     if (action === "party_leave" || action === "party:leave") return this.leaveParty(ctx, operationId);
     if (action === "party_invite" || action === "party:invite") return this.inviteToParty(ctx, payload, operationId);
@@ -254,6 +259,12 @@ export class Node05EconomyRuntimeService {
     if (action === "party_decline" || action === "party:decline_invite") return this.declinePartyInvite(ctx, payload, operationId);
     if (action === "party_kick" || action === "party:kick") return this.kickFromParty(ctx, payload, operationId);
     if (action === "party_invite_rule" || action === "party:invite_rule") return this.setPartyInviteRule(ctx, payload, operationId);
+    // Fase 8b: ruilen met een speler.
+    if (action === "trade_invite" || action === "trade:invite") return this.inviteToTrade(ctx, payload, operationId);
+    if (action === "trade_accept" || action === "trade:accept") return this.acceptTrade(ctx, payload, operationId);
+    if (action === "trade_offer" || action === "trade:offer") return this.offerToTrade(ctx, payload, operationId);
+    if (action === "trade_confirm" || action === "trade:confirm") return this.confirmTrade(ctx, payload, operationId);
+    if (action === "trade_cancel" || action === "trade:cancel") return this.cancelTrade(ctx, payload, operationId);
     if (action === "market_list" || action === "market:create") return this.createMarketOrder(ctx, payload, operationId);
     if (action === "market_buy" || action === "market:buy") return this.buyMarketOrder(ctx, payload, operationId);
     if (action === "market_cancel" || action === "market:cancel") return this.cancelMarketOrder(ctx, payload, operationId);
@@ -418,6 +429,14 @@ export class Node05EconomyRuntimeService {
     });
     const outputItems = Array.isArray(recipe.outputItems) ? recipe.outputItems : [];
     const outputCurrencies = Array.isArray(recipe.outputCurrencies) ? recipe.outputCurrencies : [];
+    const outputs = outputItems.map(function (entry) {
+      return { kind: "item", itemId: entry.itemRef, displayName: displayForItem(ctx.catalogs, entry.itemRef), amount: normalizeQuantity(entry.amount, 1) };
+    }).concat(outputCurrencies.map(function (entry) {
+      return { kind: "currency", currencyId: entry.currencyRef, displayName: displayForCurrency(ctx.catalogs, entry.currencyRef), amountMinor: safeInteger(entry.amountMinor, 0) };
+    }));
+    // Fase 8: wat het maken in geld kost (bovenop de grondstoffen), zodat de speler het ziet staan.
+    const cost = this.craftCost(ctx, { outputs });
+    const money = cost ? Object.assign({}, cost, { owned: this.currencyAmount(ctx.profile.id, cost.currencyId) }) : null;
     return {
       recipeId: recipe.id,
       displayName: recipe.displayName || recipe.id,
@@ -427,13 +446,11 @@ export class Node05EconomyRuntimeService {
       stationType: recipe.stationType || null,
       craftDurationMs: safeInteger(recipe.craftDurationMs, 0),
       unlocked: this.recipeUnlocked(ctx, recipe),
-      canCraft: ingredients.every(function (entry) { return entry.enough; }) && this.recipeUnlocked(ctx, recipe) && (!station || station.inRange === true),
+      canCraft: ingredients.every(function (entry) { return entry.enough; }) && (!money || money.owned >= money.amount)
+        && this.recipeUnlocked(ctx, recipe) && (!station || station.inRange === true),
       ingredients,
-      outputs: outputItems.map(function (entry) {
-        return { kind: "item", itemId: entry.itemRef, displayName: displayForItem(ctx.catalogs, entry.itemRef), amount: normalizeQuantity(entry.amount, 1) };
-      }).concat(outputCurrencies.map(function (entry) {
-        return { kind: "currency", currencyId: entry.currencyRef, displayName: displayForCurrency(ctx.catalogs, entry.currencyRef), amountMinor: safeInteger(entry.amountMinor, 0) };
-      }))
+      moneyCost: money,
+      outputs
     };
   }
 
@@ -475,11 +492,14 @@ export class Node05EconomyRuntimeService {
       return Object.assign({}, vendor, {
         displayName: vendor.linkedEntity?.label || catalog.displayName || vendor.vendorId,
         catalogId: catalog.id || vendor.vendorCatalogRef || null,
-        offers
+        offers,
+        // Fase 8: wat jij hier verkocht en voor dezelfde prijs kunt terugkopen.
+        buyBack: this.buyBackRows(ctx, vendor)
       });
     });
     return {
       policy: firstPolicy(ctx.project, "vendor_policy", null),
+      economy: economyRules(ctx.project),
       vendors
     };
   }
@@ -490,8 +510,13 @@ export class Node05EconomyRuntimeService {
     const buyCurrencyId = offer.buyCurrencyRef || item.vendorCurrencyRef || sellCurrencyId;
     const owned = this.itemCount(ctx.profile.id, offer.itemRef);
     const funds = this.currencyAmount(ctx.profile.id, sellCurrencyId);
-    const sellPrice = Math.max(0, safeInteger(offer.sellPriceMinor, 0));
-    const buyPrice = Math.max(0, safeInteger(offer.buyPriceMinor || item.vendorBaseValueMinor, 0));
+    // Fase 8: zonder eigen prijs rekent de winkel met de Verkoopwaarde van het item en de opslag uit Instellingen > 💰 Geld.
+    const rules = economyRules(ctx.project);
+    const value = safeInteger(item.vendorBaseValueMinor, 0);
+    const ownSell = Math.max(0, safeInteger(offer.sellPriceMinor, 0));
+    const ownBuy = Math.max(0, safeInteger(offer.buyPriceMinor, 0));
+    const sellPrice = shopSellPrice(value, ownSell, rules.shopMarkupPct);
+    const buyPrice = shopBuyPrice(value, ownBuy, rules.shopBuyPct);
     const stock = this.offerStock(vendor, offer);
     return Object.assign({}, offer, {
       displayName: displayForItem(ctx.catalogs, offer.itemRef),
@@ -499,10 +524,13 @@ export class Node05EconomyRuntimeService {
       buyCurrencyRef: buyCurrencyId,
       sellPriceMinor: sellPrice,
       buyPriceMinor: buyPrice,
+      // De game zet er "automatisch" bij als de prijs uit de waarde + opslag komt.
+      sellPriceAuto: ownSell <= 0,
+      buyPriceAuto: ownBuy <= 0,
       owned,
       stock,
-      canBuy: vendor.inRange === true && ["sell_to_player", "both"].includes(offer.mode) && funds >= sellPrice && (stock === null || stock > 0),
-      canSell: vendor.inRange === true && ["buy_from_player", "both"].includes(offer.mode) && owned > 0 && buyPrice > 0 && itemIsTradable(item)
+      canBuy: vendor.inRange === true && ["sell_to_player", "both"].includes(offer.mode) && sellPrice > 0 && funds >= sellPrice && (stock === null || stock > 0),
+      canSell: vendor.inRange === true && buyPrice > 0 && owned > 0 && itemIsTradable(item)
     });
   }
 
@@ -579,39 +607,57 @@ export class Node05EconomyRuntimeService {
     };
   }
 
+  // Fase 8b: wat de speler van een ruil ziet, inclusief de bevestiging die precies zegt wat je geeft en krijgt.
   buildTradeSnapshot(ctx) {
+    const rules = this.tradeRules(ctx);
+    const text = function (lines) { return lines.length ? lines.map(function (line) { return line.text; }).join(", ") : "niets"; };
     const sessions = this.db.prepare(`
       SELECT *
       FROM direct_trade_sessions
       WHERE (player_a_id = ? OR player_b_id = ?)
-        AND state NOT IN ('completed', 'cancelled', 'expired', 'failed')
+        AND state IN ('invited', 'open')
       ORDER BY updated_at DESC
       LIMIT 3
-    `).all(ctx.profile.id, ctx.profile.id).map(function (row) {
+    `).all(ctx.profile.id, ctx.profile.id).map((row) => {
+      const mineIsA = row.player_a_id === ctx.profile.id;
+      const partnerId = mineIsA ? row.player_b_id : row.player_a_id;
+      const give = this.tradeOffers(row.id, ctx.profile.id).map((entry) => this.tradeLine(ctx, entry));
+      const get = this.tradeOffers(row.id, partnerId).map((entry) => this.tradeLine(ctx, entry));
       return {
         tradeId: row.id,
-        playerAId: row.player_a_id,
-        playerBId: row.player_b_id,
         state: row.state,
         revision: safeInteger(row.revision, 1),
-        expiresAt: row.expires_at
+        expiresAt: row.expires_at,
+        invitedByMe: mineIsA && row.state === "invited",
+        waitingForMe: !mineIsA && row.state === "invited",
+        partnerId,
+        partnerName: this.playerName(partnerId),
+        give,
+        get,
+        iConfirmed: Boolean(safeInteger(mineIsA ? row.player_a_confirmed : row.player_b_confirmed, 0)),
+        theyConfirmed: Boolean(safeInteger(mineIsA ? row.player_b_confirmed : row.player_a_confirmed, 0)),
+        // Dit is de bevestiging: precies dit geef je weg en precies dit krijg je terug.
+        confirmText: "Je geeft " + text(give) + " en je krijgt " + text(get) + "."
       };
     });
     return {
-      policy: firstPolicy(ctx.project, "trade_policy", null),
+      rules,
       sessions,
-      message: sessions.length ? "" : "Direct trade UI-basis staat klaar; volledige offer/confirm flow volgt als aparte verdieping."
+      slots: Math.max(1, safeInteger(rules.tradeSlots, 8)),
+      message: ""
     };
   }
 
   buildMarketSnapshot(ctx) {
-    const policy = firstPolicy(ctx.project, "market_policy", null);
+    // Fase 8b: de marktregels komen uit Instellingen > 🤝 Handel en de belasting uit 💰 Geld.
+    const rules = this.tradeRules(ctx);
     const accesses = this.marketAccesses(ctx);
     const orders = this.loadMarketOrders(ctx, false);
     const myOrders = this.loadMarketOrders(ctx, true);
     const sellableItems = this.sellableMarketItems(ctx);
     return {
-      policy,
+      rules,
+      taxPct: Math.max(0, safeInteger(economyRules(ctx.project).marketTaxPct, 0)),
       accesses,
       orders,
       myOrders,
@@ -714,7 +760,7 @@ export class Node05EconomyRuntimeService {
       };
     });
     return {
-      policy: firstPolicy(ctx.project, "mail_policy", null),
+      rules: this.tradeRules(ctx),
       unreadCount: messages.filter(function (message) { return message.state === "unread"; }).length,
       messages
     };
@@ -788,6 +834,9 @@ export class Node05EconomyRuntimeService {
       if (ingredient.kind === "currency") this.spendCurrency(ctx, ingredient.currencyRef, ingredient.required, "crafting_input", recipe.id, operationId);
       else this.removeItem(ctx, ingredient.itemRef, ingredient.required, "crafting_input", recipe.id, operationId);
     }
+    // Fase 8 (keuze van Kevin): craften kost ook geld, een deel van de waarde van wat je maakt.
+    const cost = this.craftCost(ctx, summary);
+    if (cost) this.spendCurrency(ctx, cost.currencyId, cost.amount, "crafting_cost", recipe.id, operationId);
     const durationMs = safeInteger(recipe.craftDurationMs, 0);
     const jobId = randomId("craft_job");
     const stamp = now();
@@ -805,6 +854,25 @@ export class Node05EconomyRuntimeService {
     `).run(jobId, operationId, ctx.profile.id, recipe.id, station.stationId, ctx.zoneId, stableJson(summary.ingredients), stableJson(summary.outputs), stamp, stamp, stamp);
     this.node03RuntimeService.recordGameplayEvent(ctx, "item_crafted", "player", recipe.id, { grants });
     return { action: "craft", jobId, grants, message: summary.displayName + " crafted.", events: [{ type: "craft_completed", recipeId: recipe.id }] };
+  }
+
+  // Wat het maken in geld kost: een deel van de Verkoopwaarde van wat eruit komt (0 % = gratis).
+  craftCost(ctx, summary) {
+    const pct = Math.max(0, safeInteger(economyRules(ctx.project).craftCostPct, 0));
+    if (pct <= 0) return null;
+    const items = catalogSection(ctx.catalogs, "items");
+    let value = 0;
+    let currencyId = "";
+    for (const output of Array.isArray(summary.outputs) ? summary.outputs : []) {
+      if (output.kind !== "item") continue;
+      const item = items[output.itemId] || {};
+      value += Math.max(0, safeInteger(item.vendorBaseValueMinor, 0)) * normalizeQuantity(output.amount, 1);
+      if (!currencyId && item.vendorCurrencyRef) currencyId = String(item.vendorCurrencyRef);
+    }
+    if (!currencyId) currencyId = Object.keys(catalogSection(ctx.catalogs, "currencies"))[0] || "";
+    const amount = Math.round(value * pct / 100);
+    if (!currencyId || amount <= 0) return null;
+    return { currencyId, amount, displayName: displayForCurrency(ctx.catalogs, currencyId) };
   }
 
   claimCraftingJob(ctx, payload, operationId) {
@@ -893,7 +961,7 @@ export class Node05EconomyRuntimeService {
     const offer = (Array.isArray(catalog.offers) ? catalog.offers : []).find(function (entry) {
       return entry.offerId === safeString(payload.offerId || payload.offer_id, "");
     }) || null;
-    if (!offer || !["buy_from_player", "both"].includes(offer.mode)) {
+    if (!offer) {
       const error = new Error("Vendor koopt dit item niet.");
       error.status = 404;
       throw error;
@@ -906,10 +974,333 @@ export class Node05EconomyRuntimeService {
       throw error;
     }
     const summary = this.vendorOfferSummary(ctx, vendor, offer);
+    if (summary.buyPriceMinor <= 0) {
+      const error = new Error("Deze winkel koopt " + displayForItem(ctx.catalogs, offer.itemRef) + " niet.");
+      error.status = 409;
+      throw error;
+    }
     this.removeItem(ctx, offer.itemRef, quantity, "vendor_sell", vendor.vendorId, operationId);
     const grant = this.node03RuntimeService.grantCurrency(ctx, summary.buyCurrencyRef, summary.buyPriceMinor * quantity, "vendor_sell", offer.offerId, operationId);
+    // Fase 8: het blijft bij de winkel liggen, zodat je het voor dezelfde prijs kunt terugkopen.
+    this.rememberBuyBack(ctx, vendor, offer.itemRef, quantity, summary.buyCurrencyRef, summary.buyPriceMinor);
     this.node03RuntimeService.recordGameplayEvent(ctx, "vendor_sell", "player", vendor.vendorId, { offerId: offer.offerId, quantity });
     return { action: "vendor_sell", grants: [grant].filter(Boolean), message: "Verkocht: " + displayForItem(ctx.catalogs, offer.itemRef) + "." };
+  }
+
+  // ---- Fase 8: terugkopen bij de winkel ----
+
+  // De tabel vendor_buyback bestaat al sinds migratie 008; Fase 8 vult hem nu echt.
+  rememberBuyBack(ctx, vendor, itemId, quantity, currencyId, priceMinor) {
+    const slots = Math.max(0, safeInteger(economyRules(ctx.project).buyBackSlots, 0));
+    if (slots <= 0 || priceMinor <= 0) return;
+    this.db.prepare(`
+      INSERT INTO vendor_buyback (id, player_id, vendor_id, item_kind, item_id, item_payload_json, quantity, price_currency_id, price_amount_minor, created_at, expires_at)
+      VALUES (?, ?, ?, 'stack', ?, '{}', ?, ?, ?, ?, ?)
+    `).run(randomId("buyback"), ctx.profile.id, vendor.vendorId, itemId, normalizeQuantity(quantity, 1), currencyId, priceMinor, now(), addDays(1));
+    // Alleen de laatste zoveel regels blijven liggen; de rest geldt meteen als opgehaald.
+    this.db.prepare(`
+      UPDATE vendor_buyback SET claimed_at = ? WHERE id IN (
+        SELECT id FROM vendor_buyback WHERE player_id = ? AND vendor_id = ? AND claimed_at IS NULL
+        ORDER BY created_at DESC, id DESC LIMIT -1 OFFSET ?
+      )
+    `).run(now(), ctx.profile.id, vendor.vendorId, slots);
+  }
+
+  buyBackRows(ctx, vendor) {
+    const slots = Math.max(0, safeInteger(economyRules(ctx.project).buyBackSlots, 0));
+    if (slots <= 0) return [];
+    const rows = this.db.prepare(`
+      SELECT * FROM vendor_buyback
+      WHERE player_id = ? AND vendor_id = ? AND claimed_at IS NULL AND expires_at > ?
+      ORDER BY created_at DESC, id DESC LIMIT ?
+    `).all(ctx.profile.id, vendor.vendorId, now(), slots);
+    return rows.map((row) => {
+      const total = safeInteger(row.price_amount_minor, 0) * normalizeQuantity(row.quantity, 1);
+      return {
+        id: row.id,
+        itemId: row.item_id,
+        displayName: displayForItem(ctx.catalogs, row.item_id),
+        quantity: normalizeQuantity(row.quantity, 1),
+        currencyRef: row.price_currency_id,
+        priceMinor: total,
+        canBuy: vendor.inRange === true && this.currencyAmount(ctx.profile.id, row.price_currency_id) >= total
+      };
+    });
+  }
+
+  vendorBuyBack(ctx, payload, operationId) {
+    const vendor = this.findVendor(ctx, payload.vendorId || payload.vendor_id);
+    if (!vendor) {
+      const error = new Error("Vendor niet gevonden in deze zone.");
+      error.status = 404;
+      throw error;
+    }
+    this.assertInRange(vendor, "Vendor");
+    const entryId = safeString(payload.entryId || payload.entry_id, "");
+    const row = this.db.prepare(`
+      SELECT * FROM vendor_buyback
+      WHERE id = ? AND player_id = ? AND vendor_id = ? AND claimed_at IS NULL AND expires_at > ? LIMIT 1
+    `).get(entryId, ctx.profile.id, vendor.vendorId, now());
+    if (!row) {
+      const error = new Error("Dat ligt hier niet meer.");
+      error.status = 404;
+      throw error;
+    }
+    const quantity = normalizeQuantity(row.quantity, 1);
+    const total = safeInteger(row.price_amount_minor, 0) * quantity;
+    this.spendCurrency(ctx, row.price_currency_id, total, "vendor_buy_back", vendor.vendorId, operationId);
+    // Alleen als deze regel nog vrij was gaat het item eruit: twee keer klikken geeft nooit twee items.
+    const taken = this.db.prepare("UPDATE vendor_buyback SET claimed_at = ? WHERE id = ? AND player_id = ? AND claimed_at IS NULL").run(now(), entryId, ctx.profile.id);
+    if (!safeInteger(taken?.changes, 0)) {
+      const error = new Error("Dat ligt hier niet meer.");
+      error.status = 409;
+      throw error;
+    }
+    const grants = this.node03RuntimeService.grantItem(ctx, row.item_id, quantity, "vendor_buy_back", vendor.vendorId, operationId);
+    this.node03RuntimeService.recordGameplayEvent(ctx, "vendor_buy_back", "player", vendor.vendorId, { itemId: row.item_id, quantity, total });
+    return { action: "vendor_buy_back", grants, message: "Teruggekocht: " + displayForItem(ctx.catalogs, row.item_id) + "." };
+  }
+
+
+  // ---- Fase 8b: ruilen met een speler. Beide kanten zeggen ja, en de ruil zelf gebeurt in één keer. ----
+  // Deze hele actie zit in één SQLite-transactie (runOperation), dus het is alles of niets: nooit een
+  // item dubbel en nooit geld in de min. Dubbel klikken geeft hetzelfde operationId dezelfde bon terug.
+
+  tradeRules(ctx) {
+    return tradeValues(policiesOfType(ctx.project, "trade_rules")[0] || null);
+  }
+
+  // Tegen spammen: hoeveel handelsacties deze speler het afgelopen uur deed (uit de operatiebonnen).
+  assertTradePace(ctx, rules) {
+    const limit = Math.max(1, safeInteger(rules.actionsPerHour, 60));
+    const since = new Date(Date.now() - 3600000).toISOString();
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS total FROM operation_idempotency
+      WHERE player_id = ? AND created_at >= ? AND operation_type IN (
+        'trade_invite', 'trade:invite', 'trade_accept', 'trade:accept', 'trade_offer', 'trade:offer',
+        'trade_confirm', 'trade:confirm', 'market_list', 'market:create', 'market_buy', 'market:buy'
+      )
+    `).get(ctx.profile.id, since);
+    if (safeInteger(row?.total, 0) > limit) {
+      throw httpError(429, "Je handelt te snel. Even wachten (grens: " + limit + " handelsacties per uur).");
+    }
+  }
+
+  tradeSession(ctx, tradeId, active = true) {
+    const row = this.db.prepare("SELECT * FROM direct_trade_sessions WHERE id = ? LIMIT 1").get(safeString(tradeId, ""));
+    if (!row || (row.player_a_id !== ctx.profile.id && row.player_b_id !== ctx.profile.id)) throw httpError(404, "Deze ruil bestaat niet meer.");
+    if (!active) return row;
+    if (!["invited", "open"].includes(row.state)) throw httpError(409, "Deze ruil is al afgelopen.");
+    if (row.expires_at && Date.parse(row.expires_at) <= Date.now()) {
+      this.closeTrade(row.id, "expired");
+      throw httpError(409, "De ruil is verlopen. Vraag het opnieuw.");
+    }
+    return row;
+  }
+
+  closeTrade(tradeId, state) {
+    const stamp = now();
+    this.db.prepare("UPDATE direct_trade_sessions SET state = ?, cancelled_at = ?, updated_at = ?, revision = revision + 1 WHERE id = ?")
+      .run(state, stamp, stamp, tradeId);
+  }
+
+  // Elke wijziging zet beide vinkjes weer uit: niemand kan na jouw ja nog iets omwisselen.
+  touchTrade(tradeId) {
+    this.db.prepare("UPDATE direct_trade_sessions SET player_a_confirmed = 0, player_b_confirmed = 0, updated_at = ?, revision = revision + 1 WHERE id = ?")
+      .run(now(), tradeId);
+  }
+
+  tradeOffers(tradeId, ownerId) {
+    return this.db.prepare("SELECT * FROM direct_trade_offers WHERE trade_session_id = ? AND owner_player_id = ? ORDER BY asset_kind ASC, asset_id ASC")
+      .all(tradeId, ownerId);
+  }
+
+  // Eén regel van een ruil, met de tekst die de speler op de bevestiging ziet.
+  tradeLine(ctx, entry) {
+    const quantity = normalizeQuantity(entry.quantity_minor, 1);
+    if (entry.asset_kind === "currency") {
+      const name = displayForCurrency(ctx.catalogs, entry.asset_id);
+      return { kind: "currency", currencyId: entry.asset_id, displayName: name, quantity, text: quantity + " " + name };
+    }
+    const name = displayForItem(ctx.catalogs, entry.asset_id);
+    // Op de bevestiging staat altijd het aantal, ook als het er één is.
+    return { kind: "item", itemId: entry.asset_id, displayName: name, quantity, text: quantity + "× " + name };
+  }
+
+  assertTradeDistance(ctx, otherId, rules, name) {
+    const max = Math.max(1, safeInteger(rules.tradeDistance, 20));
+    if (typeof this.mmoService?.getWorldPlayerStates !== "function" || !ctx.position) return;
+    const state = (this.mmoService.getWorldPlayerStates(ctx.worldId, [otherId]) || [])[0] || null;
+    if (!state) return;
+    const dx = safeNumber(state.x, 0) - safeNumber(ctx.position.x, 0);
+    const dz = safeNumber(state.z, 0) - safeNumber(ctx.position.z, 0);
+    const distance = Math.sqrt(dx * dx + dz * dz);
+    if (distance > max) throw httpError(409, name + " staat te ver weg: " + Math.round(distance) + " m (mag " + max + " m).");
+  }
+
+  assertTradeNotInCombat(ctx, rules) {
+    if (rules.tradeInCombat === true) return;
+    const combatAt = typeof this.node03RuntimeService?.vitals === "function"
+      ? this.node03RuntimeService.vitals()?.combatAt?.get(ctx.profile.id) || 0
+      : 0;
+    if (combatAt && Date.now() - combatAt < 5000) throw httpError(409, "Je bent nog in gevecht. Ruilen kan zo weer.");
+  }
+
+  inviteToTrade(ctx, payload, operationId) {
+    const rules = this.tradeRules(ctx);
+    if (rules.tradeOn === false) throw httpError(403, "Ruilen tussen spelers staat uit (Instellingen > 🤝 Handel).");
+    this.assertTradePace(ctx, rules);
+    const targetId = safeString(payload.targetPlayerId || payload.playerId || payload.player_id, "");
+    if (!targetId || targetId === ctx.profile.id) throw httpError(400, "Kies een andere speler om mee te ruilen.");
+    const target = this.db.prepare("SELECT id, display_name FROM player_profiles WHERE id = ? LIMIT 1").get(targetId);
+    if (!target) throw httpError(404, "Speler niet gevonden.");
+    const name = target.display_name || "Die speler";
+    if (!this.playerOnline(targetId, ctx.worldId)) throw httpError(409, name + " is niet online.");
+    const chat = this.mmoService?.chatRuntime || null;
+    if (chat && chat.hasBlocked(targetId, ctx.profile.id)) throw httpError(403, name + " wil geen uitnodigingen van jou.");
+    if (chat && chat.hasBlocked(ctx.profile.id, targetId)) throw httpError(409, "Je hebt " + name + " geblokkeerd. Deblokkeer eerst (spelermenu).");
+    this.assertTradeNotInCombat(ctx, rules);
+    this.assertTradeDistance(ctx, targetId, rules, name);
+    const open = this.db.prepare(`
+      SELECT id FROM direct_trade_sessions
+      WHERE state IN ('invited', 'open') AND ((player_a_id = ? AND player_b_id = ?) OR (player_a_id = ? AND player_b_id = ?))
+    `).all(ctx.profile.id, targetId, targetId, ctx.profile.id);
+    for (const row of open) this.closeTrade(row.id, "cancelled");
+    const tradeId = randomId("trade");
+    const stamp = now();
+    this.db.prepare(`
+      INSERT INTO direct_trade_sessions (id, player_a_id, player_b_id, state, player_a_confirmed, player_b_confirmed, revision, created_at, updated_at, expires_at, operation_id)
+      VALUES (?, ?, ?, 'invited', 0, 0, 1, ?, ?, ?, ?)
+    `).run(tradeId, ctx.profile.id, targetId, stamp, stamp, addSeconds(Math.max(20, safeInteger(rules.tradeHoldSeconds, 120))), operationId);
+    this.node03RuntimeService.recordGameplayEvent(ctx, "trade_invite", "player", targetId, { tradeId });
+    return { action: "trade_invite", tradeId, message: "Ruil gevraagd aan " + name + "." };
+  }
+
+  acceptTrade(ctx, payload) {
+    const rules = this.tradeRules(ctx);
+    if (rules.tradeOn === false) throw httpError(403, "Ruilen tussen spelers staat uit (Instellingen > 🤝 Handel).");
+    this.assertTradePace(ctx, rules);
+    const row = this.tradeSession(ctx, payload.tradeId || payload.trade_id);
+    if (row.state !== "invited") throw httpError(409, "Deze ruil is al begonnen.");
+    if (row.player_b_id !== ctx.profile.id) throw httpError(403, "Alleen de uitgenodigde speler kan de ruil aannemen.");
+    const name = this.playerName(row.player_a_id);
+    this.assertTradeNotInCombat(ctx, rules);
+    this.assertTradeDistance(ctx, row.player_a_id, rules, name);
+    this.db.prepare("UPDATE direct_trade_sessions SET state = 'open', updated_at = ?, expires_at = ?, revision = revision + 1 WHERE id = ?")
+      .run(now(), addSeconds(Math.max(20, safeInteger(rules.tradeHoldSeconds, 120))), row.id);
+    return { action: "trade_accept", tradeId: row.id, message: "Ruil begonnen met " + name + "." };
+  }
+
+  offerToTrade(ctx, payload) {
+    const rules = this.tradeRules(ctx);
+    const row = this.tradeSession(ctx, payload.tradeId || payload.trade_id);
+    if (row.state !== "open") throw httpError(409, "Deze ruil staat nog niet open.");
+    const itemId = safeString(payload.itemId || payload.item_id, "");
+    const currencyId = safeString(payload.currencyId || payload.currency_id, "");
+    if (Boolean(itemId) === Boolean(currencyId)) throw httpError(400, "Kies één ding: een item of geld.");
+    const kind = itemId ? "item_stack" : "currency";
+    const assetId = itemId || currencyId;
+    const quantity = Math.max(0, safeInteger(payload.quantity, 0));
+    if (quantity <= 0) {
+      this.db.prepare("DELETE FROM direct_trade_offers WHERE trade_session_id = ? AND owner_player_id = ? AND asset_kind = ? AND asset_id = ?")
+        .run(row.id, ctx.profile.id, kind, assetId);
+      this.touchTrade(row.id);
+      return { action: "trade_offer", tradeId: row.id, message: "Uit de ruil gehaald." };
+    }
+    const have = itemId ? this.itemCount(ctx.profile.id, itemId) : this.currencyAmount(ctx.profile.id, assetId);
+    if (have < quantity) throw httpError(400, "Zoveel heb je niet.");
+    if (itemId && !itemIsTradable(catalogSection(ctx.catalogs, "items")[itemId] || {})) {
+      throw httpError(403, displayForItem(ctx.catalogs, itemId) + " kun je niet ruilen.");
+    }
+    const slots = Math.max(1, safeInteger(rules.tradeSlots, 8));
+    const mine = this.tradeOffers(row.id, ctx.profile.id);
+    const known = mine.some(function (entry) { return entry.asset_kind === kind && entry.asset_id === assetId; });
+    if (!known && mine.length >= slots) throw httpError(409, "Je kunt er maximaal " + slots + " in één ruil leggen.");
+    this.db.prepare(`
+      INSERT INTO direct_trade_offers (trade_session_id, owner_player_id, asset_kind, asset_id, quantity_minor, metadata_json, updated_at)
+      VALUES (?, ?, ?, ?, ?, '{}', ?)
+      ON CONFLICT(trade_session_id, owner_player_id, asset_kind, asset_id) DO UPDATE SET
+        quantity_minor = excluded.quantity_minor,
+        updated_at = excluded.updated_at
+    `).run(row.id, ctx.profile.id, kind, assetId, quantity, now());
+    this.touchTrade(row.id);
+    return { action: "trade_offer", tradeId: row.id, message: "In de ruil gelegd." };
+  }
+
+  confirmTrade(ctx, payload, operationId) {
+    const rules = this.tradeRules(ctx);
+    this.assertTradePace(ctx, rules);
+    const row = this.tradeSession(ctx, payload.tradeId || payload.trade_id);
+    if (row.state !== "open") throw httpError(409, "Deze ruil staat nog niet open.");
+    // Je bevestigt precies wat je ziet: is de ruil net veranderd, dan moet je opnieuw kijken.
+    const seen = payload.revision === undefined || payload.revision === null || payload.revision === "" ? null : safeInteger(payload.revision, 0);
+    if (seen !== null && seen !== safeInteger(row.revision, 1)) throw httpError(409, "De ruil is net veranderd. Kijk opnieuw en bevestig daarna.");
+    const column = row.player_a_id === ctx.profile.id ? "player_a_confirmed" : "player_b_confirmed";
+    this.db.prepare("UPDATE direct_trade_sessions SET " + column + " = 1, updated_at = ? WHERE id = ?").run(now(), row.id);
+    const fresh = this.db.prepare("SELECT * FROM direct_trade_sessions WHERE id = ? LIMIT 1").get(row.id);
+    if (!safeInteger(fresh.player_a_confirmed, 0) || !safeInteger(fresh.player_b_confirmed, 0)) {
+      return { action: "trade_confirm", tradeId: row.id, message: "Jij hebt ja gezegd. Nu de ander nog." };
+    }
+    return this.commitTrade(ctx, fresh, operationId);
+  }
+
+  commitTrade(ctx, row, operationId) {
+    const partnerId = row.player_a_id === ctx.profile.id ? row.player_b_id : row.player_a_id;
+    const partnerName = this.playerName(partnerId);
+    const partnerCtx = { profile: { id: partnerId }, catalogs: ctx.catalogs, project: ctx.project, worldId: ctx.worldId, zoneId: ctx.zoneId };
+    const mine = this.tradeOffers(row.id, ctx.profile.id);
+    const theirs = this.tradeOffers(row.id, partnerId);
+    if (!mine.length && !theirs.length) throw httpError(400, "Er ligt niets in de ruil.");
+    // Eerst alles nakijken, dan omwisselen: gaat er iets niet, dan gebeurt er niets (de transactie rolt terug).
+    this.assertTradeGiveable(ctx, mine, partnerCtx);
+    this.assertTradeGiveable(partnerCtx, theirs, ctx);
+    const given = mine.map((entry) => this.tradeLine(ctx, entry));
+    const got = theirs.map((entry) => this.tradeLine(ctx, entry));
+    for (const entry of mine) this.moveTradeAsset(ctx, partnerCtx, entry, row.id, operationId);
+    for (const entry of theirs) this.moveTradeAsset(partnerCtx, ctx, entry, row.id, operationId);
+    const stamp = now();
+    this.db.prepare("UPDATE direct_trade_sessions SET state = 'completed', completed_at = ?, updated_at = ?, revision = revision + 1 WHERE id = ?")
+      .run(stamp, stamp, row.id);
+    this.node03RuntimeService.recordGameplayEvent(ctx, "trade_completed", "player", partnerId, { tradeId: row.id, given, got });
+    const text = function (lines) { return lines.length ? lines.map(function (line) { return line.text; }).join(", ") : "niets"; };
+    return { action: "trade_confirm", tradeId: row.id, traded: { given, got, partnerName },
+      message: "Geruild met " + partnerName + ": je gaf " + text(given) + " en kreeg " + text(got) + "." };
+  }
+
+  assertTradeGiveable(fromCtx, rows, toCtx) {
+    for (const entry of rows) {
+      const quantity = normalizeQuantity(entry.quantity_minor, 1);
+      if (entry.asset_kind === "currency") {
+        if (this.currencyAmount(fromCtx.profile.id, entry.asset_id) < quantity) {
+          throw httpError(409, "De ruil ging niet door: er is niet genoeg " + displayForCurrency(fromCtx.catalogs, entry.asset_id) + " meer.");
+        }
+        continue;
+      }
+      const name = displayForItem(fromCtx.catalogs, entry.asset_id);
+      if (this.itemCount(fromCtx.profile.id, entry.asset_id) < quantity) throw httpError(409, "De ruil ging niet door: " + name + " is er niet meer.");
+      const item = catalogSection(fromCtx.catalogs, "items")[entry.asset_id] || {};
+      if (!itemIsTradable(item)) throw httpError(403, "De ruil ging niet door: " + name + " kun je niet ruilen.");
+      if (item.unique === true && this.itemCount(toCtx.profile.id, entry.asset_id) >= 1) {
+        throw httpError(409, "De ruil ging niet door: de ander heeft " + name + " al, en dat item mag je maar één keer hebben.");
+      }
+    }
+  }
+
+  moveTradeAsset(fromCtx, toCtx, entry, tradeId, operationId) {
+    const quantity = normalizeQuantity(entry.quantity_minor, 1);
+    if (entry.asset_kind === "currency") {
+      this.spendCurrency(fromCtx, entry.asset_id, quantity, "trade", tradeId, operationId);
+      this.node03RuntimeService.grantCurrency(toCtx, entry.asset_id, quantity, "trade", tradeId, operationId);
+      return;
+    }
+    this.removeItem(fromCtx, entry.asset_id, quantity, "trade", tradeId, operationId);
+    this.node03RuntimeService.grantItem(toCtx, entry.asset_id, quantity, "trade", tradeId, operationId);
+  }
+
+  cancelTrade(ctx, payload) {
+    const row = this.tradeSession(ctx, payload.tradeId || payload.trade_id);
+    this.closeTrade(row.id, "cancelled");
+    return { action: "trade_cancel", tradeId: row.id, message: "Ruil afgebroken." };
   }
 
   decrementVendorStock(vendor, offer, quantity) {
@@ -1175,10 +1566,17 @@ export class Node05EconomyRuntimeService {
       error.status = 400;
       throw error;
     }
-    const policy = firstPolicy(ctx.project, "market_policy", {});
-    const currencyId = safeString(payload.currencyId || payload.currency_id || (Array.isArray(policy.allowedCurrencyRefs) ? policy.allowedCurrencyRefs[0] : "") || item.vendorCurrencyRef || "currency.gold", "currency.gold");
-    const unitPrice = Math.max(safeInteger(policy.minimumPriceMinor, 1), safeInteger(payload.unitPriceMinor || payload.unit_price_minor, Math.max(1, safeInteger(item.vendorBaseValueMinor, 1) * 3)));
-    const durationSeconds = safeInteger(payload.durationSeconds || payload.duration_seconds, safeInteger(policy.defaultDurationSeconds, 86400));
+    // Fase 8b: de marktregels komen uit Instellingen > 🤝 Handel.
+    const rules = this.tradeRules(ctx);
+    if (rules.marketOn === false) throw httpError(403, "De markt staat uit (Instellingen > 🤝 Handel).");
+    this.assertTradePace(ctx, rules);
+    const mineActive = safeInteger(this.db.prepare("SELECT COUNT(*) AS total FROM market_orders WHERE seller_player_id = ? AND status IN ('active', 'partially_filled')")
+      .get(ctx.profile.id)?.total, 0);
+    const maxListings = Math.max(1, safeInteger(rules.marketMaxPerPlayer, 20));
+    if (mineActive >= maxListings) throw httpError(409, "Je hebt al " + mineActive + " dingen op de markt staan (grens: " + maxListings + ").");
+    const currencyId = safeString(payload.currencyId || payload.currency_id || item.vendorCurrencyRef || "currency.gold", "currency.gold");
+    const unitPrice = Math.max(1, safeInteger(payload.unitPriceMinor || payload.unit_price_minor, Math.max(1, safeInteger(item.vendorBaseValueMinor, 1) * 3)));
+    const durationSeconds = safeInteger(payload.durationSeconds || payload.duration_seconds, Math.max(1, safeInteger(rules.marketDays, 1)) * 86400);
     this.removeItem(ctx, itemId, quantity, "market_listing_escrow", access.marketAccessId, operationId);
     const orderId = randomId("market_order");
     const stamp = now();
@@ -1201,6 +1599,9 @@ export class Node05EconomyRuntimeService {
       throw error;
     }
     if (access.remoteAccessAllowed !== true) this.assertInRange(access, "Marketplace");
+    const rules = this.tradeRules(ctx);
+    if (rules.marketOn === false) throw httpError(403, "De markt staat uit (Instellingen > 🤝 Handel).");
+    this.assertTradePace(ctx, rules);
     const orderId = safeString(payload.orderId || payload.order_id, "");
     const order = this.db.prepare("SELECT * FROM market_orders WHERE id = ? LIMIT 1").get(orderId);
     if (!order || !["active", "partially_filled"].includes(order.status)) {
@@ -1226,11 +1627,12 @@ export class Node05EconomyRuntimeService {
     }
     const gross = safeInteger(order.unit_price_minor, 0) * quantity;
     this.spendCurrency(ctx, order.currency_id, gross, "market_buy", order.id, operationId);
-    const policy = firstPolicy(ctx.project, "market_policy", {});
-    const tax = Math.floor(gross * clamp(safeInteger(policy.saleTaxBasisPoints, 0), 0, 10000) / 10000);
+    // Fase 8b: de marktbelasting staat op één plek: Instellingen > 💰 Geld.
+    const taxPct = Math.max(0, safeInteger(economyRules(ctx.project).marketTaxPct, 0));
+    const tax = Math.min(gross, Math.round(gross * taxPct / 100));
     const sellerAmount = Math.max(0, gross - tax);
     this.node03RuntimeService.grantItem(ctx, order.item_id, quantity, "market_buy", order.id, operationId);
-    this.creditMarketSeller(ctx, order.seller_player_id, order.currency_id, sellerAmount, order, operationId);
+    this.creditMarketSeller(ctx, order.seller_player_id, order.currency_id, sellerAmount, order, operationId, tax);
     const remaining = safeInteger(order.quantity_remaining, 0) - quantity;
     const status = remaining > 0 ? "partially_filled" : "filled";
     this.db.prepare(`
@@ -1252,7 +1654,10 @@ export class Node05EconomyRuntimeService {
     return { action: "market_buy", orderId: order.id, message: "Market aankoop voltooid: " + displayForItem(ctx.catalogs, order.item_id) + "." };
   }
 
-  creditMarketSeller(ctx, sellerPlayerId, currencyId, amount, order, operationId) {
+  // amount = wat de verkoper krijgt, taxMinor = wat de markt eraf haalde (dat geld verdwijnt uit het spel).
+  creditMarketSeller(ctx, sellerPlayerId, currencyId, amount, order, operationId, taxMinor = 0) {
+    const tax = Math.max(0, safeInteger(taxMinor, 0));
+    if (tax > 0) this.node03RuntimeService.recordLedger(operationId, sellerPlayerId, "currency", currencyId, -tax, amount + tax, amount, "market_tax", order.id);
     if (amount <= 0) return;
     const sellerOnline = this.mmoService.countConnectedPlayerSessions ? this.mmoService.countConnectedPlayerSessions(sellerPlayerId) > 0 : false;
     if (sellerOnline) {
@@ -1270,9 +1675,9 @@ export class Node05EconomyRuntimeService {
       this.node03RuntimeService.recordLedger(operationId, sellerPlayerId, "currency", currencyId, amount, before, before + amount, "market_sale", order.id);
       return;
     }
-    this.createSystemMail(sellerPlayerId, "market_sale", "Market sale", "Je market verkoop is betaald.", [
+    this.createSystemMail(sellerPlayerId, "market_sale", "Verkocht op de markt", "Je verkoop op de markt is betaald.", [
       { kind: "currency", assetId: currencyId, quantityMinor: amount }
-    ], order.id);
+    ], order.id, Math.max(1, safeInteger(this.tradeRules(ctx).mailKeepDays, 30)));
   }
 
   cancelMarketOrder(ctx, payload, operationId) {
@@ -1298,13 +1703,13 @@ export class Node05EconomyRuntimeService {
     return { action: "market_cancel", orderId: order.id, message: "Listing geannuleerd en item teruggezet." };
   }
 
-  createSystemMail(playerId, type, subject, body, attachments, sourceRef = null) {
+  createSystemMail(playerId, type, subject, body, attachments, sourceRef = null, keepDays = 30) {
     const mailId = randomId("mail");
     const stamp = now();
     this.db.prepare(`
       INSERT INTO player_mail (id, player_id, mail_type, subject, body, state, source_ref, created_at, expires_at)
       VALUES (?, ?, ?, ?, ?, 'unread', ?, ?, ?)
-    `).run(mailId, playerId, type, subject, body, sourceRef, stamp, addDays(30));
+    `).run(mailId, playerId, type, subject, body, sourceRef, stamp, addDays(keepDays));
     for (const attachment of attachments || []) {
       this.db.prepare(`
         INSERT INTO player_mail_attachments (id, mail_id, asset_kind, asset_id, quantity_minor, payload_json, state)

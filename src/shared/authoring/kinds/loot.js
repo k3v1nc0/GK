@@ -12,7 +12,8 @@ const POS_HELP = help(
 const mmField = (label, icon) => ({ type: "integer", required: true, min: -MAX_WORLD_MM, max: MAX_WORLD_MM, audience: "server", label,
   ui: ui(icon, "slider", "viewport", { step: 100, unit: "m", scale: 1000 }), default: 0, help: POS_HELP });
 
-export const LOOT_ENTRY_KEYS = Object.freeze(["itemRef", "tableRef", "chanceBp", "minQty", "maxQty"]);
+// Fase 8: een regel geeft een item, een andere loottabel óf geld (valuta).
+export const LOOT_ENTRY_KEYS = Object.freeze(["itemRef", "tableRef", "currencyRef", "chanceBp", "minQty", "maxQty"]);
 
 export const LOOT_KINDS = {
   loot_table: {
@@ -30,7 +31,7 @@ export const LOOT_KINDS = {
         ui: ui("🏷️", "text", "werkbank"), default: "", help: HELP_NAME("deze loottabel") },
       entries: { type: "lootEntries", required: true, minItems: 1, maxItems: 32, audience: "server", label: "Wat valt eruit",
         ui: ui("🎲", "loot", "werkbank"), default: [],
-        help: help("De dingen die eruit kunnen vallen: een item of een andere loottabel, met kans en aantal.", "Sleep een item uit de Bibliotheek op het vak. Kans 100 % = altijd; 5-20 % voor zeldzame dingen.", "Er valt nooit iets → zet de kans hoger. Te veel loot → lager of minder stuks.") }
+        help: help("De dingen die eruit kunnen vallen: een item, geld (sleep een valuta) of een andere loottabel, met kans en aantal.", "Sleep een item of een valuta uit de Bibliotheek op het vak. Kans 100 % = altijd; 5-20 % voor zeldzame dingen.", "Er valt nooit iets → zet de kans hoger. Te veel loot of te veel geld → lager of minder stuks.") }
     }
   },
   resource_definition: {

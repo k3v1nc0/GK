@@ -18,6 +18,8 @@ import { WATER_WALK_KINDS } from "./kinds/water-walk.js";
 import { PARTY_KINDS } from "./kinds/party.js";
 import { CHAT_KINDS } from "./kinds/chat.js";
 import { BALANCE_KINDS } from "./kinds/balance.js";
+import { ECONOMY_KINDS } from "./kinds/economy.js";
+import { TRADE_KINDS } from "./kinds/trade.js";
 import { PORTAL_KINDS } from "./kinds/portal.js";
 import { effectFields } from "./kinds/effect-fields.js";
 import { AREA_SETTING_SPECS, AREA_SOORT_ORDER, AREA_SOORTEN, areaSettingsIssues, areaSoort } from "./kinds/area.js";
@@ -341,7 +343,9 @@ export const CANONICAL_KINDS = {
   ...WATER_WALK_KINDS,
   ...PARTY_KINDS,
   ...CHAT_KINDS,
-  ...BALANCE_KINDS
+  ...BALANCE_KINDS,
+  ...ECONOMY_KINDS,
+  ...TRADE_KINDS
 };
 
 // Velden per Area-vorm. Een veld van een andere vorm is een fout (geen half-ingevulde vormen).
@@ -513,7 +517,9 @@ function lootEntryIssues(key, field, value, issues, refs) {
     if (unknown.length) issues.push(issue(key, "FIELD_UNKNOWN", where + ": onbekend veld " + unknown.join(", ")));
     const hasItem = typeof entry.itemRef === "string" && entry.itemRef !== "";
     const hasTable = typeof entry.tableRef === "string" && entry.tableRef !== "";
-    if (hasItem === hasTable) issues.push(issue(key, "LOOT_ENTRY_TARGET", where + ": kies een item óf een loottabel."));
+    // Fase 8: een regel mag ook geld geven (valuta).
+    const hasCurrency = typeof entry.currencyRef === "string" && entry.currencyRef !== "";
+    if ([hasItem, hasTable, hasCurrency].filter(Boolean).length !== 1) issues.push(issue(key, "LOOT_ENTRY_TARGET", where + ": kies één ding: een item, geld (valuta) of een loottabel."));
     if (hasItem) {
       if (!entry.itemRef.startsWith("item_definition:")) issues.push(issue(key, "REF_KIND", where + ": item moet naar een item_definition wijzen."));
       else refs.push(entry.itemRef);
@@ -521,6 +527,10 @@ function lootEntryIssues(key, field, value, issues, refs) {
     if (hasTable) {
       if (!entry.tableRef.startsWith("loot_table:")) issues.push(issue(key, "REF_KIND", where + ": tabel moet naar een loot_table wijzen."));
       else refs.push(entry.tableRef);
+    }
+    if (hasCurrency) {
+      if (!entry.currencyRef.startsWith("currency:")) issues.push(issue(key, "REF_KIND", where + ": geld moet naar een valuta wijzen."));
+      else refs.push(entry.currencyRef);
     }
     const intIn = (name, min, max) => Number.isInteger(entry[name]) && entry[name] >= min && entry[name] <= max;
     if (!intIn("chanceBp", 1, 10000)) issues.push(issue(key, "LOOT_CHANCE", where + ": kans moet 1 tot 10000 basispunten zijn (10000 = altijd)."));

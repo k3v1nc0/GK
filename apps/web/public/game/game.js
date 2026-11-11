@@ -6,7 +6,7 @@ import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../s
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createActorPresentation } from "./actor-presentation.js?v=20261110-fase5b";
-import { createGkHud } from "./hud/gk-hud.js?v=20261111-fase7-xp";
+import { createGkHud } from "./hud/gk-hud.js?v=20261111-fase8";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -8668,12 +8668,9 @@ function node05Modules() {
   });
 }
 
-function gameMinimapNeedsNode05Runtime(config = resolveGameMinimapConfig()) {
-  return gameMinimapHasEnabledMarkerSource(config, ["crafting", "cooking", "vendor", "market"]);
-}
-
 function shouldLoadNode05State() {
-  return node05Modules().length > 0 || gameMinimapNeedsNode05Runtime();
+  // Fase 8b: winkel, ruilen, markt en post lopen allemaal via node05, dus de game houdt dit altijd bij.
+  return true;
 }
 
 function node05ModuleSignature(modules) {

@@ -945,3 +945,19 @@
   font-size: 9px; font-weight: 900; letter-spacing: .02em; pointer-events: none; }
 .gkNewBadge { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; background: var(--gk-gold); color: #0f1016;
   display: grid; place-items: center; font-size: 11px; font-weight: 900; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6); pointer-events: none; }
+
+/* Fase 8: winkel. "prijs automatisch" bij het gekozen item en de rij terugkopen. */
+.gkPriceNote { opacity: .75; font-size: 11px; white-space: nowrap; }
+.gkBuyBackHead { display: flex; align-items: center; gap: 6px; padding: 6px 8px 2px; font-size: 12px; font-weight: 700; opacity: .85; }
+.gkBuyBack { padding: 0 8px 8px; }
+.gkCell .gkQty { position: absolute; right: 3px; top: 2px; padding: 0 4px; border-radius: 6px; background: #0f1016cc; font-size: 11px; font-weight: 800; }
+
+/* Fase 8b: ruilen met een speler. Links wat jij geeft, rechts wat je krijgt, en de bevestiging eronder. */
+.gkSwapSide { padding: 6px 8px; }
+.gkSwapHead { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; opacity: .85; padding-bottom: 4px; }
+.gkSwapGrid { padding: 0; }
+.gkSwapNote { padding: 6px 8px; font-size: 12px; opacity: .8; }
+.gkSwapConfirm { display: flex; align-items: center; gap: 8px; margin: 6px 8px; padding: 8px 10px; border-radius: 10px;
+  background: #0f1016cc; border: 1px solid var(--gk-gold); font-size: 13px; line-height: 1.35; }
+.gkMoneySwap { display: flex; align-items: center; gap: 6px; padding: 0 8px 8px; }
+.gkMoneyAmount { width: 7em; padding: 4px 6px; border-radius: 8px; border: 1px solid #ffffff30; background: #0f1016cc; color: inherit; font: inherit; }

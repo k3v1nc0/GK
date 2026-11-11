@@ -115,6 +115,9 @@ export function lootSeed(buildId, instanceId, characterId) {
 // tables: { [lootTableId]: { entries: [{ itemId?, lootTableId?, chanceBp, minQty, maxQty }] } }
 // Elke regel rolt apart: kans in basispunten, aantal min..max. Geneste tabellen max MAX_LOOT_DEPTH diep.
 // Uitkomst: [{ itemId, quantity }] samengevoegd per item, in volgorde van eerste voorkomen.
+// Fase 8: geld in een loottabel krijgt in de tussentelling dit voorvoegsel.
+const CURRENCY_KEY = "currency\u0000";
+
 export function rollLoot(tables, lootTableId, seedText) {
   const rng = createRng(seedText);
   const totals = new Map();
@@ -132,9 +135,15 @@ export function rollLoot(tables, lootTableId, seedText) {
         for (let i = 0; i < quantity; i += 1) visit(entry.lootTableId, depth + 1, nextStack);
       } else if (entry.itemId) {
         totals.set(entry.itemId, (totals.get(entry.itemId) || 0) + quantity);
+      } else if (entry.currencyId) {
+        // Fase 8: geld uit een loottabel (eigen sleutel, zodat een item met dezelfde naam niet in de weg zit).
+        const key = CURRENCY_KEY + entry.currencyId;
+        totals.set(key, (totals.get(key) || 0) + quantity);
       }
     }
   };
   visit(lootTableId, 1, []);
-  return Array.from(totals, ([itemId, quantity]) => ({ itemId, quantity }));
+  return Array.from(totals, ([id, quantity]) => (id.startsWith(CURRENCY_KEY)
+    ? { currencyId: id.slice(CURRENCY_KEY.length), quantity }
+    : { itemId: id, quantity }));
 }

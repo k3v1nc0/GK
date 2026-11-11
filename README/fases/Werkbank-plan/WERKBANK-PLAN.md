@@ -448,6 +448,12 @@ Elke fase eindigt met: één commit op main ("Werkbank Fase N"), de lijst-regels
 **Klaar als:** Kevin geeft GO. Rood alleen bij een aantoonbare geldlus.
 **Daarna: de oude nodes weg** zodra het afvink-script 100 % haalt: de Nodes-tab en de node-servercode gaan weg. De oude tabellen blijven tot Kevin zegt dat ze weg mogen.
 
+**Gebouwd 11-11 (wacht op handtest).** Kevins keuze voor de geldafvoer: alle drie, laag (marktbelasting 5 %, craftkosten 10 %, reiskosten via Instellingen > 🌀 Portals). Twee nieuwe kaarten in Instellingen:
+- **💰 Geld** (`economy_settings`): Winkelprijs 150 % van de Verkoopwaarde, Winkel koopt terug voor 100 %, Terugkopen onthoudt 12 stuks, Marktbelasting 5 %, Craftkosten 10 %. Een eigen prijs op een NPC-winkelregel gaat altijd voor; staat er 0, dan rekent de winkel zelf en zegt de game "prijs automatisch". Onder de kaart staat geld erin en eruit per dag, waar het vandaan komt en waar het heen gaat, en een rode melding bij een geldlus met een knop naar de kaart.
+- **🤝 Handel** (`trade_settings`): ruilen aan/uit, afstand 20 m, 8 dingen per kant, een ruil blijft 120 s open, niet tijdens een gevecht; markt aan/uit, 1 dag op de markt, 20 aanbiedingen per speler; post blijft 30 dagen, 100 berichten; en een spamgrens van 60 handelsacties per uur per speler. Onder de kaart staat het handelslogboek: wie ruilde wat met wie, wat er over de markt ging (met de belasting) en wie het drukst handelt. Deze kaart vervangt de oude Trade/Market/Mail Policy-nodes; die doen niets meer.
+
+In de game: een loottabel mag geld laten vallen (🪙 in de editor, met proef); de winkel laat zien of de prijs automatisch is en wat hij teruggeeft, met een rij "Terugkopen" van wat je net verkocht; craften toont wat het in geld kost; en ruilen gaat via het spelermenu (Ruilen) met een tabblad 🤝 Ruilen dat precies zegt "Je geeft … en je krijgt …". Elke ruil is alles of niets in één transactie: verandert er iets, dan vervallen beide ja's, en een bevestiging van een oude versie wordt geweigerd.
+
 #### Fase 9 — Beroepen en uitrusting
 **Waarom:** nu kan elke crafting-NPC alle recepten, er zijn geen beroepen of recepten om te leren, en er is geen pad naar betere uitrusting.
 **Bouw:**

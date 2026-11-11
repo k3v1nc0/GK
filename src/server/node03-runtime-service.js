@@ -2156,6 +2156,15 @@ export class Node03RuntimeService {
     return grants;
   }
 
+  // Fase 8: één regel buit: een item of geld (een loottabel mag geld laten vallen).
+  grantLootRow(ctx, row, reason, sourceRef, operationId) {
+    if (row && row.currencyId) {
+      const grant = this.grantCurrency(ctx, row.currencyId, row.quantity, reason, sourceRef, operationId);
+      return grant ? [grant] : [];
+    }
+    return this.grantItem(ctx, row.itemId, row.quantity, reason, sourceRef, operationId);
+  }
+
   grantCurrency(ctx, currencyId, amountMinor, reason, sourceRef, operationId = randomId("node03_grant")) {
     const amount = Math.max(0, safeInteger(amountMinor, 0));
     if (!currencyId || amount <= 0) return null;
@@ -2427,7 +2436,7 @@ export class Node03RuntimeService {
       const rewardCtx = reward.playerId === ctx.profile.id ? ctx : Object.assign({}, ctx, { profile: { id: reward.playerId } });
       if (!this.claimActorReward(ctx, reward.claimKey, plan.instanceId, reward.playerId, operationId, plan.buildId)) continue;
       const given = [];
-      for (const item of reward.items) given.push(...this.grantItem(rewardCtx, item.itemId, item.quantity, "actor_defeated", plan.instanceId, operationId));
+      for (const item of reward.items) given.push(...this.grantLootRow(rewardCtx, item, "actor_defeated", plan.instanceId, operationId));
       const xp = reward.xp > 0 ? this.grantXpAmount(rewardCtx, reward.xp, "actor_defeated", plan.instanceId, operationId) : null;
       if (xp) given.push(xp);
       this.db.prepare("UPDATE actor_loot_claims SET grants_json = ? WHERE claim_key = ?").run(stableJson(given), reward.claimKey);
@@ -2461,7 +2470,7 @@ export class Node03RuntimeService {
       return { action: "gather", targetId: plan.instanceId, message: plan.label + " is al verzameld.", events: [] };
     }
     const grants = [];
-    for (const item of plan.items) grants.push(...this.grantItem(ctx, item.itemId, item.quantity, "resource_gathered", plan.instanceId, operationId));
+    for (const item of plan.items) grants.push(...this.grantLootRow(ctx, item, "resource_gathered", plan.instanceId, operationId));
     this.db.prepare("UPDATE actor_loot_claims SET grants_json = ? WHERE claim_key = ?").run(stableJson(grants), plan.claimKey);
     // Stap 5: Ieder zijn eigen = alleen voor jou weg (in het geheugen), niet voor iedereen.
     if (!plan.personal) this.saveActorSpawnState(ctx, plan.spawnKey, plan.occurrence, "depleted", plan.respawnAtMs, plan.buildId);
@@ -3001,6 +3010,8 @@ export class Node03RuntimeService {
         requiredLevel: Math.max(1, safeInteger(item.requiredLevel, 1)),
         armorBonus: safeInteger(item.armorBonus, 0),
         questItem: item.questItem === true || item.category === "quest",
+        // Fase 8b: de tas laat Aanbieden alleen zien bij iets dat je mag ruilen.
+        tradable: item.tradable !== false && item.bindPolicy !== "quest_bound" && item.questItem !== true && item.category !== "quest",
         readable: reads.has(item.id),
         reads: reads.get(item.id) || null,
         vendorValue: safeInteger(item.vendorBaseValueMinor, 0)
