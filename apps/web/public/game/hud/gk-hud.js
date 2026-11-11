@@ -405,7 +405,13 @@ export function createGkHud(api) {
     // Kevin (3-11): chat en gesprek staan onderin het paneel; hiermee wissel je tussen de twee.
     dockPick: "chat",       // chat | talk
     lastMode: "explore",
-    bubbles: new Map()      // ballonnen boven het hoofd: anker -> { el, until }
+    bubbles: new Map(),     // ballonnen boven het hoofd: anker -> { el, until }
+    // Kevin 11-11: je moet kunnen zien wat je kreeg.
+    xpGain: 0,              // XP die net bij elkaar binnenkwam (staat in de balk)
+    xpGainAt: 0,
+    lootSeen: null,         // wat er in de tas zat: sleutel -> { itemId, qty }
+    newKeys: new Set(),     // nieuw in de tas sinds je de tas niet meer open had
+    bagWasOpen: false
   };
   let saveTimer = 0;
   // Verbinding met de server (zelfde lampje als in de editor): groen = verbonden, oranje = bezig, rood = niet.
@@ -442,7 +448,10 @@ export function createGkHud(api) {
   const mpFill = h("i");
   const mpText = h("b");
   const mp = h("div", { class: "gkHp gkMp", title: "Mana", hidden: true }, [mpFill, ico("water-drop"), mpText]);
-  const xp = h("div", { class: "gkXp", title: "XP" }, [xpFill]);
+  // Kevin 11-11: de XP-balk is dikker, zegt hoeveel XP je hebt en laat wat je kreeg wat langer staan.
+  const xpText = h("b");
+  const xpGain = h("em", { class: "gkXpGain", hidden: true });
+  const xp = h("div", { class: "gkXp", title: "XP" }, [xpFill, xpText, xpGain]);
   // Healing (2-11): icoontjes van actieve effecten (eten, drankjes, gif) met hoe lang nog.
   const effectsRow = h("div", { class: "gkEffects", hidden: true });
   const bars = h("div", { class: "gkBars" }, [name, hp, mp, xp, effectsRow]);
@@ -483,7 +492,9 @@ export function createGkHud(api) {
   const doLabel = h("span", { class: "gkActLabel" });
   const doIcon = h("span", { style: "display:contents" }, [ico("hand")]);
   const doBtn = h("button", { type: "button", class: "gkAct gkAct--do", "data-act": "do", title: "Doen: praten, oppakken of verzamelen (E)" }, [doIcon, doLabel, h("span", { class: "gkKey", text: "E" })]);
-  const bagAct = h("button", { type: "button", class: "gkAct gkAct--bag", "data-act": "bag", title: "Tas (B)" }, [ico("knapsack")]);
+  // Kevin 11-11: hoeveel nieuwe dingen er in je tas liggen (verdwijnt als je de tas weer dicht doet).
+  const bagActNew = h("span", { class: "gkNewBadge", hidden: true });
+  const bagAct = h("button", { type: "button", class: "gkAct gkAct--bag", "data-act": "bag", title: "Tas (B)" }, [ico("knapsack"), bagActNew]);
   // Fase 5: vak 2 en 3 = vaardigheden die je zelf indeelt (slepen uit het 📖 boek of daar op 2/3 tikken).
   // Een genees-vaardigheid kiest zelf jou of de meest gewonde speler in de buurt (of het teamlid dat je linksboven aantikte).
   function slotButton(slot) {
@@ -889,7 +900,7 @@ export function createGkHud(api) {
     const objective = (step?.objectives || []).find(function (entry) { return !entry.complete && entry.needed !== false; }) || (step?.objectives || [])[0] || null;
     const questText = quest ? (step?.instruction || step?.displayName || quest.displayName) : "";
     const portraitUrl = api.assetUrl(d.player?.modelAssetId, true);
-    const signature = JSON.stringify([d.player?.displayName, d.player?.className, portraitUrl, progression.level, progression.progressPercent,
+    const signature = JSON.stringify([d.player?.displayName, d.player?.className, portraitUrl, progression.level, progression.progressPercent, progression.xp, progression.currentLevelXp, progression.nextLevelXp, progression.maxLevel,
       health.cur, health.max, mana.cur, mana.max, questText, objective?.currentValue, objective?.requiredValue, step?.complete, has("hud_bar"), has("xp_hud"),
       step?.timer ? [step.timer.stopped, step.timer.paused, Math.round(clockDeadline(step.timer) / 1000)] : null, quest?.startMode, focusEvent?.questId, focusState?.key, focusState?.active]);
     // Klap of genezing: zwevend getal bij de levensbalk (alleen bij echte verandering, niet bij de eerste keer).
@@ -911,7 +922,9 @@ export function createGkHud(api) {
       if (deltaMp !== 0) worldFloat("self", (deltaMp > 0 ? "+" : "") + deltaMp, "mana");
     }
     if (s03) ui.lastMp = mana.cur;
-    if (s03 && ui.lastXp !== null && num(progression.xp) > ui.lastXp) floatText(xp, "+" + Math.round(num(progression.xp) - ui.lastXp) + " XP", "xp");
+    if (s03 && ui.lastXp !== null && num(progression.xp) > ui.lastXp) showXpGain(Math.round(num(progression.xp) - ui.lastXp));
+    // Kevin 11-11: nieuwe spullen in de tas: een melding, een teller op de tas en een "nieuw"-stempel op het vakje.
+    if (s03) trackLoot(d);
     if (s03 && ui.lastLevel !== null && num(progression.level, 1) > ui.lastLevel) levelUp(num(progression.level, 1), ui.lastLevel);
     if (s03) { ui.lastXp = num(progression.xp); ui.lastLevel = num(progression.level, 1); }
     root.dataset.low = !d.defeated && health.max > 0 && health.pct < 0.3 ? "1" : "0";
@@ -929,7 +942,13 @@ export function createGkHud(api) {
     mpText.textContent = fmt(mana.cur) + " / " + fmt(mana.max);
     xp.hidden = !has("xp_hud");
     xpFill.style.width = Math.round(num(progression.progressPercent) * 100) + "%";
-    xp.title = "XP: " + fmt(progression.xp) + " / " + fmt(progression.nextLevelXp);
+    // Kevin 11-11: de getallen van dít level ("30 / 100 XP"), niet het totaal over alle levels.
+    const inLevel = Math.max(0, Math.round(num(progression.xp) - num(progression.currentLevelXp)));
+    const needLevel = Math.max(0, Math.round(num(progression.nextLevelXp) - num(progression.currentLevelXp)));
+    const topLevel = num(progression.level, 1) >= num(progression.maxLevel, 1) || needLevel <= 0;
+    xpText.textContent = topLevel ? "Hoogste level" : fmt(inLevel) + " / " + fmt(needLevel) + " XP";
+    xp.title = topLevel ? "Hoogste level (totaal " + fmt(progression.xp) + " XP)"
+      : "Nog " + fmt(needLevel - inLevel) + " XP tot level " + (num(progression.level, 1) + 1) + " (totaal " + fmt(progression.xp) + " XP)";
     questLine.hidden = !quest && !focusEvent;
     if (focusEvent) {
       // Het event zelf: waar het is en hoe lang nog (of wanneer het begint). De klok loopt via data-deadline.
@@ -1769,6 +1788,63 @@ export function createGkHud(api) {
     splitBar.addEventListener("pointercancel", up);
   });
 
+  // Kevin 11-11: "+20 XP" blijft een paar seconden bij de balk staan (en telt op als er snel meer bijkomt).
+  function showXpGain(amount) {
+    const now = performance.now();
+    ui.xpGain = now - ui.xpGainAt < 6000 ? ui.xpGain + amount : amount;
+    ui.xpGainAt = now;
+    xpGain.textContent = "+" + fmt(ui.xpGain) + " XP";
+    xpGain.hidden = false;
+    xp.classList.add("gkXpUp");
+    window.clearTimeout(ui.xpGainTimer);
+    window.clearTimeout(ui.xpGlowTimer);
+    ui.xpGlowTimer = window.setTimeout(function () { xp.classList.remove("gkXpUp"); }, 900);
+    ui.xpGainTimer = window.setTimeout(function () { xpGain.hidden = true; ui.xpGain = 0; }, 6000);
+  }
+
+  // Kevin 11-11: wat kwam er in de tas bij? Werkt voor buit, oppakken, verzamelen, kopen en questbeloningen.
+  function trackLoot(d) {
+    const now = new Map();
+    for (const entry of d.s03?.inventory?.items || []) {
+      const key = entry.kind === "instance" ? "inst:" + entry.instanceId : "stack:" + entry.itemId;
+      now.set(key, { itemId: entry.itemId, qty: entry.kind === "stack" ? num(entry.quantity, 1) : 1 });
+    }
+    if (!ui.lootSeen) { ui.lootSeen = now; return; }
+    const gained = [];
+    for (const [key, row] of now) {
+      const before = ui.lootSeen.get(key);
+      const delta = row.qty - (before ? before.qty : 0);
+      if (delta <= 0) continue;
+      ui.newKeys.add(key);
+      gained.push({ itemId: row.itemId, qty: delta });
+    }
+    for (const key of Array.from(ui.newKeys)) if (!now.has(key)) ui.newKeys.delete(key);
+    ui.lootSeen = now;
+    if (gained.length) {
+      const names = gained.slice(0, 3).map(function (row) {
+        return (catalogItem(row.itemId)?.displayName || row.itemId) + (row.qty > 1 ? " ×" + row.qty : "");
+      });
+      toast("In je tas: " + names.join(", ") + (gained.length > 3 ? " en meer" : ""), { icon: "knapsack", ms: 4000 });
+    }
+    updateNewBadge();
+  }
+
+  function updateNewBadge() {
+    const count = ui.newKeys.size;
+    bagActNew.hidden = count <= 0;
+    bagActNew.textContent = count > 9 ? "9+" : String(count);
+  }
+
+  // Je hebt de tas gezien: de stempels en de teller gaan weg.
+  function bagSeen() {
+    if (!ui.bagWasOpen) return;
+    ui.bagWasOpen = false;
+    if (!ui.newKeys.size) return;
+    ui.newKeys.clear();
+    updateNewBadge();
+    ui.sig.sheet = "";
+  }
+
   function floatText(anchor, text, tone) {
     const node = h("span", { class: "gkFloat " + tone, text });
     anchor.append(node);
@@ -2269,11 +2345,14 @@ export function createGkHud(api) {
     const p = root.dataset.panel;
     const m = root.dataset.mode;
     if (p !== "open") {
+      bagSeen();
       if (ui.sig.sheet !== "closed") { ui.sig.sheet = "closed"; sheet.replaceChildren(); }
       return;
     }
     const d = data();
     const view = m === "trade" ? "trade" : m === "craft" ? "craft" : store.tab;
+    // Kevin 11-11: zolang de tas open staat blijven de "nieuw"-stempels staan; dicht = gezien.
+    if (view === "bag") ui.bagWasOpen = true; else bagSeen();
     const parts = [view, store.filter, store.item, store.quest, store.done, store.sectionFold, ui.sure, d.busy, ui.trade, ui.craft, store.minimap, store.music, store.size, store.combatFold, store.debug, store.icoSize, store.icoColor, store.icoAnim];
     // Healing (2-11): levens/mana veranderen elke seconde (regeneratie); de tas hoeft daarvoor niet opnieuw getekend te worden.
     if (view === "bag" || view === "trade" || view === "craft" || view === "gear") parts.push(d.s03?.inventory, d.s03?.equipment, d.s03?.currencies, d.s03?.catalog, Object.keys(d.s03?.itemCooldowns || {}));
@@ -2357,9 +2436,10 @@ export function createGkHud(api) {
   function bagCell(item, extra = {}) {
     const def = item.def;
     const qty = item.entry.kind === "stack" ? num(item.entry.quantity, 1) : 1;
-    return h("button", { type: "button", class: "gkCell" + (extra.on ? " gkOn" : "") + (extra.no ? " gkNo" : ""), "data-act": extra.act || "item", "data-key": item.key,
-      "data-rarity": def.rarity || item.entry.rarity || "common", title: item.name, "data-drag": extra.drag || null },
-    [itemVisual(item.entry.itemId), qty > 1 ? h("b", { text: fmt(qty) }) : null,
+    const isNew = ui.newKeys.has(item.key);
+    return h("button", { type: "button", class: "gkCell" + (extra.on ? " gkOn" : "") + (extra.no ? " gkNo" : "") + (isNew ? " gkCellNew" : ""), "data-act": extra.act || "item", "data-key": item.key,
+      "data-rarity": def.rarity || item.entry.rarity || "common", title: item.name + (isNew ? " (nieuw)" : ""), "data-drag": extra.drag || null },
+    [itemVisual(item.entry.itemId), isNew ? h("span", { class: "gkCellNewTag", text: "nieuw" }) : null, qty > 1 ? h("b", { text: fmt(qty) }) : null,
       num(def.useCooldownS) > 0 ? h("em", { class: "gkCd", "data-cd": item.entry.itemId, hidden: true }) : null]);
   }
   function emptyCells(count, min = 20) {

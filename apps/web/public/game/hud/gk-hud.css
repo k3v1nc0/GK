@@ -89,8 +89,15 @@
 .gkHp b { position: absolute; inset: 0; display: grid; place-items: center; font-size: 11px; font-weight: 800; color: #fff; text-shadow: 0 1px 2px #000; }
 .gkHp .gkIco { position: absolute; left: 3px; top: 50%; width: 14px; height: 14px; transform: translateY(-50%); }
 .gkHp.gkHit { animation: gkShake 0.32s linear; }
-.gkXp { height: 4px; border-radius: 2px; background: rgba(8, 12, 20, 0.75); overflow: hidden; }
-.gkXp i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #f3b72c, #ffe27a); transition: width 0.4s ease-out; }
+/* Kevin 11-11: dikkere XP-balk met de getallen erin, en "+20 XP" dat een paar seconden blijft staan. */
+.gkXp { position: relative; height: calc(13px * var(--gk-scale)); border-radius: 7px; background: rgba(8, 12, 20, 0.82); border: 1px solid rgba(0, 0, 0, 0.7);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.7); overflow: hidden; }
+.gkXp i { position: absolute; inset: 0 auto 0 0; display: block; height: 100%; width: 0; border-radius: 7px; background: linear-gradient(180deg, #ffe27a, #f3b72c 60%, #c88a12); transition: width 0.4s ease-out; }
+.gkXp b { position: absolute; inset: 0; display: grid; place-items: center; font-size: 10px; font-weight: 800; color: #fff; text-shadow: 0 1px 2px #000; letter-spacing: .02em; }
+.gkXpGain { position: absolute; top: 50%; right: 4px; transform: translateY(-50%); font-size: 10px; font-weight: 900; font-style: normal;
+  color: #0f1016; background: var(--gk-gold); border-radius: 6px; padding: 0 5px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6); }
+.gkXp.gkXpUp { animation: gkXpPulse 0.9s ease-out; }
+@keyframes gkXpPulse { 0% { box-shadow: 0 0 0 0 rgba(243, 183, 44, 0.7); } 100% { box-shadow: 0 0 0 7px rgba(243, 183, 44, 0); } }
 .gkQuestLine { flex: none; box-sizing: border-box; display: flex; align-items: center; gap: 6px; width: fit-content; max-width: 100%; min-width: 0; padding: 5px 9px 5px 6px; border-radius: 10px;
   background: rgba(11, 17, 30, 0.62); border: 1px solid var(--gk-line); pointer-events: auto; text-align: left; font-size: 12px; }
 .gkQuestLine .gkIco { width: 18px; height: 18px; flex: none; }
@@ -931,3 +938,10 @@
 .gkHud[data-orient="port"] .gkActions > .gkAct--skill[data-id="3"] { grid-area: s3; }
 /* De naamjes boven de knoppen zouden over de bovenste rij vallen; de naam staat al boven het doel in de wereld. */
 .gkHud[data-orient="port"] .gkActions .gkActLabel { display: none; }
+
+/* Kevin 11-11: nieuw in je tas (stempel op het vakje en een teller op de tasknop). */
+.gkCell.gkCellNew { border-color: var(--gk-gold); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 0 0 1px var(--gk-gold), 0 0 10px rgba(243, 183, 44, 0.45); }
+.gkCellNewTag { position: absolute; left: 2px; top: 2px; padding: 0 4px; border-radius: 6px; background: var(--gk-gold); color: #0f1016;
+  font-size: 9px; font-weight: 900; letter-spacing: .02em; pointer-events: none; }
+.gkNewBadge { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; background: var(--gk-gold); color: #0f1016;
+  display: grid; place-items: center; font-size: 11px; font-weight: 900; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6); pointer-events: none; }
