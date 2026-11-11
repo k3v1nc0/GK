@@ -425,6 +425,7 @@ Elke fase eindigt met: één commit op main ("Werkbank Fase N"), de lijst-regels
 **Kevin ziet:** level omhoog = sterker en een nieuwe vaardigheid. Na veel farmen een oude baas: sneller, maar niet in één klap; schaling uit = één klap. Een groep van level 1, 3 en 15 tegen de groepsbaas: iedereen helpt mee en krijgt zijn beloning, en wie uit de rode cirkel stapt, krijgt de klap niet. Schuifje op 0 = iedereen even hard.
 **CLI controleert:** schade, genezing en XP per level, beloning niet dubbel, en wie tijdens de baas wegloopt, de groep verlaat of opnieuw verbindt.
 **Klaar als:** Kevin speelt de oude baas, de gemengde groep en de groepsbaas, en geeft GO.
+**Gebouwd 11-11 (keuzes van Kevin en startwaarden):** level van een vijand = sterkte (Kevin 11-11): level 1 = 100 %, level 2 = 200 % ... level 10 = 1000 % levens, kracht en XP; het cijfer voor de naam is dat level, zonder los ×2 en zonder extra kleur. Een sterkere van een plek telt er bovenop. XP per vijand is vast (kaart × level), quest-XP ook. Uitrusting "vanaf level N" telt tegen een vijand van een lager level naar verhouding. Genezen bij een ander vult hetzelfde deel van de balk als bij iemand van je eigen level. Schaling: 3 % per level, hooguit 20 % (Instellingen > Genezen en effecten).
 
 #### Fase 7 — Balans en maker-controle
 **Waarom:** één plek om alles te meten, en het bewijs dat Kevin de hele lus zonder code kan maken. Hij komt ná de groei (anders valt er niets betrouwbaars te meten) en vóór geld (anders geen controle op geldlekken).

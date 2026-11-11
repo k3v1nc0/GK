@@ -1,4 +1,4 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261111-namefix1";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261111-fase6";
 import { nextPlayerRouteWaypoint } from "../shared/player-path-client.js?v=20261108-roads9";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20261106-perf1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
@@ -6,7 +6,7 @@ import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../s
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createActorPresentation } from "./actor-presentation.js?v=20261110-fase5b";
-import { createGkHud } from "./hud/gk-hud.js?v=20261111-namefix1";
+import { createGkHud } from "./hud/gk-hud.js?v=20261111-fase6";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -345,6 +345,10 @@ let actorHitRefreshAt = 0;
 function handleActorMessage(message) {
   if (message.type === "actor:snapshot") {
     if (actorPresentation.applySnapshot(message)) syncRuntimeTargets();
+    // Fase 6: een rode cirkel die al loopt (je kwam net binnen of verbond opnieuw): [x, z, straal, ms tot de klap].
+    for (const entry of Array.isArray(message.actors) ? message.actors : []) {
+      if (Array.isArray(entry?.sl)) showSlamZone(String(entry.id), entry.sl[0], entry.sl[1], entry.sl[2], entry.sl[3], false);
+    }
     return true;
   }
   if (message.type !== "actor:event") return false;
@@ -353,6 +357,17 @@ function handleActorMessage(message) {
     if (gkHud && typeof gkHud.npcSay === "function") gkHud.npcSay(String(message.id || ""), String(message.text || ""), String(message.name || "") || actorPresentation.nameOf(message.id));
     return true;
   }
+  // Fase 6: de grote klap van een groepsbaas. Eerst de rode cirkel (slam), dan de klap (slamhit); verslagen = cirkel weg.
+  if (message.e === "slam") {
+    if (message.off === 1) state.runtime?.hideDangerZone?.(String(message.id), false);
+    else showSlamZone(String(message.id), message.x, message.z, message.r, message.ms, true);
+    return true;
+  }
+  if (message.e === "slamhit") {
+    state.runtime?.hideDangerZone?.(String(message.id), true);
+    return true;
+  }
+  if (message.e === "death") state.runtime?.hideDangerZone?.(String(message.id), false);
   if (actorPresentation.applyEvent(message)) syncRuntimeTargets();
   // Fase 5: de animatie van een klap (speler op vijand, of vijand op speler).
   if ((message.e === "hit" || message.e === "death") && message.by && !String(message.by).startsWith("actor:")) {
@@ -386,6 +401,18 @@ function handleActorMessage(message) {
     }
   }
   return true;
+}
+
+// Fase 6: de rode cirkel op de grond. Sta je er zelf in, dan krijg je ook een korte waarschuwing in beeld.
+function showSlamZone(id, x, z, radius, ms, warn) {
+  const runtime = state.runtime;
+  if (!runtime || typeof runtime.showDangerZone !== "function") return;
+  const shown = runtime.showDangerZone({ id, x: Number(x), z: Number(z), radius: Number(radius), ms: Number(ms) });
+  if (!shown || !warn || !gkHud || typeof gkHud.toast !== "function") return;
+  const me = state.predictedPosition || state.position || null;
+  if (me && Math.hypot(Number(me.x) - Number(x), Number(me.z) - Number(z)) <= Number(radius) + 0.5) {
+    gkHud.toast("Grote klap! Stap uit de rode cirkel.", { tone: "error", icon: "crossed-swords", ms: Math.max(1200, Number(ms) || 2500) });
+  }
 }
 
 function gameFetch(input, options = {}) {
@@ -12705,6 +12732,13 @@ function handleSocketMessage(raw) {
   }
   // Healing (2-11): een speler geneest een ander: groen getal boven die speler.
   if (message.type === "fx") {
+    // Fase 6: iemand gaat een level omhoog: gouden ringen om die speler (jijzelf of een ander in de buurt).
+    if (message.target && message.tone === "levelup") {
+      const mine = message.target === state.player?.id;
+      state.runtime?.playLevelUpFx?.(mine ? "self" : "player:" + message.target);
+      if (mine) scheduleNode03ImmediateRefresh();
+      return;
+    }
     if (message.target && message.tone === "heal" && message.by) {
       playCombatFxFor(String(message.by), message.target === state.player?.id ? "self" : "player:" + message.target, message.ab || null, Boolean(message.ab), false, "heal");
     }

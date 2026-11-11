@@ -4916,6 +4916,8 @@ export function createGkWorldRuntime(canvas, options = {}) {
   const COMBAT_FX_MAX = 12;
   const combatFx = [];
   let combatFxShapes = null;
+  // Fase 6: rode cirkels op de grond (grote klap van een groepsbaas): id van de baas -> cirkel.
+  const dangerZones = new Map();
   const runtimeTargetSuppressedEntityIds = new Set();
   // Stap 8: NPC's die nu met de speler meelopen (begeleiden): hun vaste model is even onzichtbaar (botsen blijft gelijk aan de server).
   const escortHiddenEntityIds = new Set();
@@ -8798,6 +8800,7 @@ function resolveChunkDebugCenter(policy) {
     frameTiming.syncChunkMs = round(performance.now() - sectionStart);
     sectionStart = performance.now();
     if (combatFx.length) updateCombatFx(performance.now());
+    if (dangerZones.size) updateDangerZones(performance.now());
     if (gpuFrameTimer) gpuFrameTimer.begin();
     renderer.render(scene, camera);
     if (gpuFrameTimer) gpuFrameTimer.end();
@@ -17061,7 +17064,9 @@ function resolveChunkDebugCenter(policy) {
       arc: new THREE.TorusGeometry(0.7, 0.05, 6, 18, Math.PI * 0.9),
       orb: new THREE.SphereGeometry(0.18, 10, 8),
       bolt: new THREE.BoxGeometry(0.06, 0.06, 0.6),
-      flash: new THREE.SphereGeometry(0.4, 12, 10)
+      flash: new THREE.SphereGeometry(0.4, 12, 10),
+      // Fase 6: een platte ring die bij level omhoog van je voeten naar boven gaat.
+      ring: new THREE.TorusGeometry(0.75, 0.05, 6, 24)
     };
     return combatFxShapes;
   }
@@ -17133,6 +17138,14 @@ function resolveChunkDebugCenter(policy) {
         mesh.position.lerpVectors(fx.from, fx.to, t);
         mesh.lookAt(fx.to);
         fx.material.opacity = 0.95;
+      } else if (fx.kind === "rise") {
+        // Level omhoog: de ring loopt mee met de speler en stijgt van de voeten tot boven het hoofd.
+        const at = combatFxPoint(fx.follow) || fx.to;
+        mesh.position.set(at.x, at.y - 1.05 + t * 2.3, at.z);
+        mesh.rotation.set(Math.PI / 2, 0, 0);
+        const size = 1 + t * 0.35;
+        mesh.scale.set(size, size, size);
+        fx.material.opacity = 0.95 * (1 - t * t);
       } else {
         mesh.position.copy(fx.to);
         const size = 0.5 + t * 1.1;
@@ -17141,6 +17154,122 @@ function resolveChunkDebugCenter(policy) {
       }
     }
     if (combatFx.length) requestRender("combat-fx");
+  }
+
+  // Fase 6: level omhoog. Gouden ringen die om de speler omhoog gaan en een lichtflits; iedereen in de buurt ziet het.
+  // key: "self" of "player:<id>".
+  function playLevelUpFx(key) {
+    if (mode !== "game" || !scene) return false;
+    const at = combatFxPoint(key);
+    if (!at) return false;
+    const shapes = combatFxShapesOnce();
+    const now = performance.now();
+    for (const delay of [0, 220, 440]) {
+      addCombatFxMesh(shapes.ring, 0xffd95a, now + delay, 950, "rise", at, at);
+      combatFx[combatFx.length - 1].follow = String(key);
+    }
+    addCombatFxMesh(shapes.flash, 0xfff3b0, now, 520, "flash", at, at);
+    requestRender("combat-fx");
+    return true;
+  }
+
+  // Fase 6: de rode cirkel van een groepsbaas. Hij ligt ms milliseconden op de grond (volgt het terrein) en wordt steeds
+  // feller; daarna komt de klap. Licht: één schijf en één rand per cirkel, hooguit een paar tegelijk.
+  function drapedRingGeometry(cx, cz, inner, outer, baseY, rings) {
+    const segments = 32;
+    const rows = rings + 1;
+    const positions = new Float32Array(rows * segments * 3);
+    for (let row = 0; row < rows; row += 1) {
+      const radius = inner + (outer - inner) * row / rings;
+      for (let index = 0; index < segments; index += 1) {
+        const angle = index / segments * Math.PI * 2;
+        const x = Math.sin(angle) * radius;
+        const z = Math.cos(angle) * radius;
+        const at = (row * segments + index) * 3;
+        positions[at] = x;
+        positions[at + 1] = baseY + terrainLift(cx + x, cz + z) + 0.1;
+        positions[at + 2] = z;
+      }
+    }
+    const indices = [];
+    for (let row = 0; row < rings; row += 1) {
+      const a = row * segments;
+      const b = a + segments;
+      for (let index = 0; index < segments; index += 1) {
+        const next = (index + 1) % segments;
+        indices.push(a + index, b + index, b + next, a + index, b + next, a + next);
+      }
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geometry.setIndex(indices);
+    return geometry;
+  }
+  function removeDangerZone(id) {
+    const zone = dangerZones.get(id);
+    if (!zone) return;
+    scene.remove(zone.group);
+    for (const mesh of [zone.fill, zone.edge]) { mesh.geometry.dispose(); mesh.material.dispose(); }
+    dangerZones.delete(id);
+  }
+  // options: { id, x, z, radius (m), ms (tot de klap) }. Bestaat de cirkel van deze baas al, dan blijft hij zoals hij is.
+  function showDangerZone(options = {}) {
+    if (mode !== "game" || !scene) return false;
+    const id = String(options.id || "");
+    const radius = Math.max(0.5, Math.min(30, Number(options.radius) || 4));
+    const ms = Math.max(100, Number(options.ms) || 2500);
+    const x = Number(options.x);
+    const z = Number(options.z);
+    if (!id || !Number.isFinite(x) || !Number.isFinite(z) || dangerZones.has(id)) return false;
+    while (dangerZones.size >= 6) removeDangerZone(dangerZones.keys().next().value);
+    // De hoogte van de grond: via de baas zelf (of de speler) weten we hoe hoog de wereld boven het kale terrein ligt.
+    const anchor = runtimeTargetRoots.get(id) || player.root || null;
+    const baseY = anchor ? anchor.position.y - terrainLift(anchor.position.x, anchor.position.z) : 0;
+    const material = (opacity) => new THREE.MeshBasicMaterial({ color: 0xff2a1f, transparent: true, opacity, depthWrite: false, side: THREE.DoubleSide,
+      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+    const fill = new THREE.Mesh(drapedRingGeometry(x, z, 0.01, radius, baseY, 3), material(0.2));
+    const edge = new THREE.Mesh(drapedRingGeometry(x, z, radius * 0.93, radius, baseY, 1), material(0.9));
+    const group = new THREE.Group();
+    group.name = "danger-zone";
+    group.position.set(x, 0, z);
+    fill.renderOrder = 15;
+    edge.renderOrder = 16;
+    fill.frustumCulled = false;
+    edge.frustumCulled = false;
+    group.add(fill, edge);
+    scene.add(group);
+    const now = performance.now();
+    dangerZones.set(id, { group, fill, edge, start: now, hitAt: now + ms, endAt: now + ms + 700, landed: false });
+    requestRender("combat-fx");
+    return true;
+  }
+  // hit = true: de klap valt nu (korte felle flits, dan weg). Anders meteen weg (baas verslagen of teruggelopen).
+  function hideDangerZone(id, hit = false) {
+    const zone = dangerZones.get(String(id || ""));
+    if (!zone) return false;
+    if (!hit) { removeDangerZone(String(id)); requestRender("combat-fx"); return true; }
+    const now = performance.now();
+    zone.landed = true;
+    zone.hitAt = now;
+    zone.endAt = now + 320;
+    zone.fill.material.color.setHex(0xffe0c8);
+    requestRender("combat-fx");
+    return true;
+  }
+  function updateDangerZones(now) {
+    for (const [id, zone] of Array.from(dangerZones.entries())) {
+      if (now >= zone.endAt) { removeDangerZone(id); continue; }
+      if (zone.landed) {
+        const t = Math.min(1, (now - zone.hitAt) / 320);
+        zone.fill.material.opacity = 0.85 * (1 - t);
+        zone.edge.material.opacity = 0.9 * (1 - t);
+        continue;
+      }
+      // Steeds feller naar de klap toe, met een rustige polsslag zodat hij opvalt.
+      const t = Math.min(1, (now - zone.start) / Math.max(1, zone.hitAt - zone.start));
+      zone.fill.material.opacity = 0.16 + t * 0.34 + Math.sin(now / 110) * 0.05;
+    }
+    if (dangerZones.size) requestRender("combat-fx");
   }
 
   function setRuntimeTargetAnimation(instanceId, stateName) {
@@ -19367,6 +19496,9 @@ function resolveChunkDebugCenter(policy) {
     setRuntimeTargetPose: setRuntimeTargetPose,
     setRuntimeTargetAnimation: setRuntimeTargetAnimation,
     playCombatFx: playCombatFx,
+    playLevelUpFx: playLevelUpFx,
+    showDangerZone: showDangerZone,
+    hideDangerZone: hideDangerZone,
     registerRuntimeAssets: registerRuntimeAssets,
     setRuntimeTargetNameplatesVisible: setRuntimeTargetNameplatesVisible,
     setEntityHidden: setEntityHidden,

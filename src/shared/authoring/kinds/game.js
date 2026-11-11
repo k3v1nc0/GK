@@ -54,6 +54,9 @@ const flagGate = (wat) => ({
 });
 
 const CLASS_HEAL_GROUP = "💚 Terugkrijgen en genezen";
+const CLASS_GROW_GROUP = "📈 Groeit per level";
+const SCALE_GROUP = "⚖️ Schaling: oud gebied blijft een gevecht";
+const SCALE_ON = Object.freeze({ key: "levelScaling", is: [true] });
 const SHIELD_GROUP = "🛡️ Schild van sterkere vijanden";
 export const STACKING_LABELS = Object.freeze({ refresh: "Opnieuw beginnen", extend: "Tijd erbij", block: "Niet nog eens" });
 
@@ -360,6 +363,17 @@ export const GAME_KINDS = {
         help("Hoeveel procent van je levens je per seconde terugkrijgt TIJDENS een gevecht. 0 % = niets (alleen buiten gevecht).", "0-0,5 %/s; hoger voor een Tank.", "Spelers gaan te snel neer in lange gevechten → iets hoger.")),
       manaRegenCombatBp: int("Mana terug in gevecht", "🌀", 0, 0, 10000, "instellingen", { step: 10, range: [0, 1000], unit: "%/s", scale: 100, group: CLASS_HEAL_GROUP },
         help("Hoeveel procent van je mana je per seconde terugkrijgt TIJDENS een gevecht. Zo kun je een vaste volgorde (rotatie) spelen zonder dat je mana steeds op is.", "0,5-2 %/s. Reken: kost je vaardigheid 10 mana en is je mana 100, dan geeft 1 %/s elke 10 s genoeg voor één keer.", "Mana is in een gevecht steeds op → hoger. Spelers spammen eindeloos → lager.")),
+      // Fase 6: elk level erbij maakt de klasse sterker. Level 1 = de waarden hierboven; daarna telt dit er per level bij.
+      healthPerLevel: int("Levens per level", "❤️", 10, 0, 100000, "instellingen", { range: [0, 100], group: CLASS_GROW_GROUP },
+        help("Hoeveel levens deze klasse er per level bij krijgt. Level 1 heeft de gewone Levens; level 5 heeft er 4 keer dit bij.", "Ongeveer 10 % van de Levens: bij 100 levens dus 10. Tank iets meer, Healer iets minder.", "Hoge levels gaan nog steeds snel dood → hoger.")),
+      attackPerLevel: int("Kracht per level", "💪", 1, 0, 100000, "instellingen", { range: [0, 50], group: CLASS_GROW_GROUP },
+        help("Hoeveel kracht deze klasse er per level bij krijgt.", "1 voor de meeste klassen, 2 voor DPS.", "Een hoger level voelt niet sterker → hoger. Staat schaling aan, dan merk je dit vooral tegen vijanden van je eigen level.")),
+      armorPerLevel: int("Pantser per level", "🛡️", 0, 0, 100000, "instellingen", { range: [0, 50], group: CLASS_GROW_GROUP },
+        help("Hoeveel pantser deze klasse er per level bij krijgt.", "0 voor de meeste klassen, 1 voor de Tank. Pantser gaat recht van de schade af, dus houd dit klein.", "Hoge levels krijgen nergens meer schade van → lager.")),
+      manaPerLevel: int("Mana per level", "🔵", 5, 0, 100000, "instellingen", { range: [0, 100], group: CLASS_GROW_GROUP },
+        help("Hoeveel mana deze klasse er per level bij krijgt.", "Ongeveer 10 % van de Mana: bij 50 mana dus 5.", "Hoge levels zitten steeds zonder mana → hoger.")),
+      healPerLevel: int("Heal-kracht per level", "💚", 1, 0, 100000, "instellingen", { range: [0, 50], group: CLASS_GROW_GROUP },
+        help("Hoeveel heal-kracht deze klasse er per level bij krijgt.", "1 voor de meeste klassen, 2 voor de Healer.", "Een Healer van een hoog level geneest te weinig → hoger.")),
       manaMax: int("Mana", "🔵", 50, 0, 1000000, "instellingen", { range: [0, 1000], more: true },
         help("Hoeveel mana deze klasse heeft (blauwe balk onder de levens).", "Healer 100, DPS 50, Tank 30. 0 = geen manabalk.", "Spreuken raken te snel op → hoger.")),
       startItems: refList("Start-spullen", "🎒", ["item_definition", "currency"], [AMOUNT], "instellingen",
@@ -398,7 +412,16 @@ export const GAME_KINDS = {
       shieldAutoPct: int("Auto-aanval tegen schild", "🛡️", 25, 0, 100, "instellingen", { range: [0, 100], unit: "%", group: SHIELD_GROUP },
         help("Hoeveel procent van zijn gewone schade de auto-aanval (vak 1) doet zolang het schild van een sterkere vijand of baas staat.", "20-30 %: je merkt dat je vak 2 of 3 nodig hebt, maar je staat niet stil. 0 % = met alleen vak 1 lukt het nooit.", "Spelers verslaan een sterkere met alleen vak 1 → lager. Healers komen er solo niet doorheen → hoger.")),
       shieldBackS: int("Schild komt terug na", "⏳", 15, 1, 600, "instellingen", { range: [1, 120], unit: "s", group: SHIELD_GROUP },
-        help("Na hoeveel seconden het gebroken schild terugkomt.", "10-20 seconden: lang genoeg om met vak 1 flink schade te doen.", "Het schild is er bijna nooit → korter. Spelers moeten steeds vak 2 drukken → langer."))
+        help("Na hoeveel seconden het gebroken schild terugkomt.", "10-20 seconden: lang genoeg om met vak 1 flink schade te doen.", "Het schild is er bijna nooit → korter. Spelers moeten steeds vak 2 drukken → langer.")),
+      // Fase 6: schaling zoals ESO. Tegen een vijand telt iedereen als het level van die vijand (klasse-stats op dat level,
+      // uitrusting naar verhouding). De levensbalk blijft je eigen balk; de server rekent schade en genezing om.
+      levelScaling: toggle("Schaling aan", "⚖️", true, "instellingen",
+        help("Aan: tegen een vijand telt iedereen als het level van die vijand. Een oud gebied blijft zo een gevecht, en level 1 en level 15 kunnen samen tegen dezelfde vijand. Je levensbalk blijft gelijk; de server rekent om.", "Aan. Uit = je echte level telt: een hoog level slaat een oude baas in één klap om en een laag level maakt geen kans tegen een hoge vijand.", "Een hoog level voelt in een oud gebied te zwak → zet Verschil per level hoger."),
+        { group: SCALE_GROUP }),
+      levelDiffPct: int("Verschil per level", "📶", 3, 0, 50, "instellingen", { range: [0, 20], unit: "%", group: SCALE_GROUP, when: SCALE_ON },
+        help("Hoeveel procent voordeel je per level boven de vijand houdt (meer schade doen, minder schade krijgen). Sta je onder het level van de vijand, dan is het evenveel nadeel.", "3 %: drie levels hoger is 9 % sterker. 0 % = iedereen even hard, alleen gelijktrekken.", "Hoger level voelt niet sterker → hoger. Lage levels hebben niets te doen bij een baas → lager.")),
+      levelDiffMaxPct: int("Verschil hooguit", "🧱", 20, 0, 500, "instellingen", { range: [0, 100], unit: "%", group: SCALE_GROUP, when: SCALE_ON },
+        help("Het grootste voordeel (of nadeel) dat het levelverschil kan geven, hoe groot het verschil ook is.", "20 %: een oude baas gaat sneller, maar niet in één klap.", "Oude bazen vallen te snel om → lager. Farmen in een oud gebied duurt te lang → hoger."))
     }
   },
   hud_settings: {

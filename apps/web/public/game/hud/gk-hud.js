@@ -912,7 +912,7 @@ export function createGkHud(api) {
     }
     if (s03) ui.lastMp = mana.cur;
     if (s03 && ui.lastXp !== null && num(progression.xp) > ui.lastXp) floatText(xp, "+" + Math.round(num(progression.xp) - ui.lastXp) + " XP", "xp");
-    if (s03 && ui.lastLevel !== null && num(progression.level, 1) > ui.lastLevel) levelUp(num(progression.level, 1));
+    if (s03 && ui.lastLevel !== null && num(progression.level, 1) > ui.lastLevel) levelUp(num(progression.level, 1), ui.lastLevel);
     if (s03) { ui.lastXp = num(progression.xp); ui.lastLevel = num(progression.level, 1); }
     root.dataset.low = !d.defeated && health.max > 0 && health.pct < 0.3 ? "1" : "0";
     if (ui.sig.unit === signature) return;
@@ -1992,8 +1992,26 @@ export function createGkHud(api) {
     game.append(node);
     window.setTimeout(function () { node.remove(); window.setTimeout(nextCelebration, CELEBRATE_GAP_MS); }, next.ms);
   }
-  function levelUp(newLevel) {
-    celebrate(1, 2700, function () { return h("div", { class: "gkLevelUp" }, [ico("star-medal"), h("b", { text: "Level " + newLevel + "!" })]); });
+  // Fase 6: level omhoog laat ook zien wat je erbij kreeg (klasse: groei per level) en welke vaardigheid nu vrij is.
+  function levelUp(newLevel, oldLevel) {
+    const d = data();
+    const from = Math.min(newLevel - 1, Math.max(1, num(oldLevel, newLevel - 1)));
+    const steps = Math.max(1, newLevel - from);
+    const per = d.s03?.progression?.perLevel || {};
+    const gains = [];
+    for (const [key, word] of [["health", "levens"], ["attackPower", "kracht"], ["armor", "pantser"], ["mana", "mana"], ["healPower", "heal-kracht"]]) {
+      if (num(per[key]) > 0) gains.push("+" + Math.round(num(per[key]) * steps) + " " + word);
+    }
+    const fresh = (d.s03?.skills?.list || []).filter(function (skill) {
+      return skill.lock !== "quest" && num(skill.unlockLevel, 1) > from && num(skill.unlockLevel, 1) <= newLevel;
+    }).map(function (skill) { return skill.displayName; });
+    const long = gains.length || fresh.length;
+    celebrate(1, long ? 3900 : 2700, function () {
+      return h("div", { class: "gkLevelUp" + (long ? " gkLevelUpLong" : "") }, [ico("star-medal"), h("b", { text: "Level " + newLevel + "!" }),
+        gains.length ? h("small", { text: gains.join("  ·  ") }) : null,
+        fresh.length ? h("strong", { text: "Nieuwe vaardigheid: " + fresh.join(", ") }) : null]);
+    });
+    if (long) chatNotice("⭐ Level " + newLevel + "!" + (gains.length ? " " + gains.join(", ") + "." : "") + (fresh.length ? " Nieuwe vaardigheid: " + fresh.join(", ") + " (open het boek met K)." : ""), "", true);
   }
 
   // Kevin 6-11: quest gehaald. Groot en goud zoals level omhoog, met de naam, het einde (na een keuze) en wat je kreeg.
@@ -2408,6 +2426,10 @@ export function createGkHud(api) {
     const stats = [];
     if (def.attackPowerBonus) stats.push(stat("broadsword", "+" + def.attackPowerBonus + " kracht"));
     if (def.armorBonus) stats.push(stat("checked-shield", "+" + def.armorBonus + " pantser"));
+    // Fase 6: uitrusting vanaf een level (te laag = de knop Uitrusten werkt nog niet).
+    const needLevel = Math.max(1, num(def.requiredLevel, 1));
+    const tooLow = Boolean(def.equipSlot) && needLevel > num(d.s03?.progression?.level, 1);
+    if (def.equipSlot && needLevel > 1) stats.push(stat("star-medal", "vanaf level " + needLevel + (tooLow ? " (jij bent level " + num(d.s03?.progression?.level, 1) + ")" : "")));
     if (def.healAmount) stats.push(stat("heart-plus", "+" + def.healAmount + " levens"));
     // Healing (2-11): wat het effect doet en hoe lang, en de wachttijd.
     if (def.effect) {
@@ -2425,7 +2447,8 @@ export function createGkHud(api) {
     if (equipped) {
       buttons.push(h("button", { type: "button", class: "gkBtn", "data-act": "unequip", "data-id": equipped.slotId, disabled: busy ? true : null }, [ico("knapsack", "plain"), "Uitdoen"]));
     } else {
-      if (def.equipSlot) buttons.push(h("button", { type: "button", class: "gkBtn gkGo", "data-act": "equip", "data-key": key, disabled: busy ? true : null }, [ico(SLOT_ICON[slotKey(def.equipSlot)] || "broadsword", "plain"), "Uitrusten"]));
+      if (def.equipSlot) buttons.push(h("button", { type: "button", class: "gkBtn gkGo", "data-act": "equip", "data-key": key, disabled: busy || tooLow ? true : null,
+        title: tooLow ? "Vanaf level " + needLevel : null }, [ico(SLOT_ICON[slotKey(def.equipSlot)] || "broadsword", "plain"), tooLow ? "Vanaf level " + needLevel : "Uitrusten"]));
       if (num(def.healAmount) > 0 || def.effect) {
         const waiting = cooldownLeft(itemId) > 0;
         buttons.push(h("button", { type: "button", class: "gkBtn gkGo", "data-act": "use", "data-id": itemId, disabled: busy || waiting ? true : null },

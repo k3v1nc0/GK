@@ -75,6 +75,9 @@ export function compileGameSection(documents, options = {}) {
       healthMax: values.healthMax, attackPower: values.attackPower, armor: values.armor, healPower: values.healPower, manaMax: values.manaMax,
       healthRegenBp: values.healthRegenBp, manaRegenBp: values.manaRegenBp,
       healthRegenCombatBp: values.healthRegenCombatBp, manaRegenCombatBp: values.manaRegenCombatBp,
+      // Fase 6: groei per level.
+      healthPerLevel: values.healthPerLevel, attackPerLevel: values.attackPerLevel, armorPerLevel: values.armorPerLevel,
+      manaPerLevel: values.manaPerLevel, healPerLevel: values.healPerLevel,
       startGrants: grants(values.startItems), models: Array.isArray(values.models) ? values.models.slice() : [] };
   };
   const classDocs = of("player_class").slice().sort((a, b) => String(a.body.displayName).localeCompare(String(b.body.displayName)) || a.docKey.localeCompare(b.docKey));
@@ -84,7 +87,9 @@ export function compileGameSection(documents, options = {}) {
     for (const assetId of Array.isArray(doc.body.models) ? doc.body.models : []) needAsset(doc, assetId, ["model"], label + " (uiterlijk)");
     return classValues(doc.body);
   });
-  const player = Object.assign(classValues(null), { xpPerLevel: projectValues.xpPerLevel, maxLevel: projectValues.maxLevel });
+  const player = Object.assign(classValues(null), { xpPerLevel: projectValues.xpPerLevel, maxLevel: projectValues.maxLevel,
+    // Fase 6: de XP-grafiek (leeg = overal XP per level).
+    xpCurve: Array.isArray(projectValues.xpCurve) && projectValues.xpCurve.length >= 2 ? projectValues.xpCurve.map((point) => point.slice(0, 2)) : null });
   if (classes.length) player.classes = classes;
 
   const legacyHudBody = of("hud_settings")[0]?.body || null;

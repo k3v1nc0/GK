@@ -6,6 +6,7 @@
 // ui (icoon, bediening, plek, stap, eenheid), default en help (Ⓘ: waarvoor / goede waarden / probleem → oplossing).
 // De Werkbank en Instellingen tekenen zichzelf hieruit. De default wordt alleen gebruikt bij "nieuw", nooit bij lezen.
 import { AREA_SHAPES, MAX_WORLD_MM, polygonProblem } from "../../../apps/web/public/shared/spatial.js";
+import { LEVEL_LIMIT, XP_CURVE_MAX_POINTS } from "../../../apps/web/public/shared/level-math.js";
 import { ACTOR_KINDS } from "./kinds/actor.js";
 import { COMBAT_KINDS } from "./kinds/combat.js";
 import { LOOT_ENTRY_KEYS, LOOT_KINDS } from "./kinds/loot.js";
@@ -67,11 +68,16 @@ export const CANONICAL_KINDS = {
       // Klassen (29-10): de aanval van de speler staat nu per klasse (Instellingen > Klassen), niet meer hier.
       // Klassen (29-10): de levelregels gelden voor alle klassen samen (stonden eerst op de kaart Speler).
       xpPerLevel: { type: "integer", required: false, min: 10, max: 1000000, audience: "client", label: "XP per level",
-        ui: ui("⭐", "slider", "instellingen", { step: 10, range: [10, 5000] }), default: 100,
-        help: help("Hoeveel XP je nodig hebt voor elk volgend level (alle klassen).", "100 aan het begin.", "Spelers stijgen te snel → hoger.") },
+        ui: ui("⭐", "slider", "instellingen", { step: 10, range: [10, 5000], hideWhen: "xpCurve" }), default: 100,
+        help: help("Hoeveel XP je nodig hebt voor elk volgend level (alle klassen). Zodra je in de grafiek hieronder punten zet, geldt de grafiek.", "100 aan het begin.", "Spelers stijgen te snel → hoger.") },
       maxLevel: { type: "integer", required: false, min: 1, max: 500, audience: "client", label: "Hoogste level",
         ui: ui("🏆", "slider", "instellingen", { step: 1, range: [1, 100] }), default: 50,
-        help: help("Het hoogste level dat een character kan halen.", "20 tot 60.", "Spelers zitten vast op het hoogste level → hoger.") }
+        help: help("Het hoogste level dat een character kan halen.", "20 tot 60.", "Spelers zitten vast op het hoogste level → hoger.") },
+      // Fase 6: de XP-curve als grafiek. Elk punt is [level, XP die dat level kost]; ertussen loopt de lijn recht.
+      // Leeg = overal "XP per level". Characters houden hun XP; hun level volgt de nieuwe lijn.
+      xpCurve: { type: "pointList", required: false, minItems: 2, maxItems: XP_CURVE_MAX_POINTS, min: 1, max: 100000000, audience: "client", label: "XP-grafiek",
+        ui: ui("📈", "curve", "instellingen"), default: null,
+        help: help("Hoeveel XP elk level kost, als lijn. Links de eerste levels, rechts het hoogste level. Sleep een punt omhoog om die levels langer te laten duren.", "Laag beginnen en langzaam oplopen: bijv. level 1 kost 100 XP, level 10 kost 600 en level 50 kost 5.000. Klik op de lijn voor een extra punt.", "Spelers zijn in een uur op het hoogste level → sleep de punten rechts omhoog. Characters houden hun XP; hun level past zich aan.") }
     }
   },
   item_definition: {
@@ -143,6 +149,11 @@ export const CANONICAL_KINDS = {
       armorBonus: { type: "integer", required: false, min: 0, max: 1000000, audience: "client", label: "Extra pantser",
         ui: ui("🛡️", "slider", "werkbank", { step: 1, range: [0, 100], more: true }), default: 0,
         help: help("Hoeveel minder schade je krijgt als je dit draagt.", "1-5 voor de eerste kleding.", "Spelers onkwetsbaar → lager.") },
+      // Fase 6: uitrusting vanaf een level. Onder dat level kun je het niet aandoen; tegen een vijand van een lager level
+      // telt de bonus naar verhouding (schaling, Instellingen > Genezen en effecten).
+      requiredLevel: { type: "integer", required: false, min: 1, max: LEVEL_LIMIT, audience: "client", label: "Vanaf level",
+        ui: ui("🎚️", "slider", "werkbank", { step: 1, range: [1, 100], more: true }), default: 1,
+        help: help("Vanaf welk level je dit kunt aandoen. Staat schaling aan, dan telt de bonus tegen een vijand van een lager level maar voor een deel (een zwaard vanaf level 10 telt tegen een level-5 vijand voor de helft).", "1 voor de eerste spullen; daarna het level van het gebied waar je het vindt.", "Beginners lopen met het sterkste zwaard → zet hier een hoger level.") },
       // Stap 4 (HUD): eten en drinken. Met een waarde boven 0 krijgt het item in de tas de knop Gebruiken.
       // Healing (2-11): alles over gebruiken staat samen in het uitklapblok "Gebruiken" onderaan het item.
       healAmount: { type: "integer", required: false, min: 0, max: 1000000, audience: "client", label: "Geneest meteen",
@@ -553,6 +564,14 @@ function shapeIssues(kind, body, issues) {
   // Quest en NPC: doel/winkel-regels controleert de build (zo kun je velden in elke volgorde invullen).
   if (kind === "quest") {
     if (body.previousQuestRef && body.previousQuestRef === "quest:" + body.questId) issues.push(issue("previousQuestRef", "QUEST_SELF", "Een quest kan niet na zichzelf komen."));
+    return;
+  }
+  if (kind === "project_settings") {
+    // Fase 6: de XP-grafiek. Elk punt is [level, XP]; één punt per level en geen level boven de grens.
+    const curve = Array.isArray(body.xpCurve) ? body.xpCurve : [];
+    const levels = curve.map((point) => point[0]);
+    if (levels.some((level) => level > LEVEL_LIMIT)) issues.push(issue("xpCurve", "XP_CURVE_LEVEL", "XP-grafiek: een punt staat boven level " + LEVEL_LIMIT + "."));
+    if (new Set(levels).size !== levels.length) issues.push(issue("xpCurve", "XP_CURVE_DOUBLE", "XP-grafiek: twee punten op hetzelfde level."));
     return;
   }
   if (kind === "item_definition") {

@@ -3,6 +3,7 @@ import { ActionCooldowns, assertDeveloperActionAllowed, developerActionsAllowed,
 import { runOperation } from "./persistence/operation-contract.js";
 import { isCombatIntent, sanitizeCombatIntent } from "./runtime/combat-adapter.js";
 import { computeDamage } from "../../apps/web/public/shared/combat-math.js";
+import { equipBonusAt, levelEdgePct, statAtLevel, toRealPool } from "../../apps/web/public/shared/level-math.js";
 import { isActorInstanceId, isResourceInstanceId } from "./runtime/actor-runtime.js";
 import { computeHeal, describeEffect, effectBonuses, effectFromSource } from "../../apps/web/public/shared/effect-math.js";
 import { applyEffect, clearEffectsForDeath, combatRulesFromProject, itemCooldowns, itemReadyInMs, loadActiveEffects, planEffect, publicEffects, setItemCooldown } from "./runtime/player-effects.js";
@@ -22,6 +23,8 @@ const DEFAULT_CHARACTER_ID = "player.desert_guardian";
 const DEFAULT_BIND_STATE = "unbound";
 // Fase 5: indeling van vak 2 en 3 per character (player_ability_loadouts).
 const HOTBAR_LOADOUT_ID = "hotbar";
+// Fase 6: balken (houden hun stand); de andere stats (kracht, pantser, heal-kracht) staan altijd op hun maximum.
+const POOL_STAT_IDS = new Set([HEALTH_STAT_ID, MANA_STAT_ID, STAMINA_STAT_ID]);
 const SKILL_SLOTS = Object.freeze([2, 3]);
 
 function now() {
@@ -214,6 +217,17 @@ function statBlockValues(catalogs, statBlockRef) {
   return result;
 }
 
+// Fase 6: wat een klasse er per level bij krijgt (per stat). Een oudere build zonder groei geeft overal 0.
+function statBlockGrowth(catalogs, statBlockRef) {
+  const block = catalogSection(catalogs, "statBlocks")[statBlockRef] || null;
+  const result = {};
+  for (const entry of Array.isArray(block?.entries) ? block.entries : []) {
+    const statRef = safeString(entry?.statRef, "");
+    if (statRef) result[statRef] = Math.max(0, safeNumber(entry?.perLevel, 0));
+  }
+  return result;
+}
+
 function applyStatMultipliers(baseStats, variant) {
   const multipliers = variant && typeof variant.statMultipliers === "object" ? variant.statMultipliers : {};
   const result = Object.assign({}, baseStats);
@@ -224,16 +238,27 @@ function applyStatMultipliers(baseStats, variant) {
   return result;
 }
 
-function xpForLevel(catalogs, curveRef, level) {
-  const targetLevel = Math.max(1, safeInteger(level, 1));
-  if (targetLevel <= 1) return 0;
-  const curve = catalogSection(catalogs, "statCurves")[curveRef] || firstObjectValue(catalogSection(catalogs, "statCurves"));
-  const points = (Array.isArray(curve?.points) ? curve.points : [])
+// Fase 6: de XP-tabel heeft een punt per level; sorteren doen we één keer per curve (niet bij elke vraag).
+const CURVE_POINTS = new WeakMap();
+function sortedCurvePoints(curve) {
+  if (!curve || typeof curve !== "object") return [];
+  let points = CURVE_POINTS.get(curve);
+  if (points) return points;
+  points = (Array.isArray(curve.points) ? curve.points : [])
     .map(function (point) {
       return { x: safeNumber(point?.x, 0), y: safeNumber(point?.y, 0) };
     })
     .filter(function (point) { return Number.isFinite(point.x) && Number.isFinite(point.y); })
     .sort(function (left, right) { return left.x - right.x; });
+  CURVE_POINTS.set(curve, points);
+  return points;
+}
+
+function xpForLevel(catalogs, curveRef, level) {
+  const targetLevel = Math.max(1, safeInteger(level, 1));
+  if (targetLevel <= 1) return 0;
+  const curve = catalogSection(catalogs, "statCurves")[curveRef] || firstObjectValue(catalogSection(catalogs, "statCurves"));
+  const points = sortedCurvePoints(curve);
   if (!points.length) return (targetLevel - 1) * 100;
   const exact = points.find(function (point) { return point.x === targetLevel; });
   if (exact) return Math.max(0, Math.floor(exact.y));
@@ -620,39 +645,71 @@ export class Node03RuntimeService {
   }
 
   ensureProgression(ctx) {
-    const existing = this.db.prepare("SELECT player_id FROM player_progression WHERE player_id = ? LIMIT 1").get(ctx.profile.id);
-    if (existing) return;
-    this.db.prepare("INSERT INTO player_progression (player_id, level, xp, skill_points, revision, updated_at) VALUES (?, 1, 0, 0, 1, ?)")
-      .run(ctx.profile.id, now());
+    const existing = this.db.prepare("SELECT level, xp FROM player_progression WHERE player_id = ? LIMIT 1").get(ctx.profile.id);
+    if (!existing) {
+      this.db.prepare("INSERT INTO player_progression (player_id, level, xp, skill_points, revision, updated_at) VALUES (?, 1, 0, 0, 1, ?)")
+        .run(ctx.profile.id, now());
+      return;
+    }
+    // Fase 6: de XP-grafiek of het hoogste level kan veranderd zijn. De XP blijft; het level volgt de nieuwe lijn.
+    const progressionPolicy = policiesOfType(ctx.project, "player_progression_rules")[0] || {};
+    const level = levelForXp(ctx.catalogs, progressionPolicy.xpCurveRef || "stat_curve.player_xp", existing.xp, progressionPolicy.maxLevel || 10);
+    if (level !== safeInteger(existing.level, 1)) {
+      this.db.prepare("UPDATE player_progression SET level = ?, revision = revision + 1, updated_at = ? WHERE player_id = ?").run(level, now(), ctx.profile.id);
+    }
   }
 
   ensureStats(ctx, character) {
     const progressionPolicy = policiesOfType(ctx.project, "player_progression_rules")[0] || {};
     const statBlockRef = character?.statBlockRef || progressionPolicy.baseStatBlockRef || "stat_block.player.desert";
-    const baseStats = statBlockValues(ctx.catalogs, statBlockRef);
+    const level = Math.max(1, safeInteger(this.db.prepare("SELECT level FROM player_progression WHERE player_id = ? LIMIT 1").get(ctx.profile.id)?.level, 1));
+    this.syncStatsForLevel(ctx.profile.id, ctx.catalogs, statBlockRef, level);
+  }
+
+  // Fase 6: de stats van een character horen bij zijn klasse en zijn level: basis + groei per level (earned_value).
+  // Levens en mana houden hun stand (groeit het maximum, dan krijg je het verschil erbij); kracht, pantser en heal-kracht
+  // staan altijd op hun maximum.
+  syncStatsForLevel(playerId, catalogs, statBlockRef, level) {
+    const baseStats = statBlockValues(catalogs, statBlockRef);
+    const growth = statBlockGrowth(catalogs, statBlockRef);
+    const steps = Math.max(1, safeInteger(level, 1)) - 1;
     const stamp = now();
     for (const [statId, baseValue] of Object.entries(baseStats)) {
-      const existing = this.db.prepare("SELECT * FROM player_stats WHERE player_id = ? AND stat_id = ? LIMIT 1").get(ctx.profile.id, statId);
+      const earned = safeNumber(growth[statId], 0) * steps;
+      const max = baseValue + earned;
+      const existing = this.db.prepare("SELECT * FROM player_stats WHERE player_id = ? AND stat_id = ? LIMIT 1").get(playerId, statId);
       if (!existing) {
         this.db.prepare(`
           INSERT INTO player_stats (player_id, stat_id, base_value, earned_value, current_value, revision, updated_at)
-          VALUES (?, ?, ?, 0, ?, 1, ?)
-        `).run(ctx.profile.id, statId, baseValue, baseValue, stamp);
+          VALUES (?, ?, ?, ?, ?, 1, ?)
+        `).run(playerId, statId, baseValue, earned, max, stamp);
         continue;
       }
-      const earned = safeNumber(existing.earned_value, 0);
-      const max = baseValue + earned;
-      const current = existing.current_value === null || existing.current_value === undefined
-        ? null
-        : clamp(safeNumber(existing.current_value, max), 0, max);
-      if (safeNumber(existing.base_value, 0) !== baseValue || current !== existing.current_value) {
+      const oldMax = safeNumber(existing.base_value, 0) + safeNumber(existing.earned_value, 0);
+      let current = existing.current_value;
+      if (!POOL_STAT_IDS.has(statId)) current = max;
+      else if (current !== null && current !== undefined) {
+        const had = safeNumber(current, oldMax);
+        current = clamp(had > 0 && max > oldMax ? had + (max - oldMax) : had, 0, max);
+      }
+      if (safeNumber(existing.base_value, 0) !== baseValue || safeNumber(existing.earned_value, 0) !== earned || current !== existing.current_value) {
         this.db.prepare(`
           UPDATE player_stats
-          SET base_value = ?, current_value = ?, revision = revision + 1, updated_at = ?
+          SET base_value = ?, earned_value = ?, current_value = ?, revision = revision + 1, updated_at = ?
           WHERE player_id = ? AND stat_id = ?
-        `).run(baseValue, current, stamp, ctx.profile.id, statId);
+        `).run(baseValue, earned, current, stamp, playerId, statId);
       }
     }
+  }
+
+  // De klasse (stat-blok) van een character, ook als we alleen zijn id hebben (iemand die meevocht en nu een level stijgt).
+  statBlockRefForPlayer(ctx, playerId) {
+    const progressionPolicy = policiesOfType(ctx.project, "player_progression_rules")[0] || {};
+    const characters = catalogSection(ctx.catalogs, "playableCharacters");
+    let classId = playerId === ctx.profile?.id ? safeString(ctx.profile.selected_character_id, "") : "";
+    if (!classId) classId = safeString(this.db.prepare("SELECT selected_character_id FROM player_profiles WHERE id = ? LIMIT 1").get(playerId)?.selected_character_id, "");
+    const character = characters[classId] || characters[DEFAULT_CHARACTER_ID] || firstObjectValue(characters) || null;
+    return character?.statBlockRef || progressionPolicy.baseStatBlockRef || "stat_block.player.desert";
   }
 
   ensureStartingInventoryAndCurrencies(ctx, character) {
@@ -753,6 +810,11 @@ export class Node03RuntimeService {
     const item = catalogSection(ctx.catalogs, "items")[instance.item_id] || {};
     const slotId = safeString(item.equipmentSlotRef, "");
     if (!slotId || !catalogSection(ctx.catalogs, "equipmentSlots")[slotId]) throw fail(409, (item.displayName || instance.item_id) + " kun je niet dragen.");
+    // Fase 6: uitrusting "vanaf level".
+    const needLevel = Math.max(1, safeInteger(item.requiredLevel, 1));
+    if (needLevel > 1 && this.levelOfPlayer(ctx.profile.id) < needLevel) {
+      throw httpError(409, (item.displayName || instance.item_id) + " kun je pas dragen vanaf level " + needLevel + ".", "LEVEL_TOO_LOW");
+    }
     const stamp = now();
     const current = this.db.prepare("SELECT * FROM player_equipment WHERE player_id = ? AND slot_id = ? LIMIT 1").get(ctx.profile.id, slotId);
     if (current) {
@@ -1368,6 +1430,7 @@ export class Node03RuntimeService {
       SET level = 1, xp = 0, skill_points = 0, revision = revision + 1, updated_at = ?
       WHERE player_id = ?
     `).run(now(), ctx.profile.id);
+    if (beforeLevel !== 1) this.levelChanged(ctx, ctx.profile.id, beforeLevel, 1);
     if (beforeXp > 0) {
       this.recordLedger(operationId, ctx.profile.id, "xp", "xp", -beforeXp, beforeXp, 0, "hud_debug_level_reset", "debug_hud");
     }
@@ -2196,18 +2259,35 @@ export class Node03RuntimeService {
       WHERE player_id = ?
     `).run(afterXp, afterLevel, skillGain, now(), ctx.profile.id);
     this.recordLedger(operationId, ctx.profile.id, "xp", "xp", amount, beforeXp, afterXp, reason, sourceRef);
-    // Healing (2-11): level omhoog = levens en mana vol (Instellingen > Genezen en effecten).
-    if (afterLevel > beforeLevel && this.combatRules(ctx.project).levelUpRestore) {
-      this.db.prepare("UPDATE player_stats SET current_value = base_value + earned_value, revision = revision + 1, updated_at = ? WHERE player_id = ? AND stat_id IN (?, ?)")
-        .run(now(), ctx.profile.id, HEALTH_STAT_ID, MANA_STAT_ID);
-    }
+    if (afterLevel !== beforeLevel) this.levelChanged(ctx, ctx.profile.id, beforeLevel, afterLevel);
     return { kind: "xp", amount, beforeXp, afterXp, beforeLevel, afterLevel };
+  }
+
+  // Fase 6: een character kreeg een ander level. Zijn stats groeien mee (klasse: groei per level); bij omhoog
+  // levens en mana vol (Instellingen > Genezen en effecten) en iedereen in de buurt ziet het effect.
+  levelChanged(ctx, playerId, beforeLevel, afterLevel) {
+    this.syncStatsForLevel(playerId, ctx.catalogs, this.statBlockRefForPlayer(ctx, playerId), afterLevel);
+    if (afterLevel <= beforeLevel) return;
+    if (this.combatRules(ctx.project).levelUpRestore) {
+      this.db.prepare("UPDATE player_stats SET current_value = base_value + earned_value, revision = revision + 1, updated_at = ? WHERE player_id = ? AND stat_id IN (?, ?)")
+        .run(now(), playerId, HEALTH_STAT_ID, MANA_STAT_ID);
+    }
+    this.broadcastFx(ctx.worldId, { target: playerId, tone: "levelup", level: afterLevel });
+    // Ook wie meevocht (niet de speler van deze actie) ziet zijn balken meteen groeien.
+    const vitals = this.vitals();
+    if (vitals) setTimeout(() => { try { vitals.push(playerId, ctx.worldId, Date.now(), null, [], true); } catch {} }, 0);
+  }
+
+  // Fase 6: het level van een character (1 als hij nog geen voortgang heeft).
+  levelOfPlayer(playerId) {
+    return Math.max(1, safeInteger(this.db.prepare("SELECT level FROM player_progression WHERE player_id = ? LIMIT 1").get(playerId)?.level, 1));
   }
 
   // ---- Fase 05: canonieke vijanden en grondstoffen (plan in actor-runtime, schrijven hier, in de operatie) ----
 
   // Bonus van gedragen uitrusting (canonieke items: attackPowerBonus / armorBonus).
-  equipmentBonusesForPlayer(playerId, catalogs) {
+  // Fase 6: atLevel = het level waar de speler nu als telt (schaling). Uitrusting "vanaf level N" telt onder N naar verhouding.
+  equipmentBonusesForPlayer(playerId, catalogs, atLevel = null) {
     const items = catalogSection(catalogs, "items");
     const bonus = { attackPower: 0, armor: 0 };
     const rows = this.db.prepare(`
@@ -2215,10 +2295,39 @@ export class Node03RuntimeService {
     `).all(playerId);
     for (const row of rows) {
       const item = items[row.item_id] || {};
-      bonus.attackPower += Math.max(0, safeInteger(item.attackPowerBonus, 0));
-      bonus.armor += Math.max(0, safeInteger(item.armorBonus, 0));
+      const part = (value) => (atLevel ? equipBonusAt(value, safeInteger(item.requiredLevel, 1), atLevel) : value);
+      bonus.attackPower += part(Math.max(0, safeInteger(item.attackPowerBonus, 0)));
+      bonus.armor += part(Math.max(0, safeInteger(item.armorBonus, 0)));
     }
     return bonus;
+  }
+
+  // Fase 6: hoe een speler telt tegen een vijand van een level.
+  // Schaling aan: zijn klasse-stats op het level van de vijand, uitrusting naar verhouding, en het schuifje Verschil per level
+  // (edgePct: plus = voordeel, min = nadeel). Schaling uit of geen vijand-level: zijn echte stats, geen voordeel.
+  // source: { catalogs, project, profile? } (bij een klap van een vijand is er geen request).
+  fightProfile(source, playerId, stats, enemyLevel, nowMs) {
+    const rules = this.combatRules(source.project);
+    const playerLevel = this.levelOfPlayer(playerId);
+    const scaled = rules.levelScaling && Number.isFinite(Number(enemyLevel)) && Number(enemyLevel) >= 1;
+    const level = scaled ? Math.max(1, Math.round(Number(enemyLevel))) : playerLevel;
+    const growth = scaled && level !== playerLevel ? statBlockGrowth(source.catalogs, this.statBlockRefForPlayer(source, playerId)) : null;
+    const classStat = (statId, fallback) => {
+      const row = stats.byId[statId];
+      if (!row) return fallback;
+      return growth ? statAtLevel(row.baseValue, growth[statId], level) : row.baseValue + row.earnedValue;
+    };
+    const gear = this.equipmentBonusesForPlayer(playerId, source.catalogs, scaled ? level : null);
+    const bonus = effectBonuses(loadActiveEffects(this.db, playerId, nowMs));
+    return {
+      scaled, playerLevel, level,
+      edgePct: scaled ? levelEdgePct(playerLevel, level, rules.levelDiffPct, rules.levelDiffMaxPct) : 0,
+      attackPower: Math.max(0, classStat(ATTACK_POWER_STAT_ID, 10) + gear.attackPower + bonus.attackPower),
+      armor: Math.max(0, classStat(ARMOR_STAT_ID, 0) + gear.armor + bonus.armor),
+      // De levensbalk op het getelde level en de echte balk: schade wordt hetzelfde deel van de balk.
+      healthMax: Math.max(1, classStat(HEALTH_STAT_ID, 1)),
+      realHealthMax: Math.max(1, effectiveMaxStat(stats.byId[HEALTH_STAT_ID], 1))
+    };
   }
 
   positionIsSafe(ctx) {
@@ -2252,8 +2361,13 @@ export class Node03RuntimeService {
     }
     const stats = this.loadPlayerStats(ctx.profile.id);
     const nowMs = Date.now();
-    const bonus = effectBonuses(loadActiveEffects(this.db, ctx.profile.id, nowMs));
-    const attackPower = Math.max(0, statValue(stats.byId, ATTACK_POWER_STAT_ID, 10) + this.equipmentBonusesForPlayer(ctx.profile.id, ctx.catalogs).attackPower + bonus.attackPower);
+    // Fase 6: per vijand-level uitrekenen hoe deze speler telt (de ring kan vijanden van verschillend level raken).
+    const fights = new Map();
+    const fight = (enemyLevel) => {
+      const key = Math.max(1, Math.round(Number(enemyLevel) || 1));
+      if (!fights.has(key)) fights.set(key, this.fightProfile(ctx, ctx.profile.id, stats, key, nowMs));
+      return fights.get(key);
+    };
     // Healing (2-11): een aanval kan mana kosten.
     const ability = skill || playerAbilityFromSection(runtime.ensureBuild(nowMs), ctx.profile.selected_character_id || null);
     const manaCost = Math.max(0, safeInteger(ability.manaCost, 0));
@@ -2263,7 +2377,7 @@ export class Node03RuntimeService {
     const planned = runtime.planPlayerAttack({
       playerId: ctx.profile.id, classId: ctx.profile.selected_character_id || null, targetId, x: safeNumber(ctx.position?.x, 0), z: safeNumber(ctx.position?.z, 0),
       y: Number.isFinite(Number(ctx.position?.y)) ? Number(ctx.position.y) : null,
-      safe: this.positionIsSafe(ctx), attackPower, nowMs: Date.now(), operationId, ability: skill || null
+      safe: this.positionIsSafe(ctx), fight, nowMs: Date.now(), operationId, ability: skill || null
     });
     if (planned.result) return planned.result;
     const plan = planned.plan;
@@ -2432,7 +2546,20 @@ export class Node03RuntimeService {
       }
     }
     const bonus = effectBonuses(loadActiveEffects(this.db, ctx.profile.id, nowMs));
-    const amount = computeHeal(ability, statValue(stats.byId, HEAL_POWER_STAT_ID, 0) + bonus.healPower);
+    let amount = computeHeal(ability, effectiveMaxStat(stats.byId[HEAL_POWER_STAT_ID], 0) + bonus.healPower);
+    if (!target.self) {
+      // Fase 6: een genezing vult bij een ander hetzelfde deel van de balk als bij iemand van je eigen level
+      // (schaling aan: het doel telt als het level van de genezer). En wie een vechtende speler geneest, doet zelf mee.
+      if (this.combatRules(ctx.project).levelScaling) {
+        const targetRow = this.loadPlayerStats(target.id).byId[HEALTH_STAT_ID];
+        const myLevel = this.levelOfPlayer(ctx.profile.id);
+        if (targetRow && myLevel !== this.levelOfPlayer(target.id)) {
+          const growth = statBlockGrowth(ctx.catalogs, this.statBlockRefForPlayer(ctx, target.id));
+          amount = toRealPool(amount, targetHealth.max, Math.max(1, statAtLevel(targetRow.baseValue, growth[HEALTH_STAT_ID], myLevel)));
+        }
+      }
+      runtime?.creditHelper?.(ctx.profile.id, target.id);
+    }
     const after = Math.min(targetHealth.max, targetHealth.current + amount);
     const healed = Math.round(after - targetHealth.current);
     if (healed > 0) {
@@ -2467,20 +2594,29 @@ export class Node03RuntimeService {
   }
 
   // Een vijand raakt een speler (aangeroepen vanuit de worldtick). Eigen kleine transactie; schade met dezelfde rekenregel.
-  applyActorHit({ worldId, playerId, actorId, label, ability, attackPower }) {
+  // Fase 6: level = het level van de vijand. Met schaling telt de speler als dat level (pantser op dat level), en de schade
+  // wordt hetzelfde deel van zijn echte levensbalk; een hoger level krijgt iets minder, een lager level iets meer (schuifje).
+  applyActorHit({ worldId, playerId, actorId, label, ability, attackPower, level = null }) {
     const stats = this.loadPlayerStats(playerId);
     if (!stats.byId[HEALTH_STAT_ID]) return null;
     const before = statValue(stats.byId, HEALTH_STAT_ID, 1);
     if (before <= 0) return { damage: 0, remainingHealth: 0, defeated: true };
     let catalogs = {};
-    try { catalogs = resolveCatalogs(this.mmoService.getPublishedWorldContext().world); } catch {}
+    let project = {};
+    try {
+      const world = this.mmoService.getPublishedWorldContext().world;
+      catalogs = resolveCatalogs(world);
+      project = resolveProject(world);
+    } catch {}
     const nowMs = Date.now();
-    const bonus = effectBonuses(loadActiveEffects(this.db, playerId, nowMs));
-    const armor = Math.max(0, statValue(stats.byId, ARMOR_STAT_ID, 0) + this.equipmentBonusesForPlayer(playerId, catalogs).armor + bonus.armor);
-    const damage = computeDamage(ability, attackPower, armor);
+    const fight = this.fightProfile({ catalogs, project }, playerId, stats, level, nowMs);
+    let damage = computeDamage(ability, attackPower, fight.armor);
+    if (fight.scaled) {
+      if (fight.edgePct) damage = Math.max(1, Math.round(damage * (100 - fight.edgePct) / 100));
+      damage = toRealPool(damage, fight.realHealthMax, fight.healthMax);
+    }
     this.vitals()?.markCombat(playerId, nowMs);
-    let rules = null;
-    try { rules = this.combatRules(resolveProject(this.mmoService.getPublishedWorldContext().world)); } catch { rules = this.combatRules({}); }
+    const rules = this.combatRules(project);
     const after = Math.max(0, before - damage);
     const operationId = randomId("actor_hit");
     const ctx = { worldId, zoneId: null, profile: { id: playerId } };
@@ -2747,6 +2883,9 @@ export class Node03RuntimeService {
     const xp = xpForLevel(ctx.catalogs, curveRef, level);
     this.db.prepare("UPDATE player_progression SET level = ?, xp = ?, revision = revision + 1, updated_at = ? WHERE player_id = ?").run(level, xp, now(), ctx.profile.id);
     if (xp !== beforeXp) this.recordLedger(operationId, ctx.profile.id, "xp", "xp", xp - beforeXp, beforeXp, xp, "maker_level", "maker");
+    // Fase 6: de stats horen bij het level (ook omlaag, zodat de maker elk level kan uitproberen).
+    const beforeLevel = Math.max(1, safeInteger(row.level, 1));
+    if (level !== beforeLevel) this.levelChanged(ctx, ctx.profile.id, beforeLevel, level);
     return { action: "maker_level", level, xp, message: "Maker: level " + level + (level === maxLevel ? " (hoogste level)" : "") + "." };
   }
 
@@ -2767,9 +2906,14 @@ export class Node03RuntimeService {
     const currentLevelXp = xpForLevel(ctx.catalogs, curveRef, level);
     const nextLevelXp = xpForLevel(ctx.catalogs, curveRef, level + 1);
     const span = Math.max(1, nextLevelXp - currentLevelXp);
+    // Fase 6: wat deze klasse er per level bij krijgt (voor de level-up melding) en het hoogste level.
+    const growth = statBlockGrowth(ctx.catalogs, this.statBlockRefForPlayer(ctx, ctx.profile.id));
     return {
       level,
       xp,
+      maxLevel: Math.max(1, safeInteger(progressionPolicy.maxLevel, 10)),
+      perLevel: { health: growth[HEALTH_STAT_ID] || 0, attackPower: growth[ATTACK_POWER_STAT_ID] || 0, armor: growth[ARMOR_STAT_ID] || 0,
+        mana: growth[MANA_STAT_ID] || 0, healPower: growth[HEAL_POWER_STAT_ID] || 0 },
       skillPoints: safeInteger(row.skill_points, 0),
       currentLevelXp,
       nextLevelXp,
@@ -2847,6 +2991,7 @@ export class Node03RuntimeService {
           return effect ? { name: effect.name, iconAssetId: effect.iconAssetId, durationMs: effect.durationMs, lines: describeEffect(effect) } : null;
         })(),
         attackPowerBonus: safeInteger(item.attackPowerBonus, 0),
+        requiredLevel: Math.max(1, safeInteger(item.requiredLevel, 1)),
         armorBonus: safeInteger(item.armorBonus, 0),
         questItem: item.questItem === true || item.category === "quest",
         readable: reads.has(item.id),

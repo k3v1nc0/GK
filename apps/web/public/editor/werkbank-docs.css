@@ -113,6 +113,18 @@
 .wbdGroup > .wbdGroupToggle { justify-self: stretch; text-align: left; border: 0; padding: 2px 4px; color: var(--wbd-text); font-weight: 600; }
 .wbdMore { padding-top: 4px; border-top: 1px dashed var(--wbd-line); }
 .wbdNote { color: var(--wbd-muted); font-size: 12px; }
+/* Fase 6: de XP-grafiek (Instellingen > Project) */
+.wbdCurveBox { display: grid; gap: 6px; }
+.wbdCurve { width: 100%; max-width: 560px; height: auto; background: #0b121b; border: 1px solid var(--wbd-line); border-radius: 8px; touch-action: none; cursor: crosshair; user-select: none; }
+.wbdCurveGrid { stroke: #223041; stroke-width: 1; }
+.wbdCurveText { fill: #8fa1b3; font-size: 8px; }
+.wbdCurveLine { fill: none; stroke: var(--wbd-accent); stroke-width: 2; stroke-linejoin: round; }
+.wbdCurveGhost { stroke-dasharray: 5 4; opacity: .7; }
+.wbdCurveDot { fill: #fff2dc; stroke: var(--wbd-accent); stroke-width: 3; cursor: grab; }
+.wbdCurveDot:hover { fill: #ffffff; }
+.wbdCurveList { display: grid; gap: 4px; }
+.wbdCurveRow { display: flex; align-items: center; gap: 6px; }
+.wbdCurveRow .wbdCurveCost { width: 96px; }
 .wbdEmpty { color: var(--wbd-muted); padding: 12px; text-align: center; }
 .wbdMuted { color: var(--wbd-muted); font-size: 11px; }
 .wbdActions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 4px; }

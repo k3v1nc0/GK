@@ -51,6 +51,9 @@ export function runtimeItemFromCanonical(item, legacy = null) {
     if (Number.isInteger(item[field]) && item[field] > 0) runtime[field] = item[field];
     else delete runtime[field];
   }
+  // Fase 6: uitrusting "vanaf level" (1 = altijd; dan sturen we niets mee).
+  if (Number.isInteger(item.requiredLevel) && item.requiredLevel > 1) runtime.requiredLevel = item.requiredLevel;
+  else delete runtime.requiredLevel;
   // Healing (2-11): het effect bij gebruiken (min mag: bijv. een vies drankje met -2 pantser).
   for (const field of ["effectAttackPower", "effectArmor", "effectHealPower", "effectHealthPctBp", "effectManaPctBp"]) {
     if (Number.isInteger(item[field]) && item[field] !== 0) runtime[field] = item[field];

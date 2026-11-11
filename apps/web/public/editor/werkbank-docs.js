@@ -6,6 +6,7 @@ import { createAssetPicker, createMiniPicker } from "./mini-asset-picker.js?v=20
 import { convertShape } from "./werkbank-world.js?v=20261108-portals1";
 import { renderUsers } from "./werkbank-users.js?v=20261104-account-reset1";
 import { computeDamage, rollLoot } from "../shared/combat-math.js";
+import { cleanXpCurve, xpCostAt, xpTotals } from "../shared/level-math.js";
 import { areaCenterMm, areaCirclePointsMm, areaRectPointsMm, areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261108-roads7";
 import { QUEST_START_MODES, hasOwnSteps, objectiveText, questGraphIssues, questStartIssues, questStartMode, requirementText, stepsFromSimple } from "../shared/quest-graph.js?v=20261110-fase5";
 import { openQuestBuilder } from "./quest-builder.js?v=20261110-fase5";
@@ -622,6 +623,123 @@ export function createDocBench(options = {}) {
     return wrap;
   }
 
+  // Fase 6: de XP-grafiek. Links level 1, rechts het hoogste level; de hoogte van de lijn = hoeveel XP dat level kost.
+  // Sleep een punt, klik op een lege plek voor een nieuw punt, dubbelklik (of ✕) haalt een punt weg.
+  // Zonder punten geldt overal "XP per level": dat zie je als stippellijn.
+  function curveControl(field, value, body, onChange) {
+    const project = bench.spec("project_settings")?.fields || {};
+    const maxLevel = Math.max(2, Number(body.maxLevel) || Number(project.maxLevel?.default) || 50);
+    const flat = Math.max(1, Number(body.xpPerLevel) || Number(project.xpPerLevel?.default) || 100);
+    const own = Array.isArray(value) && value.length >= 2;
+    let points = own ? cleanXpCurve(value, maxLevel) : [[1, flat], [maxLevel, flat]];
+    const W = 320; const H = 170; const L = 44; const R = 10; const T = 10; const B = 22;
+    const nice = (amount) => { const base = Math.pow(10, Math.floor(Math.log10(Math.max(10, amount)))); return Math.ceil(amount / base) * base; };
+    let top = nice(Math.max(200, ...points.map((point) => point[1])) * 1.3);
+    const xOf = (level) => L + (W - L - R) * (level - 1) / (maxLevel - 1);
+    const yOf = (cost) => H - B - (H - T - B) * Math.min(1, cost / top);
+    const levelAt = (x) => Math.max(1, Math.min(maxLevel, Math.round(1 + (x - L) / (W - L - R) * (maxLevel - 1))));
+    const costAt = (y) => { const raw = (H - B - y) / (H - T - B) * top; const step = top > 2000 ? 50 : 10; return Math.max(step, Math.min(top, Math.round(raw / step) * step)); };
+    const svgEl = (tag, attrs) => { const node = document.createElementNS("http://www.w3.org/2000/svg", tag); for (const [key, val] of Object.entries(attrs)) node.setAttribute(key, String(val)); return node; };
+    const svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, class: "wbdCurve", role: "img", "aria-label": "XP-grafiek" });
+    const summary = el("div", { class: "wbdNote wbdCurveSum" });
+    const list = el("div", { class: "wbdCurveList" });
+    const number = (amount) => Math.round(amount).toLocaleString("nl-NL");
+    const save = () => onChange(points.map((point) => [point[0], point[1]]));
+    let drag = null;
+    const toLocal = (event) => { const box = svg.getBoundingClientRect(); return { x: (event.clientX - box.left) / Math.max(1, box.width) * W, y: (event.clientY - box.top) / Math.max(1, box.height) * H }; };
+    const draw = () => {
+      svg.replaceChildren();
+      for (let step = 0; step <= 4; step += 1) {
+        const cost = top * step / 4;
+        svg.append(svgEl("line", { x1: L, x2: W - R, y1: yOf(cost), y2: yOf(cost), class: "wbdCurveGrid" }));
+        const label = svgEl("text", { x: L - 5, y: yOf(cost) + 3, class: "wbdCurveText", "text-anchor": "end" });
+        label.textContent = number(cost);
+        svg.append(label);
+      }
+      for (const level of Array.from(new Set([1, Math.round(maxLevel / 4), Math.round(maxLevel / 2), Math.round(maxLevel * 3 / 4), maxLevel])).filter((entry) => entry >= 1)) {
+        const label = svgEl("text", { x: xOf(level), y: H - 7, class: "wbdCurveText", "text-anchor": "middle" });
+        label.textContent = "Lv " + level;
+        svg.append(label);
+      }
+      const path = [[1, xpCostAt(points, 1, flat)]].concat(points, [[maxLevel, xpCostAt(points, maxLevel, flat)]]);
+      svg.append(svgEl("polyline", { points: path.map((point) => xOf(point[0]).toFixed(1) + "," + yOf(point[1]).toFixed(1)).join(" "), class: "wbdCurveLine" + (own || drag ? "" : " wbdCurveGhost") }));
+      points.forEach((point, index) => {
+        const dot = svgEl("circle", { cx: xOf(point[0]), cy: yOf(point[1]), r: 6, class: "wbdCurveDot", "data-index": index });
+        const title = svgEl("title", {});
+        title.textContent = "Level " + point[0] + " kost " + number(point[1]) + " XP. Slepen = aanpassen, dubbelklik = weg.";
+        dot.append(title);
+        svg.append(dot);
+      });
+      const totals = xpTotals(points, maxLevel, flat);
+      const marks = Array.from(new Set([2, Math.min(maxLevel, 10), Math.round(maxLevel / 2), maxLevel])).filter((level) => level >= 2 && level <= maxLevel).sort((a, b) => a - b);
+      summary.textContent = (own ? "" : "Nog geen eigen punten: overal " + number(flat) + " XP per level. Sleep een punt om te beginnen. ")
+        + "In totaal: " + marks.map((level) => "level " + level + " na " + number(totals[level]) + " XP").join(" · ") + ".";
+    };
+    const drawList = () => {
+      list.replaceChildren();
+      points.forEach((point, index) => {
+        const level = el("input", { type: "number", class: "wbdQty", min: 1, max: maxLevel, step: 1, value: point[0], title: "Level" });
+        const cost = el("input", { type: "number", class: "wbdNumber wbdCurveCost", min: 1, max: field.max, step: 10, value: point[1], title: "XP die dit level kost" });
+        const remove = el("button", { type: "button", class: "wbdMini", text: "✕", title: "Punt weghalen", disabled: points.length <= 2 });
+        const commit = () => {
+          points[index] = [Math.max(1, Math.min(maxLevel, Math.round(Number(level.value) || point[0]))), Math.max(1, Math.min(field.max, Math.round(Number(cost.value) || point[1])))];
+          points = cleanXpCurve(points, maxLevel);
+          if (points.length < 2) points = [[1, points[0]?.[1] || flat], [maxLevel, points[0]?.[1] || flat]];
+          save();
+        };
+        level.addEventListener("change", commit);
+        cost.addEventListener("change", commit);
+        remove.addEventListener("click", () => { if (points.length <= 2) return; points.splice(index, 1); save(); });
+        list.append(el("label", { class: "wbdCurveRow" }, [el("span", { class: "wbdMuted", text: "Level" }), level, el("span", { class: "wbdMuted", text: "kost" }), cost, el("span", { class: "wbdMuted", text: "XP" }), remove]));
+      });
+    };
+    svg.addEventListener("pointerdown", (event) => {
+      const at = toLocal(event);
+      const index = event.target?.dataset?.index;
+      if (index !== undefined) drag = { index: Number(index), moved: false };
+      else if (points.length < field.maxItems && at.x >= L - 4 && at.x <= W - R + 4 && at.y >= T - 4 && at.y <= H - B + 4) {
+        // Klik op een lege plek: een nieuw punt (op een level waar nog geen punt staat), meteen te verslepen.
+        const level = levelAt(at.x);
+        if (points.some((point) => point[0] === level)) return;
+        points.push([level, costAt(at.y)]);
+        points.sort((a, b) => a[0] - b[0]);
+        drag = { index: points.findIndex((point) => point[0] === level), moved: true };
+      } else return;
+      event.preventDefault();
+      try { svg.setPointerCapture(event.pointerId); } catch {}
+      draw();
+    });
+    svg.addEventListener("pointermove", (event) => {
+      if (!drag) return;
+      const at = toLocal(event);
+      const before = points[drag.index - 1];
+      const after = points[drag.index + 1];
+      const level = Math.max(before ? before[0] + 1 : 1, Math.min(after ? after[0] - 1 : maxLevel, levelAt(at.x)));
+      points[drag.index] = [level, costAt(at.y)];
+      drag.moved = true;
+      draw();
+    });
+    const drop = () => {
+      if (!drag) return;
+      const moved = drag.moved;
+      drag = null;
+      if (moved) save(); else draw();
+    };
+    svg.addEventListener("pointerup", drop);
+    svg.addEventListener("pointercancel", drop);
+    svg.addEventListener("dblclick", (event) => {
+      const index = event.target?.dataset?.index;
+      if (index === undefined || points.length <= 2) return;
+      points.splice(Number(index), 1);
+      save();
+    });
+    draw();
+    if (own) drawList();
+    const reset = el("button", { type: "button", class: "wbdMoreToggle", text: "↺ Terug naar een rechte lijn", title: "Haalt de punten weg; dan geldt overal weer XP per level." });
+    reset.addEventListener("click", () => onChange(null));
+    return el("div", { class: "wbdCurveBox" }, [svg, summary, own ? list : null, own ? reset : null]);
+  }
+
   function control(key, field, body, isNew, onChange) {
     const value = body[key];
     const type = field.ui?.control;
@@ -654,6 +772,7 @@ export function createDocBench(options = {}) {
       });
       return input;
     }
+    if (type === "curve") return curveControl(field, value, body, onChange);
     if (type === "points") {
       const count = Array.isArray(value) ? value.length : 0;
       const what = field.type === "linkList" ? " lijnen" : " punten";
@@ -838,7 +957,7 @@ export function createDocBench(options = {}) {
       const fieldControl = lockedRoadType
         ? el("div", { class: "wbdNote", text: "🛣️ Weg is een vast type en kan niet in een ander vlak worden veranderd." })
         : control(key, field, body, isNew, onChange);
-      const row = fieldRow(key, shown, fieldControl, ["loot", "refList", "assetList"].includes(field.ui?.control) || field.ui?.multiline);
+      const row = fieldRow(key, shown, fieldControl, ["loot", "refList", "assetList", "curve"].includes(field.ui?.control) || field.ui?.multiline);
       if (field.ui?.group) groupBox(field.ui.group).fields.append(row);
       else (field.ui?.more && !bare ? more : visible).append(row);
     }
@@ -940,9 +1059,13 @@ export function createDocBench(options = {}) {
       const project = bench.docs("project_settings")[0]?.body || {};
       const playerAbility = bench.doc(project.playerAbilityRef)?.body || { baseDamage: 16, powerScalingBp: 5000, armorFactorBp: 3500, cooldownMs: 250 };
       const playerHit = computeDamage(playerAbility, 10, body.armor || 0);
-      const hits = Math.ceil((body.healthMax || 1) / Math.max(1, playerHit));
-      const enemyHit = enemyAbility ? computeDamage(enemyAbility, body.attackPower || 0, 0) : null;
-      return "⚔️ Speler (kracht 10) raakt voor " + playerHit + " → " + hits + " slagen (" + (hits * (playerAbility.cooldownMs || 250) / 1000).toFixed(1) + " s). "
+      // Fase 6: level = sterkte (level 2 = 200 % levens en kracht); een groepsbaas heeft daarbovenop extra leven.
+      const level = Math.max(1, Number(body.level) || 1);
+      const health = Math.round((body.healthMax || 1) * level * (body.groupBoss ? (Number(body.bossHealthPct) || 300) / 100 : 1));
+      const hits = Math.ceil(health / Math.max(1, playerHit));
+      const enemyHit = enemyAbility ? computeDamage(enemyAbility, (body.attackPower || 0) * level, 0) : null;
+      return (level > 1 || body.groupBoss ? "🎚️ Level " + level + (body.groupBoss ? " groepsbaas" : "") + ": " + health + " levens. " : "")
+        + "⚔️ Speler (kracht 10) raakt voor " + playerHit + " → " + hits + " slagen (" + (hits * (playerAbility.cooldownMs || 250) / 1000).toFixed(1) + " s). "
         + (enemyHit === null ? "Sleep een aanval op de vijand." : "👹 Vijand raakt een speler zonder pantser voor " + enemyHit + " per " + ((enemyAbility.cooldownMs || 1000) / 1000) + " s.");
     });
   }

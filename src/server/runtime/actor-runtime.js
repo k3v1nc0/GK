@@ -200,7 +200,7 @@ export class ActorRuntime {
       actor.def = def;
       actor.spawn = spawn;
       actor.home = { x: meters(spawn.xMm), z: meters(spawn.zMm) };
-      actor.hpMax = Math.round(def.healthMax * (actor.strength || 1));
+      this.setStrength(actor);
       actor.hp = Math.min(actor.hp, actor.hpMax);
       if (actor !== old) actor.y = this.groundYAt(actor.x, actor.z);
       actor.patrol = Array.isArray(spawn.patrolPointsMm) ? spawn.patrolPointsMm.map(([x, z]) => ({ x: meters(x), z: meters(z) })) : [];
@@ -585,15 +585,19 @@ export class ActorRuntime {
       const target = this.targetOf(actor, players);
       const fromHome = Math.hypot(actor.x - actor.home.x, actor.z - actor.home.z);
       const eligible = target?.escort ? this.eligibleEscort(actor, target.escort) : this.eligibleTarget(actor, target);
-      if (!eligible || fromHome > meters(def.leashRangeMm)) { this.startReturn(actor); return; }
+      if (fromHome > meters(def.leashRangeMm)) { this.startReturn(actor); return; }
+      // Fase 6: valt zijn doelwit weg, dan pakt hij een ander die meevocht (pas als er niemand meer is, loopt hij terug).
+      if (!eligible) { if (!this.retarget(actor, playerList)) this.startReturn(actor); return; }
       const ability = this.section.abilities?.[def.abilityId];
       if (!ability) { this.startReturn(actor); return; }
+      // Fase 6: de grote klap van een groepsbaas (rode cirkel); zolang de waarschuwing loopt staat hij stil.
+      if (def.groupBoss === true && !target.escort && this.stepSlam(actor, target, ability, nowMs, playerList)) return;
       const reachMm = ability.rangeMm + def.radiusMm + PLAYER_RADIUS_MM;
       if (withinRangeMm(mm(actor.x), mm(actor.z), mm(target.x), mm(target.z), reachMm)) {
         actor.path = [];
         const facing = Math.atan2(target.x - actor.x, target.z - actor.z);
         if (Math.abs(facing - actor.ry) > 0.05) { actor.ry = facing; actor.rev += 1; }
-        if (nowMs >= actor.nextAttackAtMs) { if (target.escort) this.attackEscort(actor, target.escort, ability, nowMs); else this.attackPlayer(actor, target, ability, nowMs); }
+        if (nowMs >= actor.nextAttackAtMs) { if (target.escort) this.attackEscort(actor, target.escort, ability, nowMs); else this.attackPlayer(actor, target, ability, nowMs, playerList); }
         else if (actor.anim !== "attack") this.setAnim(actor, "idle");
         return;
       }
@@ -648,7 +652,23 @@ export class ActorRuntime {
     actor.rev += 1;
   }
 
+  // Fase 6: zijn doelwit is weg (verslagen of in veilig gebied): de dichtstbijzijnde ander die meevocht en nog meedoet.
+  retarget(actor, playerList) {
+    let best = null;
+    let bestDistance = Infinity;
+    for (const player of playerList || []) {
+      if (player.id === actor.targetPlayerId || !actor.contributors.has(player.id) || !this.eligibleTarget(actor, player)) continue;
+      const distance = Math.hypot(player.x - actor.x, player.z - actor.z);
+      if (distance < bestDistance) { best = player; bestDistance = distance; }
+    }
+    if (!best) return false;
+    this.engage(actor, best.id);
+    return true;
+  }
+
   startReturn(actor) {
+    this.cancelSlam(actor);
+    actor.nextSlamAtMs = 0;
     actor.state = "return";
     actor.targetPlayerId = null;
     actor.targetEscort = false;
@@ -736,22 +756,97 @@ export class ActorRuntime {
     return movedAny || !actor.path.length;
   }
 
-  attackPlayer(actor, target, ability, nowMs) {
+  attackPlayer(actor, target, ability, nowMs, playerList = []) {
     actor.nextAttackAtMs = nowMs + Math.max(100, ability.cooldownMs);
     actor.anim = "attack";
     actor.animUntilMs = nowMs + ATTACK_ANIM_MS;
     actor.rev += 1;
-    let outcome = null;
-    if (this.bridge && typeof this.bridge.applyActorHit === "function") {
-      try {
-        outcome = this.bridge.applyActorHit({ worldId: this.worldId, playerId: target.id, actorId: actor.id, label: actor.def.displayName, ability,
-          attackPower: Math.round((Number(actor.def.attackPower) || 0) * (actor.strength || 1)) });
-      } catch (error) {
-        console.error("[actors] aanval op speler mislukt:", error.message);
-      }
-    }
+    const outcome = this.hitPlayer(actor, target.id, ability, 100);
+    // Fase 6: wie de klappen opvangt, doet mee (ook zonder zelf te slaan).
+    if (outcome) actor.contributors.add(target.id);
     this.emitEvent({ e: "attack", id: actor.id, target: target.id, amount: outcome?.damage ?? null, remainingHealth: outcome?.remainingHealth ?? null, defeated: outcome?.defeated === true }, actor.x, actor.z, actor);
-    if (outcome?.defeated) this.startReturn(actor);
+    if (outcome?.defeated && !this.retarget(actor, playerList)) this.startReturn(actor);
+  }
+
+  // Eén klap van een vijand op een speler (powerPct = deel van zijn gewone kracht). node03 rekent de schade uit en schrijft hem weg.
+  hitPlayer(actor, playerId, ability, powerPct) {
+    if (!this.bridge || typeof this.bridge.applyActorHit !== "function") return null;
+    try {
+      return this.bridge.applyActorHit({ worldId: this.worldId, playerId, actorId: actor.id, label: actor.def.displayName, ability,
+        attackPower: Math.round((Number(actor.def.attackPower) || 0) * (actor.strength || 1) * powerPct / 100), level: this.levelOf(actor) });
+    } catch (error) {
+      console.error("[actors] aanval op speler mislukt:", error.message);
+      return null;
+    }
+  }
+
+  // ---- Fase 6: groepsbaas ----------------------------------------------------------------------------------
+
+  slamRules(def) {
+    const number = (value, fallback, min, max) => (Number.isFinite(Number(value)) ? Math.max(min, Math.min(max, Number(value))) : fallback);
+    return { everyMs: number(def.slamEveryS, 12, 3, 600) * 1000, warnMs: Math.round(number(def.slamWarnS, 2.5, 0.5, 10) * 1000),
+      radiusM: number(def.slamRadiusMm, 4000, 1000, 20000) / 1000, powerPct: number(def.slamPowerPct, 300, 100, 2000) };
+  }
+
+  // Geeft true terug zolang de baas met zijn grote klap bezig is (waarschuwing loopt of de klap valt nu).
+  stepSlam(actor, target, ability, nowMs, playerList) {
+    const rules = this.slamRules(actor.def);
+    if (actor.slam) {
+      if (nowMs < actor.slam.atMs) { if (actor.anim !== "attack") this.setAnim(actor, "idle"); return true; }
+      this.landSlam(actor, ability, rules, nowMs, playerList);
+      return true;
+    }
+    if (!actor.nextSlamAtMs) { actor.nextSlamAtMs = nowMs + rules.everyMs; return false; }
+    if (nowMs < actor.nextSlamAtMs) return false;
+    // De cirkel komt op de plek van wie hij nu aanvalt; daarna beweegt de cirkel niet meer (wegstappen kan).
+    actor.slam = { x: r2(target.x), z: r2(target.z), r: rules.radiusM, atMs: nowMs + rules.warnMs };
+    actor.nextSlamAtMs = nowMs + rules.warnMs + rules.everyMs;
+    actor.path = [];
+    actor.rev += 1;
+    this.emitEvent({ e: "slam", id: actor.id, x: actor.slam.x, z: actor.slam.z, r: actor.slam.r, ms: rules.warnMs }, actor.x, actor.z, actor);
+    return true;
+  }
+
+  // Het raakmoment: de server kijkt wie er nu in de cirkel staat. Wie eruit stapte, krijgt niets.
+  landSlam(actor, ability, rules, nowMs, playerList) {
+    const slam = actor.slam;
+    actor.slam = null;
+    actor.anim = "attack";
+    actor.animUntilMs = nowMs + ATTACK_ANIM_MS;
+    actor.nextAttackAtMs = nowMs + Math.max(100, ability.cooldownMs);
+    actor.rev += 1;
+    this.perf.slams = (this.perf.slams || 0) + 1;
+    this.emitEvent({ e: "slamhit", id: actor.id, x: slam.x, z: slam.z, r: slam.r }, actor.x, actor.z, actor);
+    for (const player of playerList || []) {
+      if (player.defeated || player.safe) continue;
+      if (actor.group && !this.canSeeGroup(actor.group, player.id)) continue;
+      if (Math.hypot(player.x - slam.x, player.z - slam.z) > slam.r) continue;
+      const outcome = this.hitPlayer(actor, player.id, ability, rules.powerPct);
+      if (!outcome) continue;
+      actor.contributors.add(player.id);
+      this.emitEvent({ e: "attack", id: actor.id, target: player.id, amount: outcome.damage, remainingHealth: outcome.remainingHealth, defeated: outcome.defeated === true, sl: 1 }, actor.x, actor.z, actor);
+    }
+  }
+
+  // De waarschuwing stopt (baas loopt terug of is verslagen): de rode cirkel moet bij iedereen weg.
+  cancelSlam(actor) {
+    if (!actor.slam) return;
+    actor.slam = null;
+    actor.rev += 1;
+    this.emitEvent({ e: "slam", id: actor.id, off: 1 }, actor.x, actor.z, actor);
+  }
+
+  // Fase 6: wie een speler geneest die met een vijand vecht, doet zelf ook mee (beloning en quest-telling).
+  creditHelper(helperId, playerId) {
+    if (!helperId || !playerId || helperId === playerId) return 0;
+    let count = 0;
+    for (const actor of this.actors.values()) {
+      if (actor.escort || actor.state !== "engage") continue;
+      if (actor.targetPlayerId !== playerId && !actor.contributors.has(playerId)) continue;
+      if (actor.group && !this.canSeeGroup(actor.group, helperId)) continue;
+      if (!actor.contributors.has(helperId)) { actor.contributors.add(helperId); count += 1; }
+    }
+    return count;
   }
 
   // Fase 5: af en toe een sterkere (meer levens, harder, meer XP en een schild). Elke keer dat hij terugkomt opnieuw gegooid.
@@ -759,9 +854,26 @@ export class ActorRuntime {
     const spawn = actor.spawn || {};
     const chance = Number(spawn.eliteChancePct) || 0;
     actor.elite = !actor.group && !actor.escort && chance > 0 && Math.random() * 100 < chance;
-    actor.strength = actor.elite ? Math.max(1, (Number(spawn.eliteStrengthPct) || 200) / 100) : 1;
     actor.shieldDownUntilMs = 0;
-    actor.hpMax = Math.round(actor.def.healthMax * actor.strength);
+    actor.slam = null;
+    actor.nextSlamAtMs = 0;
+    this.setStrength(actor);
+  }
+
+  // Fase 6 (Kevin 11-11): level = sterkte. Level 1 = de kaart zoals hij is (100 %), level 2 = 200 %, ... level 10 = 1000 %:
+  // zoveel keer de levens, de kracht en de XP. Een sterkere van een plek telt er bovenop (level 2 x 200 % = 4).
+  // Een groepsbaas heeft daarnaast extra leven. Gooit niet opnieuw (ook goed na een nieuwe build).
+  setStrength(actor) {
+    const def = actor.def || {};
+    const cardLevel = actor.escort ? 1 : Math.max(1, Math.min(10, Math.round(Number(def.level) || 1)));
+    actor.strength = cardLevel * (actor.elite ? Math.max(1, (Number(actor.spawn?.eliteStrengthPct) || 200) / 100) : 1);
+    const boss = def.groupBoss === true ? Math.max(100, Number(def.bossHealthPct) || 300) / 100 : 1;
+    actor.hpMax = Math.max(1, Math.round((Number(def.healthMax) || 1) * actor.strength * boss));
+  }
+
+  // Het level dat voor zijn naam staat en waar iedereen bij schaling als telt.
+  levelOf(actor) {
+    return Math.max(1, Math.round(actor.strength || 1));
   }
 
   // Een sterkere vijand of een baas (Altijd een schild) heeft een schild; vak 2 of 3 breekt het even.
@@ -859,7 +971,11 @@ export class ActorRuntime {
 
   // Eén geraakte vijand: schade (factorPct van de volle schade), schild, buit en XP. Puur: verandert het geheugen niet.
   hitPlan(ctx, section, actor, ability, auto, factorPct) {
-    let damage = computeDamage(ability, ctx.attackPower, actor.def.armor);
+    // Fase 6: met schaling telt de speler als het level van deze vijand (ctx.fight geeft zijn kracht op dat level en
+    // het voordeel of nadeel van het levelverschil). Zonder ctx.fight: de kracht die is meegegeven.
+    const fight = typeof ctx.fight === "function" ? ctx.fight(this.levelOf(actor)) : null;
+    let damage = computeDamage(ability, fight ? fight.attackPower : ctx.attackPower, actor.def.armor);
+    if (fight && fight.edgePct) damage = Math.max(1, Math.round(damage * (100 + fight.edgePct) / 100));
     if (factorPct !== 100) damage = Math.max(1, Math.round(damage * factorPct / 100));
     const shieldUp = this.shieldUp(actor, ctx.nowMs);
     const rules = this.shieldRules();
@@ -997,6 +1113,8 @@ export class ActorRuntime {
     actor.contributors.add(plan.playerId);
     actor.rev += 1;
     if (plan.killed) {
+      actor.slam = null;
+      actor.nextSlamAtMs = 0;
       actor.state = "dead";
       actor.anim = "dead";
       actor.respawnAtMs = plan.respawnAtMs;
@@ -1041,6 +1159,8 @@ export class ActorRuntime {
     // Kevin 10-11: hoeveel sterker (x100), voor het cijfer voor de naam (200 % = 2).
     if ((entry.strength || 1) !== 1) out.st = Math.round(entry.strength * 100);
     if (entry.state !== "dead" && this.shieldUp(entry, nowMs)) out.sh = 1;
+    // Fase 6: de rode cirkel van een groepsbaas die nu loopt ([x, z, straal, ms tot de klap]), ook voor wie net (opnieuw) verbindt.
+    if (entry.slam && entry.state !== "dead") out.sl = [entry.slam.x, entry.slam.z, entry.slam.r, Math.max(0, Math.round(entry.slam.atMs - nowMs))];
     return out;
   }
 
@@ -1221,6 +1341,9 @@ export class ActorRuntime {
       targetPlayerId: null, path: [], pathGoal: null, pathFails: 0, patrolIndex: 0, pauseUntilMs: 0, stuck: 0,
       nextAttackAtMs: nowMs + 1000, contributors: new Set(), respawnAtMs: 0, rev: 1
     };
+    // Fase 6: ook een quest-vijand heeft het level van zijn kaart.
+    this.setStrength(actor);
+    actor.hp = actor.hpMax;
     actor.id = actor.spawnKey + ":1";
     return actor;
   }
@@ -1245,7 +1368,7 @@ export class ActorRuntime {
         const actor = old && old.def.actorId === def.actorId ? old : this.newQuestActor(group, spec, def, nowMs);
         actor.def = def;
         actor.group = group;
-        actor.hpMax = def.healthMax;
+        this.setStrength(actor);
         actor.hp = Math.min(actor.hp, actor.hpMax);
         this.actors.set(spec.key, actor);
       }
@@ -1634,7 +1757,7 @@ export class ActorRuntime {
     actor.anim = "attack";
     actor.animUntilMs = nowMs + ATTACK_ANIM_MS;
     actor.rev += 1;
-    const damage = Math.max(0, Math.round(computeDamage(ability, actor.def.attackPower, 0)));
+    const damage = Math.max(0, Math.round(computeDamage(ability, Math.round((Number(actor.def.attackPower) || 0) * (actor.strength || 1)), 0)));
     escort.hp = Math.max(0, escort.hp - damage);
     escort.hitAtMs = nowMs;
     escort.rev += 1;

@@ -10,6 +10,7 @@ import { applyCanonicalBuild, EDITOR_DOC_PREFIX } from "./runtime-overlay.js";
 import { sha256, stableStringify } from "./stable-json.js";
 import { OBJECTIVE_KINDS } from "../../../apps/web/public/shared/quest-graph.js";
 import { settingsValues } from "./game-compiler.js";
+import { xpTotals } from "../../../apps/web/public/shared/level-math.js";
 import { partyValues } from "../../shared/authoring/kinds/party.js";
 import { chatValues } from "../../shared/authoring/kinds/chat.js";
 import { areaBoundsMm } from "../../../apps/web/public/shared/spatial.js";
@@ -578,7 +579,9 @@ function withGame(world, source, options) {
     return { healthMax: values.healthMax, attackPower: values.attackPower, armor: values.armor, healPower: values.healPower, manaMax: values.manaMax,
       healthRegenBp: values.healthRegenBp, manaRegenBp: values.manaRegenBp,
       healthRegenCombatBp: values.healthRegenCombatBp, manaRegenCombatBp: values.manaRegenCombatBp,
-      xpPerLevel: project.xpPerLevel, maxLevel: project.maxLevel, startGrants: [], models: [] };
+      healthPerLevel: values.healthPerLevel, attackPerLevel: values.attackPerLevel, armorPerLevel: values.armorPerLevel,
+      manaPerLevel: values.manaPerLevel, healPerLevel: values.healPerLevel,
+      xpPerLevel: project.xpPerLevel, maxLevel: project.maxLevel, xpCurve: null, startGrants: [], models: [] };
   })();
   // Ook bij een oudere gepubliceerde game zonder nieuwere HUD-velden blijven de
   // schema-standaarden gelden.
@@ -596,12 +599,14 @@ function withGame(world, source, options) {
     [STAT_IDS.healPower]: { id: STAT_IDS.healPower, statId: STAT_IDS.healPower, displayName: "Heal-kracht" },
     [STAT_IDS.mana]: { id: STAT_IDS.mana, statId: STAT_IDS.mana, displayName: "Mana" }
   };
+  // Fase 6: perLevel = wat er per level bij komt (een oudere build zonder deze velden groeit niet).
+  const grow = (value) => (Number.isInteger(value) && value > 0 ? value : 0);
   const statBlock = (id, values) => ({ id, entries: [
-    { statRef: STAT_IDS.health, baseValue: values.healthMax },
-    { statRef: STAT_IDS.attackPower, baseValue: values.attackPower },
-    { statRef: STAT_IDS.armor, baseValue: values.armor },
-    { statRef: STAT_IDS.healPower, baseValue: Number.isFinite(values.healPower) ? values.healPower : 5 },
-    { statRef: STAT_IDS.mana, baseValue: Number.isFinite(values.manaMax) ? values.manaMax : 50 }
+    { statRef: STAT_IDS.health, baseValue: values.healthMax, perLevel: grow(values.healthPerLevel) },
+    { statRef: STAT_IDS.attackPower, baseValue: values.attackPower, perLevel: grow(values.attackPerLevel) },
+    { statRef: STAT_IDS.armor, baseValue: values.armor, perLevel: grow(values.armorPerLevel) },
+    { statRef: STAT_IDS.healPower, baseValue: Number.isFinite(values.healPower) ? values.healPower : 5, perLevel: grow(values.healPerLevel) },
+    { statRef: STAT_IDS.mana, baseValue: Number.isFinite(values.manaMax) ? values.manaMax : 50, perLevel: grow(values.manaPerLevel) }
   ] });
   // Healing (2-11): regeneratie per klasse in basispunten per seconde (100 = 1 %/s), buiten gevecht.
   const regenBp = (value, fallback) => (Number.isInteger(value) && value >= 0 ? value : fallback);
@@ -614,7 +619,11 @@ function withGame(world, source, options) {
     startingCurrencyGrants: values.startGrants.filter((grant) => grant.currencyId).map((grant) => ({ currencyRef: grant.currencyId, amountMinor: grant.amount }))
   }, extra);
   catalogs.statBlocks = { [PLAYER_STAT_BLOCK_ID]: statBlock(PLAYER_STAT_BLOCK_ID, player) };
-  catalogs.statCurves = { [PLAYER_XP_CURVE_ID]: { id: PLAYER_XP_CURVE_ID, points: [{ x: 1, y: 0 }, { x: 2, y: player.xpPerLevel }] } };
+  // Fase 6: de XP-grafiek wordt een tabel "totaal XP per level" (level 1 = 0). Zonder grafiek: overal XP per level.
+  const xpPoints = Array.isArray(player.xpCurve) && player.xpCurve.length >= 2
+    ? xpTotals(player.xpCurve, player.maxLevel, player.xpPerLevel).map((total, level) => ({ x: level, y: total })).slice(1)
+    : [{ x: 1, y: 0 }, { x: 2, y: player.xpPerLevel }];
+  catalogs.statCurves = { [PLAYER_XP_CURVE_ID]: { id: PLAYER_XP_CURVE_ID, points: xpPoints } };
   // Klassen: elke klasse een eigen character (elk account heeft er per klasse één); zonder klassen één standaardspeler.
   const classes = Array.isArray(player.classes) ? player.classes : [];
   if (classes.length) {
@@ -741,7 +750,10 @@ function withGame(world, source, options) {
       manaRestorePercent: (Number.isFinite(Number(combat.respawnManaPct)) ? Number(combat.respawnManaPct) : 100) / 100, staminaRestorePercent: 1 }],
     combat_rules: [{ id: "rules.combat", regenDelayMs: Math.max(0, Number(combat.regenDelayS) || 0) * 1000, effectStacking: combat.effectStacking || "refresh",
       maxEffects: Number(combat.maxEffects) || 8, clearBuffsOnDeath: combat.clearBuffsOnDeath !== false, levelUpRestore: combat.levelUpRestore !== false,
-      shieldAutoPct: Number.isFinite(Number(combat.shieldAutoPct)) ? Number(combat.shieldAutoPct) : 25, shieldBackMs: Math.max(1, Number(combat.shieldBackS) || 15) * 1000 }],
+      shieldAutoPct: Number.isFinite(Number(combat.shieldAutoPct)) ? Number(combat.shieldAutoPct) : 25, shieldBackMs: Math.max(1, Number(combat.shieldBackS) || 15) * 1000,
+      // Fase 6: schaling (iedereen telt als het level van de vijand) en het schuifje Verschil per level.
+      levelScaling: combat.levelScaling !== false, levelDiffPct: Number.isFinite(Number(combat.levelDiffPct)) ? Number(combat.levelDiffPct) : 3,
+      levelDiffMaxPct: Number.isFinite(Number(combat.levelDiffMaxPct)) ? Number(combat.levelDiffMaxPct) : 20 }],
     // Groep (MMO) (3-11): Instellingen > Groep. Zonder kaart de standaard; server en game lezen dit.
     party_rules: [Object.assign({ id: "rules.party" }, game?.party || partyValues(null))],
     chat_rules: [Object.assign({ id: "rules.chat" }, game?.chat || chatValues(null))]

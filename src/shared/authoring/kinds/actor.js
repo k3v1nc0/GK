@@ -30,6 +30,8 @@ export const ACTOR_BEHAVIORS = Object.freeze(["aggressive", "defensive"]);
 
 const HEAL_GROUP = "💚 Genezen";
 const ELITE_GROUP = "💪 Af en toe een sterkere";
+const LEVEL_GROUP = "🎚️ Level en groepsbaas";
+const BOSS_ONLY = Object.freeze({ key: "groupBoss", is: [true] });
 
 export const ACTOR_KINDS = {
   actor_archetype: {
@@ -69,6 +71,30 @@ export const ACTOR_KINDS = {
       healAbilityRef: { type: "ref", refKind: "ability", required: false, audience: "server", label: "Genees-spreuk",
         ui: ui("✨", "ref", "werkbank", { group: HEAL_GROUP }), default: null,
         help: help("Een spreuk waarmee deze vijand zichzelf of de zwakste vijand in de buurt geneest (een vijand-healer).", "Sleep een aanval met soort Genezen hierop. Leeg = geen healer.", "Healer geneest te vaak → maak de wachttijd van de spreuk langer.") },
+      // Fase 6 (Kevin 11-11): level = sterkte. 100 % = level 1, 200 % = level 2 ... 1000 % = level 10. Het level staat voor de naam;
+      // met schaling aan telt iedereen die hem aanvalt als dit level. Een sterkere van een plek telt er bovenop (level 2 x 200 % = 4).
+      level: { type: "integer", required: false, min: 1, max: 10, audience: "client", label: "Level",
+        ui: ui("🎚️", "slider", "werkbank", { step: 1, range: [1, 10], group: LEVEL_GROUP }), default: 1,
+        help: help("Hoe sterk deze vijand is; het cijfer staat voor zijn naam. Level 1 = de kaart zoals hij is (100 %), level 2 = 200 %, level 5 = 500 %: zoveel keer de levens, de kracht en de XP. Staat schaling aan (Instellingen > Genezen en effecten), dan telt iedereen die hem aanvalt als dit level.", "1 voor gewone vijanden, 3-5 voor een baas. Een sterkere van een plek (Hoeveel sterker 200 %) telt er bovenop.", "Baas valt te snel om → hoger level of zet Groepsbaas aan.") },
+      // Fase 6: groepsbaas. Meer leven, en om de zoveel tijd een grote klap met eerst een rode cirkel op de grond.
+      groupBoss: { type: "boolean", required: false, audience: "client", label: "Groepsbaas",
+        ui: ui("👑", "toggle", "werkbank", { group: LEVEL_GROUP }), default: false,
+        help: help("Een baas voor een groep: hij heeft meer leven en doet af en toe een grote klap. Eerst zie je een rode cirkel op de grond; wie er op het raakmoment nog in staat, krijgt de klap. Iedereen die meedeed (slaan, genezen of klappen opvangen) krijgt zijn eigen beloning.", "Aan voor een eindbaas. Zet hem samen met Altijd een schild (baas) voor een echt gevecht.", "Groep is te snel klaar → meer Extra leven. Niemand kan de cirkel ontwijken → langere Waarschuwing.") },
+      bossHealthPct: { type: "integer", required: false, min: 100, max: 5000, audience: "server", label: "Extra leven",
+        ui: ui("❤️", "slider", "werkbank", { step: 10, unit: "%", range: [100, 1000], group: LEVEL_GROUP, when: BOSS_ONLY }), default: 300,
+        help: help("Hoeveel leven de groepsbaas heeft vergeleken met zijn Levenspunten.", "300 % = drie keer zoveel, goed voor een groep van 3.", "Gevecht duurt te lang → lager.") },
+      slamEveryS: { type: "integer", required: false, min: 3, max: 600, audience: "server", label: "Grote klap elke",
+        ui: ui("💥", "slider", "werkbank", { step: 1, unit: "s", range: [3, 60], group: LEVEL_GROUP, when: BOSS_ONLY }), default: 12,
+        help: help("Om de hoeveel seconden de groepsbaas zijn grote klap doet.", "10-15 seconden.", "Spelers rennen alleen nog maar → langer.") },
+      slamWarnS: { type: "number", required: false, min: 0.5, max: 10, audience: "server", label: "Waarschuwing",
+        ui: ui("🔴", "slider", "werkbank", { step: 0.5, unit: "s", range: [0.5, 6], group: LEVEL_GROUP, when: BOSS_ONLY }), default: 2.5,
+        help: help("Hoe lang de rode cirkel op de grond ligt voordat de klap komt. In die tijd kun je wegstappen.", "2-3 seconden; op een telefoon liever 3.", "Niemand komt op tijd weg → langer.") },
+      slamRadiusMm: { type: "integer", required: false, min: 1000, max: 20000, audience: "server", label: "Grootte cirkel",
+        ui: ui("⭕", "slider", "werkbank", Object.assign({ step: 500, range: [1000, 12000], group: LEVEL_GROUP, when: BOSS_ONLY }, M)), default: 4000,
+        help: help("Hoe groot de rode cirkel is (straal). Hij komt op de plek van de speler die de baas op dat moment aanvalt.", "3-5 meter: met een paar stappen ben je eruit.", "Wegstappen lukt nooit → kleiner of een langere Waarschuwing.") },
+      slamPowerPct: { type: "integer", required: false, min: 100, max: 2000, audience: "server", label: "Kracht grote klap",
+        ui: ui("🔨", "slider", "werkbank", { step: 10, unit: "%", range: [100, 1000], group: LEVEL_GROUP, when: BOSS_ONLY }), default: 300,
+        help: help("Hoe hard de grote klap is vergeleken met een gewone klap van deze baas.", "300 %: het doet echt pijn, maar één keer raak is niet meteen dood.", "Iedereen is in één klap dood → lager.") },
       armor: { type: "integer", required: true, min: 0, max: 1000000, audience: "server", label: "Pantser",
         ui: ui("🛡️", "slider", "werkbank", { step: 1, range: [0, 200], more: true }), default: 0,
         help: help("Hoeveel schade de vijand tegenhoudt.", "0-5 voor gewone vijanden.", "Je doet bijna geen schade → lager.") },

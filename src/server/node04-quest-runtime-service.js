@@ -2090,6 +2090,10 @@ export class Node04QuestRuntimeService {
       WHERE player_id = ?
     `).run(afterXp, afterLevel, Math.max(0, afterLevel - beforeLevel), now(), ctx.profile.id);
     this.node03RuntimeService.recordLedger(operationId, ctx.profile.id, "xp", "xp", grantAmount, beforeXp, afterXp, reason, sourceRef);
+    // Fase 6: ook quest-XP kan een level geven: stats groeien mee, levens en mana vol en het effect voor iedereen.
+    if (afterLevel !== beforeLevel && typeof this.node03RuntimeService?.levelChanged === "function") {
+      this.node03RuntimeService.levelChanged(ctx, ctx.profile.id, beforeLevel, afterLevel);
+    }
     return { kind: "xp", amount: grantAmount, beforeXp, afterXp, beforeLevel, afterLevel };
   }
 

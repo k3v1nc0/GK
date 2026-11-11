@@ -18,7 +18,11 @@ export function combatRulesFromProject(project) {
     levelUpRestore: rule.levelUpRestore !== false,
     // Fase 5: schild van een sterkere vijand of baas.
     shieldAutoPct: Number.isFinite(Number(rule.shieldAutoPct)) ? Math.max(0, Math.min(100, Number(rule.shieldAutoPct))) : 25,
-    shieldBackMs: Math.max(1000, Number(rule.shieldBackMs) || 15000)
+    shieldBackMs: Math.max(1000, Number(rule.shieldBackMs) || 15000),
+    // Fase 6: schaling zoals ESO en het schuifje Verschil per level (met een maximum).
+    levelScaling: rule.levelScaling !== false,
+    levelDiffPct: Number.isFinite(Number(rule.levelDiffPct)) ? Math.max(0, Math.min(50, Number(rule.levelDiffPct))) : 3,
+    levelDiffMaxPct: Number.isFinite(Number(rule.levelDiffMaxPct)) ? Math.max(0, Math.min(500, Number(rule.levelDiffMaxPct))) : 20
   };
 }
 

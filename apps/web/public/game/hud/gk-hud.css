@@ -154,6 +154,11 @@
 .gkLevelUp { z-index: 70; top: 26%; left: 50%; transform: translateX(-50%); display: grid; justify-items: center; gap: 2px; pointer-events: none; animation: gkLevelUp 2.6s ease-out forwards; }
 .gkLevelUp .gkIco { width: 64px; height: 64px; }
 .gkLevelUp b { font-size: 26px; font-weight: 900; color: var(--gk-gold); text-shadow: 0 2px 4px #000, 0 0 18px rgba(246, 197, 68, 0.6); }
+/* Fase 6: level omhoog met wat je erbij kreeg en een nieuwe vaardigheid (blijft iets langer staan) */
+.gkLevelUp.gkLevelUpLong { animation-duration: 3.8s; max-width: min(520px, calc(100vw - 32px)); text-align: center; }
+.gkLevelUp small { font-size: 14px; font-weight: 700; color: #ffe7a3; text-shadow: 0 1px 3px #000; }
+.gkLevelUp strong { margin-top: 3px; padding: 4px 12px; border-radius: 999px; background: rgba(20, 14, 4, 0.75); border: 1px solid rgba(246, 197, 68, 0.6);
+  font-size: 14px; font-weight: 800; color: #fff3d6; overflow-wrap: anywhere; }
 /* Kevin 6-11: quest gehaald (zoals level omhoog, maar met naam, einde en beloning) */
 .gkQuestDone { z-index: 70; top: 12%; left: 50%; transform: translateX(-50%); display: grid; justify-items: center; gap: 3px; max-width: min(560px, calc(100vw - 32px)); text-align: center;
   pointer-events: none; animation: gkQuestDone 4.2s ease-out forwards; }
