@@ -6,7 +6,7 @@ import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../s
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createActorPresentation } from "./actor-presentation.js?v=20261110-fase5b";
-import { createGkHud } from "./hud/gk-hud.js?v=20261112-fase8b";
+import { createGkHud } from "./hud/gk-hud.js?v=20261112-fase8c";
 import { node05ActionBody, node05OperationId } from "./node05-request.js?v=20261112-fase8b";
 import {
   worldToMinimapPoint,
@@ -7608,6 +7608,10 @@ async function runNode03Action(action, targetId, extra = {}) {
         abilityId: extra.abilityId || null,
         level: extra.level === null || extra.level === undefined ? null : Number(extra.level),
         xp: extra.xp === null || extra.xp === undefined ? null : Number(extra.xp),
+        // Fase 8 herstel 2: buitvenster (welke buit, welke regel) en of auto-buit aan staat (de server onthoudt het).
+        lootId: extra.lootId || null,
+        entryKey: extra.entryKey || null,
+        autoLoot: gkHud && typeof gkHud.autoLoot === "function" ? gkHud.autoLoot() === true : null,
         operationId: "node03:" + state.net.clientSessionId + ":" + Date.now() + ":" + Math.random().toString(36).slice(2, 8)
       })
     });
@@ -8147,6 +8151,11 @@ function activateRuntimeTarget(target) {
   if (action === "portal_map") { if (gkHud) gkHud.openPortalMap(target.portalId || String(target.instanceId).replace(/^portal_target\./, "")); return; }
   if (gkHud && (action === "node04:start_dialogue" || action === "node05:focus_service")) {
     gkHud.talkTo(target);
+    return;
+  }
+  // Fase 8 herstel 2 (Kevin 12-11): zonder auto-buit eerst zien wat er ligt (Pakken / Laten).
+  if (action === "pickup" && gkHud && typeof gkHud.openPickup === "function" && typeof gkHud.autoLoot === "function" && gkHud.autoLoot() !== true) {
+    gkHud.openPickup(target);
     return;
   }
   activateRuntimeTargetDirect(target);

@@ -50,6 +50,7 @@ export function sanitizeCombatIntent(action, payload = {}) {
     const intent = { action: normalizedAction, slot, targetId: targetId || null };
     const operationId = payload?.operationId || payload?.operation_id;
     if (hasValue(operationId)) intent.operationId = String(operationId);
+    if (typeof payload?.autoLoot === "boolean") intent.autoLoot = payload.autoLoot;
     return intent;
   }
   if (!targetId) {
@@ -61,5 +62,7 @@ export function sanitizeCombatIntent(action, payload = {}) {
   const intent = { action: normalizedAction, targetId };
   const operationId = payload?.operationId || payload?.operation_id;
   if (hasValue(operationId)) intent.operationId = String(operationId);
+  // Fase 8 herstel 2: een voorkeur van de speler (geen uitkomst): buit meteen in de tas of eerst in het buitvenster.
+  if (typeof payload?.autoLoot === "boolean") intent.autoLoot = payload.autoLoot;
   return intent;
 }

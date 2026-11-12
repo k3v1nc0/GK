@@ -257,7 +257,7 @@ test("ruilen staat uit: dan kan niemand een ruil beginnen", () => {
   assert.throws(() => world.act("p1", "trade_invite", { targetPlayerId: "p2" }), /staat uit/);
 });
 
-test("markt: de belasting gaat eraf en de verkoper krijgt de rest", () => {
+test("markt: de koper betaalt de belasting erbovenop en de verkoper krijgt zijn hele prijs", () => {
   const world = setup({ money: { marketTaxPct: 10 } });
   world.give("p1", "item.sword", 1);
   world.giveMoney("p2", 1000);
@@ -265,8 +265,8 @@ test("markt: de belasting gaat eraf en de verkoper krijgt de rest", () => {
   assert.equal(world.items("p1", "item.sword"), 0, "het item ligt op de markt");
   world.act("p2", "market_buy", { orderId: listed.orderId, quantity: 1 });
   assert.equal(world.items("p2", "item.sword"), 1);
-  assert.equal(world.money("p2"), 800);
-  assert.equal(world.money("p1"), 180, "200 min 10 % belasting");
+  assert.equal(world.money("p2"), 780, "200 plus 10 % belasting");
+  assert.equal(world.money("p1"), 200, "de verkoper krijgt zijn hele prijs");
   // Het belastingdeel is uit het spel verdwenen en staat als zodanig in het grootboek.
   const tax = world.db.prepare("SELECT SUM(-delta_real) AS total FROM economy_ledger WHERE reason = 'market_tax'").get();
   assert.equal(Math.round(Number(tax.total) || 0), 20);

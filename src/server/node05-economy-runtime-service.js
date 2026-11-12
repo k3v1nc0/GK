@@ -115,6 +115,14 @@ function itemIsTradable(item) {
   return item && item.tradable !== false && item.bindPolicy !== "quest_bound" && item.questItem !== true && item.category !== "quest";
 }
 
+// Fase 8 herstel 2: de marktbelasting die de koper bovenop de prijs betaalt. Naar boven afgerond, zodat er bij een
+// kleine prijs ook echt iets af gaat (de HUD rekent precies zo; zie gk-hud.js marketTax).
+export function marketTaxFor(grossMinor, taxPct) {
+  const gross = Math.max(0, safeInteger(grossMinor, 0));
+  const pct = Math.max(0, safeInteger(taxPct, 0));
+  return gross > 0 && pct > 0 ? Math.ceil(gross * pct / 100) : 0;
+}
+
 // Fase 8 herstel: alles wat je mag ruilen mag ook op de markt (een oud item kan het nog expliciet uitzetten).
 function itemMarketOk(item) {
   return Boolean(item) && item.marketEligible !== false && itemIsTradable(item);
@@ -666,14 +674,16 @@ export class Node05EconomyRuntimeService {
   buildTradeSnapshot(ctx) {
     const rules = this.tradeRules(ctx);
     const text = function (lines) { return lines.length ? lines.map(function (line) { return line.text; }).join(", ") : "niets"; };
+    // Fase 8 herstel 2: een verlopen ruil gaat echt dicht en staat niet meer in beeld (eerst bleef hij hangen).
+    this.expireTradeSessions();
     const sessions = this.db.prepare(`
       SELECT *
       FROM direct_trade_sessions
       WHERE (player_a_id = ? OR player_b_id = ?)
-        AND state IN ('invited', 'open')
+        AND state IN ('invited', 'open') AND expires_at > ?
       ORDER BY updated_at DESC
       LIMIT 3
-    `).all(ctx.profile.id, ctx.profile.id).map((row) => {
+    `).all(ctx.profile.id, ctx.profile.id, now()).map((row) => {
       const mineIsA = row.player_a_id === ctx.profile.id;
       const partnerId = mineIsA ? row.player_b_id : row.player_a_id;
       const give = this.tradeOffers(row.id, ctx.profile.id).map((entry) => this.tradeLine(ctx, entry));
@@ -1169,11 +1179,18 @@ export class Node05EconomyRuntimeService {
     if (!row || (row.player_a_id !== ctx.profile.id && row.player_b_id !== ctx.profile.id)) throw httpError(404, "Deze ruil bestaat niet meer.");
     if (!active) return row;
     if (!["invited", "open"].includes(row.state)) throw httpError(409, "Deze ruil is al afgelopen.");
-    if (row.expires_at && Date.parse(row.expires_at) <= Date.now()) {
-      this.closeTrade(row.id, "expired");
-      throw httpError(409, "De ruil is verlopen. Vraag het opnieuw.");
-    }
+    // (Dichtzetten gebeurt in expireTradeSessions; hier zou het bij de fout weer terugrollen.)
+    if (row.expires_at && Date.parse(row.expires_at) <= Date.now()) throw httpError(409, "De ruil is verlopen. Vraag het opnieuw.");
+    // Fase 8 herstel 2: zolang iemand iets doet blijft de ruil open; de tijd uit 🤝 Handel telt vanaf de laatste actie.
+    this.db.prepare("UPDATE direct_trade_sessions SET expires_at = ? WHERE id = ?").run(addSeconds(Math.max(20, safeInteger(this.tradeRules(ctx).tradeHoldSeconds, 120))), row.id);
     return row;
+  }
+
+  // Eén UPDATE is op zichzelf al alles-of-niets, dus dit mag binnen en buiten een transactie.
+  expireTradeSessions() {
+    const stamp = now();
+    this.db.prepare("UPDATE direct_trade_sessions SET state = 'expired', cancelled_at = ?, updated_at = ?, revision = revision + 1 WHERE state IN ('invited', 'open') AND expires_at <= ?")
+      .run(stamp, stamp, stamp);
   }
 
   tradePartnerId(row, ctx) {
@@ -1381,7 +1398,13 @@ export class Node05EconomyRuntimeService {
   }
 
   cancelTrade(ctx, payload) {
-    const row = this.tradeSession(ctx, payload.tradeId || payload.trade_id);
+    // Fase 8 herstel 2: Nee/Afbreken werkt altijd, ook op een oude of verlopen ruil (anders bleef die hangen).
+    const row = this.tradeSession(ctx, payload.tradeId || payload.trade_id, false);
+    const live = ["invited", "open"].includes(row.state);
+    if (!live || (row.expires_at && Date.parse(row.expires_at) <= Date.now())) {
+      if (live) this.closeTrade(row.id, "expired");
+      return { action: "trade_cancel", tradeId: row.id, message: "Die ruil was al afgelopen. Hij is weg." };
+    }
     this.closeTrade(row.id, "cancelled");
     return { action: "trade_cancel", tradeId: row.id, notify: [this.tradePartnerId(row, ctx)], message: "Ruil afgebroken." };
   }
@@ -1689,13 +1712,14 @@ export class Node05EconomyRuntimeService {
     const quantity = Math.min(normalizeQuantity(payload.quantity, 1), safeInteger(order.quantity_remaining, 0));
     if (quantity <= 0) throw httpError(409, "Dat is net uitverkocht.");
     const gross = safeInteger(order.unit_price_minor, 0) * quantity;
+    // Fase 8 herstel 2 (Kevin 12-11): de koper betaalt de marktbelasting bovenop de prijs; de verkoper krijgt zijn hele prijs.
+    // De belasting (Instellingen > 💰 Geld) verdwijnt uit het spel en staat apart in het overzicht.
+    const tax = marketTaxFor(gross, economyRules(ctx.project).marketTaxPct);
+    const sellerAmount = gross;
     this.spendCurrency(ctx, order.currency_id, gross, "market_buy", order.id, operationId);
-    // Fase 8b: de marktbelasting staat op één plek: Instellingen > 💰 Geld.
-    const taxPct = Math.max(0, safeInteger(economyRules(ctx.project).marketTaxPct, 0));
-    const tax = Math.min(gross, Math.round(gross * taxPct / 100));
-    const sellerAmount = Math.max(0, gross - tax);
+    if (tax > 0) this.spendCurrency(ctx, order.currency_id, tax, "market_tax", order.id, operationId);
     this.node03RuntimeService.grantItem(ctx, order.item_id, quantity, "market_buy", order.id, operationId);
-    this.creditMarketSeller(ctx, order.seller_player_id, order.currency_id, sellerAmount, order, operationId, tax);
+    this.creditMarketSeller(ctx, order.seller_player_id, order.currency_id, sellerAmount, order, operationId);
     const remaining = safeInteger(order.quantity_remaining, 0) - quantity;
     const status = remaining > 0 ? "partially_filled" : "filled";
     this.db.prepare(`
@@ -1714,14 +1738,14 @@ export class Node05EconomyRuntimeService {
       INSERT INTO market_trades (id, operation_id, order_id, buyer_player_id, seller_player_id, quantity, currency_id, unit_price_minor, gross_amount_minor, tax_amount_minor, seller_amount_minor, created_at, metadata_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}')
     `).run(randomId("market_trade"), operationId, order.id, ctx.profile.id, order.seller_player_id, quantity, order.currency_id, safeInteger(order.unit_price_minor, 0), gross, tax, sellerAmount, now());
+    const money = displayForCurrency(ctx.catalogs, order.currency_id);
     return { action: "market_buy", orderId: order.id, notify: [order.seller_player_id],
-      message: "Gekocht op de markt: " + quantity + "× " + displayForItem(ctx.catalogs, order.item_id) + " voor " + gross + " " + displayForCurrency(ctx.catalogs, order.currency_id) + "." };
+      message: "Gekocht op de markt: " + quantity + "× " + displayForItem(ctx.catalogs, order.item_id) + " voor " + (gross + tax) + " " + money
+        + (tax > 0 ? " (" + gross + " + " + tax + " marktbelasting)." : ".") };
   }
 
-  // amount = wat de verkoper krijgt, taxMinor = wat de markt eraf haalde (dat geld verdwijnt uit het spel).
-  creditMarketSeller(ctx, sellerPlayerId, currencyId, amount, order, operationId, taxMinor = 0) {
-    const tax = Math.max(0, safeInteger(taxMinor, 0));
-    if (tax > 0) this.node03RuntimeService.recordLedger(operationId, sellerPlayerId, "currency", currencyId, -tax, amount + tax, amount, "market_tax", order.id);
+  // amount = wat de verkoper krijgt (zijn hele prijs; de koper betaalde de belasting erbovenop).
+  creditMarketSeller(ctx, sellerPlayerId, currencyId, amount, order, operationId) {
     if (amount <= 0) return;
     const sellerOnline = this.mmoService.countConnectedPlayerSessions ? this.mmoService.countConnectedPlayerSessions(sellerPlayerId) > 0 : false;
     if (sellerOnline) {
@@ -1740,7 +1764,7 @@ export class Node05EconomyRuntimeService {
       return;
     }
     this.createSystemMail(sellerPlayerId, "market_sale", "Verkocht op de markt",
-      "Iemand kocht je " + displayForItem(ctx.catalogs, order.item_id) + " op de markt. Dit is je geld" + (tax > 0 ? " (de markt hield " + tax + " in)." : "."), [
+      "Iemand kocht je " + displayForItem(ctx.catalogs, order.item_id) + " op de markt. Dit is je geld.", [
       { kind: "currency", assetId: currencyId, quantityMinor: amount }
     ], order.id, Math.max(1, safeInteger(this.tradeRules(ctx).mailKeepDays, 30)));
   }

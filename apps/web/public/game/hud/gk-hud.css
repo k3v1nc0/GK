@@ -338,7 +338,7 @@
 .gkPanelBody { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .gkHud[data-panel="rail"] .gkPanelBody { display: none; }
 .gkPanelResize { position: relative; z-index: 5; display: none; flex: none; align-items: center; justify-content: center; touch-action: none; background: rgba(6, 10, 18, 0.55); }
-.gkHud[data-panel="open"] .gkPanelResize { display: flex; }
+.gkHud[data-panel="open"] .gkPanelResize, .gkHud[data-panel="dock"] .gkPanelResize { display: flex; }
 .gkHud:not([data-orient="port"]) .gkPanelResize { width: 14px; cursor: col-resize; border-right: 1px solid var(--gk-line); }
 .gkHud:not([data-orient="port"]) .gkPanelResize::before { content: ""; position: absolute; inset: 0 -7px; }
 .gkHud:not([data-orient="port"]) .gkPanelResize i { width: 4px; height: 46px; }
@@ -364,12 +364,12 @@
 .gkSplitBar:hover i, .gkSplitBar.gkOn i { background: var(--gk-accent); }
 .gkHud[data-orient="port"][data-panel="open"][data-dock="chat"],
 .gkHud[data-orient="port"][data-panel="open"][data-dock="talk"] { --gk-panel-h: min(68vh, calc(600px * var(--gk-scale))); }
-.gkHud[data-orient="port"][data-panel="dock"] .gkPanel { height: auto; }
-.gkHud[data-orient="port"][data-panel="dock"][data-dock="chat"] .gkPanel { height: min(46vh, calc(400px * var(--gk-scale))); }
+.gkHud[data-orient="port"][data-panel="dock"] .gkPanel { height: var(--gk-dock-h, auto); }
+.gkHud[data-orient="port"][data-panel="dock"][data-dock="chat"] .gkPanel { height: var(--gk-dock-h, min(46vh, calc(400px * var(--gk-scale)))); }
 .gkHud[data-orient="port"][data-panel="dock"][data-dock="talk"][data-service="trade"] .gkPanel,
-.gkHud[data-orient="port"][data-panel="dock"][data-dock="talk"][data-service="craft"] .gkPanel { height: min(68vh, calc(600px * var(--gk-scale))); }
+.gkHud[data-orient="port"][data-panel="dock"][data-dock="talk"][data-service="craft"] .gkPanel { height: var(--gk-dock-h, min(68vh, calc(600px * var(--gk-scale)))); }
 .gkHud[data-orient="port"][data-dockbig="1"] .gkPanel { height: min(80vh, calc(720px * var(--gk-scale))); }
-.gkHud[data-orient="port"][data-panel="dock"] .gkTalk { max-height: 50vh; }
+.gkHud[data-orient="port"][data-panel="dock"] .gkTalk { max-height: var(--gk-dock-h, 50vh); }
 .gkHud[data-orient="port"][data-panel="dock"][data-service="trade"] .gkTalk,
 .gkHud[data-orient="port"][data-panel="dock"][data-service="craft"] .gkTalk { max-height: none; }
 
@@ -590,6 +590,8 @@
 
 /* geld: plaatje zo groot als de tekst */
 .gkCoin img, .gkPrice img { width: 1.3em; height: 1.3em; object-fit: contain; flex: none; display: block; }
+/* Kevin 12-11: valutaplaatje overal een vaste maat; in een vakje, munt of prijs geldt de regel daarvan. */
+.gkCurImg { width: 22px; height: 22px; object-fit: contain; flex: none; display: block; }
 .gkCoin b { line-height: 1; }
 
 /* kleine ronde knoppen naast de minimap: kaart groot/klein/uit en volledig scherm */
@@ -797,6 +799,26 @@
 .gkPortalAsk { position: absolute; z-index: 45; top: 30%; border-color: rgba(199, 125, 255, 0.7); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55), 0 0 18px rgba(199, 125, 255, 0.3); }
 .gkPortalAsk .gkInviteText small { display: block; margin-top: 2px; font-size: 12px; opacity: 0.8; }
 .gkPortalAsk .gkInviteYes { background: linear-gradient(180deg, #8a4fd0, #5c2f99); border-color: rgba(199, 125, 255, 0.85); }
+/* Fase 8 herstel 2 (Kevin 12-11): buitvenster (kies wat je meeneemt) en "Hier ligt ..." bij een pickup. */
+.gkLootCard { top: 24%; z-index: 7; width: min(340px, calc(100% - 2 * var(--gk-edge))); border-color: rgba(255, 200, 87, 0.7);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55), 0 0 18px rgba(255, 200, 87, 0.25); }
+.gkHud[data-orient="port"] .gkLootCard { top: 30%; }
+.gkLootHead { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.gkLootHead .gkIco { width: 24px; height: 24px; flex: none; }
+.gkLootHead b { color: var(--gk-gold); }
+.gkLootHead small { margin-left: auto; font-size: 11px; color: var(--gk-muted); }
+.gkLootList { display: grid; gap: 8px; max-height: min(40vh, 300px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.gkLootPart { display: grid; gap: 4px; }
+.gkLootFrom { font-size: 11px; color: var(--gk-muted); }
+.gkLootRow { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto auto; align-items: center; gap: 8px; font-size: 13px; }
+.gkLootRow .gkCell { width: 36px; height: 36px; padding: 4px; border-radius: 8px; }
+.gkLootName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+.gkLootRow small { font-weight: 800; color: var(--gk-text); }
+.gkLootTake { min-height: 32px; padding: 0 10px; font-size: 12px; }
+.gkLootCard.gkLootSmall { top: calc(var(--gk-edge) + var(--gk-portrait) + 20px); width: max-content; padding: 0; background: none; border: 0; box-shadow: none; }
+.gkLootOpen { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px; border-radius: 18px; font-weight: 800; font-size: 13px;
+  color: var(--gk-text); background: var(--gk-bg); border: 1px solid rgba(255, 200, 87, 0.7); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5); }
+.gkLootOpen .gkIco { width: 20px; height: 20px; flex: none; }
 
 .gkMenuShade { inset: 0; z-index: 39; pointer-events: auto; background: transparent; }
 .gkMenu { z-index: 40; min-width: calc(220px * var(--gk-scale)); max-width: min(290px, calc(100% - 16px)); display: grid; gap: 5px; padding: 8px; border-radius: 14px;

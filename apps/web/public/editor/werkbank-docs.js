@@ -474,6 +474,22 @@ export function createDocBench(options = {}) {
       add.classList.add("wbdSlotAdd");
       wrap.append(add);
     }
+    // Fase 8 herstel 2 (Kevin 12-11): oude winkelregels hebben nog een eigen prijs (vaak 10 van vroeger).
+    // Die gaat voor de opslag uit Instellingen > Geld. Eén knop zet alles terug op automatisch (0).
+    const priceKeys = field.columns.map((column) => column.key).filter((key) => key === "price" || key === "buyBack");
+    if (priceKeys.length && rows.some((row) => priceKeys.some((key) => Number(row[key]) > 0))) {
+      const money = bench.docs("economy_settings")[0]?.body || {};
+      const markup = Number(money.shopMarkupPct) > 0 ? Number(money.shopMarkupPct) : 150;
+      const buyPct = money.shopBuyPct == null || !Number.isFinite(Number(money.shopBuyPct)) ? 100 : Number(money.shopBuyPct);
+      const auto = el("button", { type: "button", class: "wbdGhost", text: "🪙 Alle prijzen automatisch",
+        title: "Zet alle eigen prijzen op 0. Dan kost een item Verkoopwaarde × " + markup + " % en koopt de winkel terug voor " + buyPct + " %." });
+      auto.addEventListener("click", () => {
+        if (!window.confirm("Alle eigen prijzen hier op 0 (automatisch) zetten?\nKopen = Verkoopwaarde × " + markup + " %, terugkopen = " + buyPct + " %.")) return;
+        rows.forEach((row) => { priceKeys.forEach((key) => { row[key] = 0; }); });
+        commit();
+      });
+      wrap.append(el("div", { class: "wbdMuted", text: "Een eigen prijs boven 0 gaat voor de opslag uit Instellingen > 💰 Geld." }), auto);
+    }
     return wrap;
   }
 
@@ -1294,7 +1310,8 @@ export function createDocBench(options = {}) {
       box.append(el("div", { class: "wbdFinding" }, [
         el("div", { class: "wbdFindingText", text: "🏪 " + sale.buyerName + " kocht " + (sale.quantity > 1 ? sale.quantity + "× " : "")
           + (itemNames.get(sale.itemId) || sale.itemId) + " van " + sale.sellerName }),
-        el("div", { class: "wbdNote", text: dayText(sale.at) + " · betaald " + sale.gross + " " + money
+        // Fase 8 herstel 2: de koper betaalt de belasting erbovenop; betaald = wat de verkoper kreeg + de belasting.
+        el("div", { class: "wbdNote", text: dayText(sale.at) + " · betaald " + (Number(sale.toSeller || 0) + Number(sale.tax || 0)) + " " + money
           + " · belasting " + sale.tax + " · naar de verkoper " + sale.toSeller })]));
     }
     if (log.busiest.length) {

@@ -21,6 +21,8 @@ const HEAL_POWER_STAT_ID = "stat.heal_power";
 const GOLD_CURRENCY_ID = "currency.gold";
 const DEFAULT_CHARACTER_ID = "player.desert_guardian";
 const DEFAULT_BIND_STATE = "unbound";
+// Fase 8 herstel 2: zo lang blijft buit klaarliggen in het buitvenster als je hem (nog) niet pakt.
+const LOOT_KEEP_MS = 5 * 60 * 1000;
 // Fase 5: indeling van vak 2 en 3 per character (player_ability_loadouts).
 const HOTBAR_LOADOUT_ID = "hotbar";
 // Fase 6: balken (houden hun stand); de andere stats (kracht, pantser, heal-kracht) staan altijd op hun maximum.
@@ -511,6 +513,8 @@ export class Node03RuntimeService {
     if (["reset_demo", "reset", "debug_inventory_add", "inventory_add", "debug_inventory_remove", "inventory_remove", "debug_inventory_cleanup", "inventory_cleanup", "debug_level_reset", "level_reset", "debug_currency_add", "currency_add", "debug_currency_remove", "currency_remove"].includes(action)) {
       assertDeveloperActionAllowed(ctx);
     }
+    // Fase 8 herstel 2: de speler zegt bij elke actie of buit meteen in de tas mag (Automatisch buit pakken).
+    if (typeof payload.autoLoot === "boolean") this.rememberAutoLoot(ctx.profile.id, payload.autoLoot);
     // F2-E2-T07: loot, grant, death en receipt in een transactie; ACK pas na COMMIT.
     let response;
     try {
@@ -1425,6 +1429,9 @@ export class Node03RuntimeService {
     if (action === "skill") return this.useSkill(ctx, payload, operationId);
     if (action === "destroy") return this.destroyItem(ctx, payload, operationId);
     if (action === "destroy_many") return this.destroyItems(ctx, payload, operationId);
+    // Fase 8 herstel 2: het buitvenster (één ding pakken of alles).
+    if (action === "loot_take") return this.takeLoot(ctx, payload, operationId, false);
+    if (action === "loot_take_all") return this.takeLoot(ctx, payload, operationId, true);
     const error = new Error("Onbekende spelactie: " + (action || "-"));
     error.status = 400;
     throw error;
@@ -2239,6 +2246,110 @@ export class Node03RuntimeService {
     return grants;
   }
 
+  // ---- Fase 8 herstel 2 (Kevin 12-11): het buitvenster ----
+  // De voorkeur komt van de speler zelf (vinkje in het spelmenu) en gaat met elke actie mee. Onbekend = automatisch,
+  // zodat een oudere client en de tests werken zoals eerst.
+  rememberAutoLoot(playerId, value) {
+    if (!this.autoLootPrefs) this.autoLootPrefs = new Map();
+    if (playerId && typeof value === "boolean") this.autoLootPrefs.set(playerId, value);
+  }
+
+  autoLootFor(playerId) {
+    const value = this.autoLootPrefs ? this.autoLootPrefs.get(playerId) : undefined;
+    return value === undefined ? true : value === true;
+  }
+
+  // Leg buit klaar voor één speler. Geeft het id terug, of null als er niets te pakken valt.
+  holdLoot(ctx, playerId, sourceKind, sourceRef, label, rows, reason, operationId) {
+    const entries = (Array.isArray(rows) ? rows : []).map(function (row, index) {
+      const quantity = Math.max(1, safeInteger(row?.quantity, 1));
+      if (row?.currencyId) return { key: String(index + 1), currencyId: String(row.currencyId), quantity };
+      if (row?.itemId) return { key: String(index + 1), itemId: String(row.itemId), quantity };
+      return null;
+    }).filter(Boolean);
+    if (!entries.length) return null;
+    const id = "loot_" + crypto.randomUUID();
+    const stamp = now();
+    this.db.prepare(`
+      INSERT INTO player_pending_loot (id, player_id, world_id, source_kind, source_ref, label, reason, entries_json, state, operation_id, revision, created_at, updated_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, 1, ?, ?, ?)
+    `).run(id, playerId, ctx.worldId || "world.main", sourceKind, safeString(sourceRef, "-"), label || null, reason, stableJson(entries), operationId || null,
+      stamp, stamp, new Date(Date.now() + LOOT_KEEP_MS).toISOString());
+    return id;
+  }
+
+  // Wat de HUD toont: je open buit (nieuwste eerst). Wat te lang lag, gaat eerst dicht.
+  lootForHud(ctx) {
+    const stamp = now();
+    this.db.prepare("UPDATE player_pending_loot SET state = 'expired', updated_at = ?, revision = revision + 1 WHERE player_id = ? AND state = 'open' AND expires_at <= ?")
+      .run(stamp, ctx.profile.id, stamp);
+    // Opgeruimde buit (gepakt of verlopen) na een dag weg, zodat de tabel klein blijft op een oude laptop.
+    this.db.prepare("DELETE FROM player_pending_loot WHERE player_id = ? AND state <> 'open' AND updated_at < ?")
+      .run(ctx.profile.id, new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
+    const pending = this.db.prepare(`
+      SELECT * FROM player_pending_loot WHERE player_id = ? AND state = 'open' AND expires_at > ? ORDER BY created_at DESC LIMIT 8
+    `).all(ctx.profile.id, stamp).map((row) => ({
+      lootId: row.id,
+      sourceKind: row.source_kind,
+      label: row.label || (row.source_kind === "resource" ? "Grondstof" : "Buit"),
+      expiresAt: row.expires_at,
+      entries: safeJsonParse(row.entries_json, []).map((entry) => ({
+        key: String(entry.key),
+        kind: entry.currencyId ? "currency" : "item",
+        itemId: entry.itemId || null,
+        currencyId: entry.currencyId || null,
+        quantity: Math.max(1, safeInteger(entry.quantity, 1)),
+        displayName: entry.currencyId ? displayForCurrency(ctx.catalogs, entry.currencyId) : displayForItem(ctx.catalogs, entry.itemId)
+      }))
+    })).filter((loot) => loot.entries.length);
+    const pref = this.autoLootPrefs ? this.autoLootPrefs.get(ctx.profile.id) : undefined;
+    return { autoLoot: pref === undefined ? null : pref, keepSeconds: Math.round(LOOT_KEEP_MS / 1000), pending };
+  }
+
+  // Pakken: één regel (entryKey) uit één buit, of alles (uit één buit of uit alles wat klaarligt).
+  // Alles in dezelfde transactie: het item gaat in je tas en verdwijnt hier tegelijk.
+  takeLoot(ctx, payload, operationId, all) {
+    const lootId = safeString(payload.lootId || payload.loot_id, "");
+    const entryKey = safeString(payload.entryKey || payload.entry_key, "");
+    const stamp = now();
+    if (!all && (!lootId || !entryKey)) throw httpError(400, "Kies wat je wilt pakken.");
+    const rows = lootId
+      ? [this.db.prepare("SELECT * FROM player_pending_loot WHERE id = ? AND player_id = ? LIMIT 1").get(lootId, ctx.profile.id)].filter(Boolean)
+      : this.db.prepare("SELECT * FROM player_pending_loot WHERE player_id = ? AND state = 'open' AND expires_at > ? ORDER BY created_at ASC LIMIT 20").all(ctx.profile.id, stamp);
+    const live = rows.filter((row) => row.state === "open" && row.expires_at > stamp);
+    if (!live.length) throw httpError(404, "Deze buit ligt er niet meer (te lang blijven liggen of al gepakt).");
+    const grants = [];
+    const kept = [];
+    let found = false;
+    for (const row of live) {
+      const left = [];
+      for (const entry of safeJsonParse(row.entries_json, [])) {
+        if (!all && String(entry.key) !== entryKey) { left.push(entry); continue; }
+        found = true;
+        // Een uniek item dat je al hebt blijft liggen (anders zou het verdwijnen).
+        const item = entry.itemId ? catalogSection(ctx.catalogs, "items")[entry.itemId] || {} : null;
+        if (item && item.unique === true && this.ownedItemCount(ctx.profile.id, entry.itemId) >= 1) {
+          kept.push(displayForItem(ctx.catalogs, entry.itemId));
+          left.push(entry);
+          continue;
+        }
+        grants.push(...this.grantLootRow(ctx, { itemId: entry.itemId || null, currencyId: entry.currencyId || null, quantity: entry.quantity },
+          row.reason || "loot_taken", row.source_ref, operationId));
+      }
+      this.db.prepare("UPDATE player_pending_loot SET entries_json = ?, state = ?, updated_at = ?, revision = revision + 1 WHERE id = ?")
+        .run(stableJson(left), left.length ? "open" : "taken", stamp, row.id);
+    }
+    if (!found) throw httpError(404, "Dat ligt er niet meer.");
+    if (!grants.length && kept.length) throw httpError(409, "Je hebt al " + kept.join(", ") + "; dat mag je maar één keer hebben.");
+    return {
+      action: all ? "loot_take_all" : "loot_take",
+      lootId: lootId || null,
+      grants,
+      events: [{ type: "looted", amount: grants.length }],
+      message: kept.length ? "Bleef liggen (heb je al): " + kept.join(", ") + "." : ""
+    };
+  }
+
   // Fase 8: één regel buit: een item of geld (een loottabel mag geld laten vallen).
   grantLootRow(ctx, row, reason, sourceRef, operationId) {
     if (row && row.currencyId) {
@@ -2519,7 +2630,12 @@ export class Node03RuntimeService {
       const rewardCtx = reward.playerId === ctx.profile.id ? ctx : Object.assign({}, ctx, { profile: { id: reward.playerId } });
       if (!this.claimActorReward(ctx, reward.claimKey, plan.instanceId, reward.playerId, operationId, plan.buildId)) continue;
       const given = [];
-      for (const item of reward.items) given.push(...this.grantLootRow(rewardCtx, item, "actor_defeated", plan.instanceId, operationId));
+      // Fase 8 herstel 2: zonder Automatisch buit pakken ligt de buit eerst klaar in het buitvenster (XP krijg je meteen).
+      if (this.autoLootFor(reward.playerId)) {
+        for (const item of reward.items) given.push(...this.grantLootRow(rewardCtx, item, "actor_defeated", plan.instanceId, operationId));
+      } else {
+        this.holdLoot(ctx, reward.playerId, "enemy", plan.instanceId, plan.label, reward.items, "actor_defeated", operationId);
+      }
       const xp = reward.xp > 0 ? this.grantXpAmount(rewardCtx, reward.xp, "actor_defeated", plan.instanceId, operationId) : null;
       if (xp) given.push(xp);
       this.db.prepare("UPDATE actor_loot_claims SET grants_json = ? WHERE claim_key = ?").run(stableJson(given), reward.claimKey);
@@ -2553,7 +2669,9 @@ export class Node03RuntimeService {
       return { action: "gather", targetId: plan.instanceId, message: plan.label + " is al verzameld.", events: [] };
     }
     const grants = [];
-    for (const item of plan.items) grants.push(...this.grantLootRow(ctx, item, "resource_gathered", plan.instanceId, operationId));
+    // Fase 8 herstel 2: zonder Automatisch buit pakken ligt de opbrengst eerst klaar in het buitvenster.
+    const held = this.autoLootFor(ctx.profile.id) ? null : this.holdLoot(ctx, ctx.profile.id, "resource", plan.instanceId, plan.label, plan.items, "resource_gathered", operationId);
+    if (!held) for (const item of plan.items) grants.push(...this.grantLootRow(ctx, item, "resource_gathered", plan.instanceId, operationId));
     this.db.prepare("UPDATE actor_loot_claims SET grants_json = ? WHERE claim_key = ?").run(stableJson(grants), plan.claimKey);
     // Stap 5: Ieder zijn eigen = alleen voor jou weg (in het geheugen), niet voor iedereen.
     if (!plan.personal) this.saveActorSpawnState(ctx, plan.spawnKey, plan.occurrence, "depleted", plan.respawnAtMs, plan.buildId);
@@ -2793,6 +2911,8 @@ export class Node03RuntimeService {
       healSpell: this.healSpellForHud(ctx),
       // Portals (8-11): welke portals je ziet, welke vrij zijn, kosten en wachttijd.
       portals: this.portalSnapshot(ctx),
+      // Fase 8 herstel 2: wat er klaarligt in het buitvenster.
+      loot: this.lootForHud(ctx),
       entities,
       interactionTargets: this.buildInteractionTargets(ctx, entities),
       ui: {

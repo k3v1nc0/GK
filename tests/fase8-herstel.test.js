@@ -218,20 +218,22 @@ test("markt bij een NPC: prijs verplicht, koper betaalt, verkoper krijgt het (of
   const seen = world.svc.buildMarketSnapshot(world.ctx("p2"));
   assert.equal(seen.orders.length, 1);
   assert.equal(world.svc.buildMarketSnapshot(world.ctx("p1")).myOrders.length, 1);
-  // Anna is online: ze krijgt meteen 30 min 5 % (afgerond 2) = 28, en een seintje.
+  // Anna is online: ze krijgt meteen haar hele 30 en een seintje. Bob betaalt 30 + 5 % belasting (afgerond 2) = 32.
   const bought = world.act("p2", "market_buy", { marketId: "market.npc.mia", orderId: listed.orderId, quantity: 1 });
   assert.deepEqual(bought.notify, ["p1"]);
-  assert.equal(world.money("p2"), 70);
-  assert.equal(world.money("p1"), 28);
+  assert.match(bought.message, /voor 32 Goud \(30 \+ 2 marktbelasting\)/);
+  assert.equal(world.money("p2"), 68);
+  assert.equal(world.money("p1"), 30);
   assert.equal(world.items("p2", "item.pelt"), 1);
   // Anna is offline: het geld komt met de post.
   world.online.delete("p1");
   world.act("p2", "market_buy", { marketId: "market.npc.mia", orderId: listed.orderId, quantity: 1 });
-  assert.equal(world.money("p1"), 28, "nog niet in de beurs");
+  assert.equal(world.money("p2"), 36);
+  assert.equal(world.money("p1"), 30, "nog niet in de beurs");
   const mail = world.svc.buildMailSnapshot(world.ctx("p1"));
   assert.equal(mail.messages[0].subject, "Verkocht op de markt");
   world.act("p1", "mail_claim", { mailId: mail.messages[0].mailId || mail.messages[0].id });
-  assert.equal(world.money("p1"), 56);
+  assert.equal(world.money("p1"), 60);
   // Te ver van Mia: niet kopen.
   world.give("p1", "item.sword", 1);
   const sword = world.act("p1", "market_list", { marketId: "market.npc.mia", itemId: "item.sword", quantity: 1, unitPriceMinor: 10 });

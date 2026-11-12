@@ -32,7 +32,7 @@ export const ECONOMY_KINDS = {
           "12 is ruim genoeg. 0 = niets terugkopen.",
           "Spelers verkopen per ongeluk iets en zijn het kwijt → hoger.")),
       marketTaxPct: slider("Marktbelasting", "🏛️", 5, 0, 50, 1, "%", [0, 25], SINK_GROUP,
-        help("Hoeveel procent van een verkoop op de markt naar de stad gaat in plaats van naar de verkoper. Zo verdwijnt er geld uit het spel.",
+        help("Hoeveel procent de koper op de markt bovenop de prijs betaalt. Dat deel gaat naar de stad en verdwijnt uit het spel; de verkoper krijgt zijn hele prijs.",
           "5 % merk je nauwelijks en houdt de prijzen gezond.",
           "Er komt te veel geld in het spel → hoger. Spelers mijden de markt → lager.")),
       craftCostPct: slider("Craftkosten", "🔨", 10, 0, 200, 5, "% van de waarde", [0, 50], SINK_GROUP,
