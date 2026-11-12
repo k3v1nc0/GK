@@ -57,6 +57,11 @@ export const TRADE_KINDS = {
         help("Hoeveel aanbiedingen één speler tegelijk op de markt mag hebben staan.",
           "20 is genoeg voor een gewone speler.",
           "Eén speler vult de hele markt → lager.")),
+      // Fase 8 herstel: post sturen staat in het spelmenu (tabblad 📬 Post) en in het spelermenu.
+      mailOn: toggle("Spelers mogen post sturen", "✉️", true, MAIL_GROUP,
+        help("Of spelers elkaar post kunnen sturen (een bericht, met een item of geld erbij als ze willen). Post van de markt komt altijd.",
+          "Aan. Wat je meestuurt gaat meteen uit je tas en ligt dan veilig in de post.",
+          "Spelers sturen elkaar onzin → zet het spamgrens lager, of zet dit uit.")),
       mailKeepDays: int("Hoe lang post blijft liggen", "📬", 30, 1, 365, 1, "dagen", [1, 90], MAIL_GROUP,
         help("Hoe lang een bericht met geld of items in de postbus blijft staan voordat het verdwijnt.",
           "30 dagen: ruim genoeg om terug te komen.",

@@ -6,7 +6,8 @@ import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../s
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createActorPresentation } from "./actor-presentation.js?v=20261110-fase5b";
-import { createGkHud } from "./hud/gk-hud.js?v=20261111-bag2";
+import { createGkHud } from "./hud/gk-hud.js?v=20261112-fase8b";
+import { node05ActionBody, node05OperationId } from "./node05-request.js?v=20261112-fase8b";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -9436,23 +9437,8 @@ async function runNode05Action(action, payload = {}) {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({
-        action: normalized,
-        stationId: payload.stationId || null,
-        recipeId: payload.recipeId || null,
-        jobId: payload.jobId || null,
-        vendorId: payload.vendorId || null,
-        offerId: payload.offerId || null,
-        orderId: payload.orderId || null,
-        mailId: payload.mailId || null,
-        inviteId: payload.inviteId || null,
-        targetPlayerId: payload.targetPlayerId || null,
-        itemId: payload.itemId || null,
-        currencyId: payload.currencyId || null,
-        quantity: payload.quantity === null || payload.quantity === undefined ? null : Number(payload.quantity),
-        unitPriceMinor: payload.unitPriceMinor === null || payload.unitPriceMinor === undefined ? null : Number(payload.unitPriceMinor),
-        operationId: "node05:" + state.net.clientSessionId + ":" + Date.now() + ":" + Math.random().toString(36).slice(2, 8)
-      })
+      // Eén gedeelde lijst met velden (node05-request.js), zodat er onderweg niets wegvalt.
+      body: JSON.stringify(node05ActionBody(normalized, payload, node05OperationId(state.net.clientSessionId)))
     });
     if (response.status === 401) {
       window.location.href = "/login/?next=%2Fgame%2F";
@@ -9475,6 +9461,8 @@ async function runNode05Action(action, payload = {}) {
     renderNode03Hud();
     renderNode04Hud();
     renderNode05Hud();
+    // Fase 8 herstel: de HUD wil weten of het lukte (dan maakt hij bijv. het postformulier leeg).
+    return data;
   } catch (error) {
     state.node05.lastError = String(error?.message || error || "Handelsactie mislukt.");
     showHudError(state.node05.lastError);
@@ -12687,6 +12675,11 @@ function handleSocketMessage(raw) {
     loadNode04State().catch(function () {});
     return;
   }
+  // Fase 8 herstel: iemand ruilde met je, stuurde je post of kocht iets van je op de markt; haal de stand meteen op.
+  if (message.type === "node05:refresh") {
+    loadNode05State({ silent: true }).then(function () { return loadNode03State({ silent: true }); }).catch(function () {});
+    return;
+  }
   // Kevin 6-11: quest gehaald = feestelijke melding in beeld (zoals level omhoog).
   if (message.type === "quest:completed") {
     if (gkHud?.questDone) gkHud.questDone(message);
@@ -14242,6 +14235,10 @@ function ensureGkHud() {
     },
     station: function (stationId) {
       return stationId ? node05CraftingStations().find(function (station) { return station.stationId === stationId; }) || null : null;
+    },
+    // Fase 8 herstel: de markt bij een NPC (spelers verkopen hier aan elkaar).
+    market: function (marketId) {
+      return marketId ? node05MarketAccesses().find(function (market) { return market.marketAccessId === marketId; }) || null : null;
     },
     run03: function (action, targetId, extra) { return runNode03Action(action, targetId, extra || {}); },
     // Fase 5: vak 2 en 3.

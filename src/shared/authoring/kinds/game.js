@@ -150,8 +150,12 @@ export const GAME_KINDS = {
         help("Met welke valuta je bij deze NPC betaalt.", "Sleep een valuta (bijv. Goud) uit de Bibliotheek op dit vak.", "Melding 'winkel zonder valuta' → sleep hier een valuta op.")),
       crafting: toggle("Kan dingen maken", "🔨", false, "werkbank",
         help("Kun je bij deze NPC recepten maken (crafting)?", "Aan voor een smid of kok. Alle recepten werken bij elke NPC met dit aan.", "Je ziet geen recepten → zet dit aan en maak een Recept-kaart.")),
+      // Fase 8 herstel: bij deze NPC zetten spelers dingen op de markt en kopen ze van elkaar.
+      market: toggle("Markt (spelers handelen hier)", "🏪", false, "werkbank",
+        help("Is deze NPC een markt? Dan zetten spelers hier dingen neer voor hun eigen prijs en kopen ze van elkaar.", "Zet dit aan bij één NPC op een plein. Hoe lang iets blijft staan en hoeveel per speler staat in Instellingen > 🤝 Handel; de marktbelasting in 💰 Geld.", "Je ziet in de game geen knop Markt → zet dit aan, SAVE TO GAME en praat met deze NPC.")),
       talkRange: { type: "number", required: false, min: 1, max: 10, audience: "client", label: "Praat-afstand",
-        ui: ui("🗣️", "slider", "werkbank", { step: 0.5, unit: "m" }), default: 2.5,
+        // Fase 8 herstel: onder ⚙️ meer, zodat het vinkje Markt erbij past (hooguit ±6 velden in beeld).
+        ui: ui("🗣️", "slider", "werkbank", { step: 0.5, unit: "m", more: true }), default: 2.5,
         help: help("Hoe dichtbij de speler moet staan om te praten, te handelen of te maken.", "2 tot 3 meter voelt natuurlijk.", "Je moet te ver lopen → maak hem groter. Je praat al van ver → maak hem kleiner.") },
       modelScaleBp: { type: "integer", required: false, min: 100, max: 100000, audience: "client", label: "Modelschaal",
         ui: ui("📏", "slider", "werkbank", { step: 100, unit: "%", scale: 100, range: [1000, 40000], more: true }), default: 10000, help: HELP_SCALE },

@@ -33,7 +33,7 @@ const ICON_THEME = {
   "speaker-off": "plain", resize: "plain", "trash-can": "blood", "position-marker": "gold", crosshair: "fire", hourglass: "sand", info: "sky",
   person: "plain", crown: "gold", "stone-pile": "stone", ore: "stone", minerals: "gem", meat: "blood", "cheese-wedge": "gold",
   "water-drop": "mana", "treasure-map": "parchment", expand: "plain", contract: "plain", "magic-portal": "arcane", palette: "arcane",
-  "three-friends": "sky", "shaking-hands": "skin",
+  "three-friends": "sky", "shaking-hands": "skin", envelope: "parchment", "swap-bag": "leather",
   "chat-bubble": "sky", conversation: "plain", lips: "arcane", silenced: "blood", "paper-plane": "sky",
   // Fase 5: vaardigheden.
   "spell-book": "arcane", padlock: "steel", "magic-swirl": "arcane", "fire-ray": "fire", "shield-reflect": "steel"
@@ -48,6 +48,8 @@ const TABS = [
   { id: "skills", icon: "spell-book", title: "Vaardigheden", module: "hotbar_hud", key: "KeyK" },
   { id: "quests", icon: "scroll-unfurled", title: "Quests", module: "quest_tracker_hud", key: "KeyL" },
   { id: "money", icon: "two-coins", title: "Geld", module: "wallet_hud", key: null },
+  // Fase 8 herstel: je postbus (post van spelers en van de markt) staat altijd in het menu.
+  { id: "post", icon: "envelope", title: "Post", module: null, key: null },
   // Fase 8b: alleen zichtbaar zolang er een ruil met een speler loopt.
   { id: "swap", icon: "swap-bag", title: "Ruilen", module: null, key: null, onlyTrade: true },
   { id: "chars", icon: "pointy-hat", title: "Characters", module: null, key: "KeyP" },
@@ -421,7 +423,11 @@ export function createGkHud(api) {
     bagSelection: new Set(),
     bagAnchor: "",         // eerste vakje van een Shift-bereik
     // Fase 8b: welke ruil je al gezien hebt (zodat het tabblad Ruilen één keer vanzelf opengaat).
-    swapSeen: ""
+    swapSeen: "",
+    // Fase 8 herstel: de markt bij een NPC en je postbus.
+    market: null,           // { marketId, tab: "buy" | "sell" | "mine", orderId, itemId, qty, price } tijdens de markt
+    post: { open: "", compose: null }, // open bericht; compose = { to, subject, text, itemId, qty, money }
+    mailSeen: null          // hoeveel ongelezen post er was (voor de melding "Je hebt post")
   };
   let saveTimer = 0;
   // Verbinding met de server (zelfde lampje als in de editor): groen = verbonden, oranje = bezig, rood = niet.
@@ -816,7 +822,7 @@ export function createGkHud(api) {
   function mode() {
     const d = data();
     if (d.defeated) return "dead";
-    if (d.dialogue || ui.serviceTalk || ui.trade || ui.craft || ui.story) return "talk";
+    if (d.dialogue || ui.serviceTalk || ui.trade || ui.craft || ui.market || ui.story) return "talk";
     return "explore";
   }
   function combat(now = performance.now()) {
@@ -834,7 +840,7 @@ export function createGkHud(api) {
   function effectivePanel(currentMode, currentOrient, dockNow) {
     // Handelen en maken blijven in Gesprek, maar wel in de bestaande splitsing:
     // het normale tabblad boven en het gesprek onder.
-    if ((ui.trade || ui.craft) && dockNow === "talk") return "open";
+    if ((ui.trade || ui.craft || ui.market) && dockNow === "talk") return "open";
     let panelState = store.panel || (currentOrient === "port" ? "closed" : "rail");
     if (panelState === "open" && store.combatFold && currentOrient !== "land" && combat()) panelState = "rail";
     if (dockNow && panelState !== "open") panelState = "dock";
@@ -851,7 +857,7 @@ export function createGkHud(api) {
     const dk = dockView(m);
     const big = dk === "chat" && ui.chatBig;
     const p = effectivePanel(m, o, dk);
-    const service = ui.trade ? "trade" : ui.craft ? "craft" : "";
+    const service = ui.trade ? "trade" : ui.craft ? "craft" : ui.market ? "market" : "";
     const key = o + "|" + m + "|" + p + "|" + store.size + "|" + (store.minimap ? 1 : 0) + "|" + dk + "|" + (big ? 1 : 0) + "|" + service;
     if (key === ui.effective) return false;
     ui.effective = key;
@@ -881,6 +887,7 @@ export function createGkHud(api) {
   function render() {
     watchQuestStarts();
     watchTrade();
+    watchMail();
     applyLayout();
     renderUnit();
     renderParty();
@@ -1118,6 +1125,11 @@ export function createGkHud(api) {
     return h("button", { type: "button", class: "gkMenuItem" + (extra ? " " + extra : ""), "data-act": act, "data-id": id || null, disabled: why ? true : null, role: "menuitem" },
       [ico(icon), h("span", null, [h("b", { text: label }), why ? h("small", { text: why }) : null])]);
   }
+  // Fase 8 herstel: Post sturen in het spelermenu (opent je postbus met een nieuw bericht aan deze speler).
+  function postMenuItem(playerId) {
+    const off = data().s05?.mail?.rules?.mailOn === false;
+    return menuItem("post-to", playerId, "envelope", "Post sturen", "", off ? "Post staat uit in deze wereld" : "");
+  }
   // Fase 8b: Ruilen in het spelermenu (staat het uit in Instellingen > 🤝 Handel, dan zegt de regel waarom).
   function swapMenuItem(playerId) {
     const rules = tradeData()?.rules || null;
@@ -1166,6 +1178,7 @@ export function createGkHud(api) {
           : menuItem("party-kick", m.id, "exit-door", "Uit de groep zetten"));
       }
       if (mate.online && !blockedNow) items.push(swapMenuItem(m.id));
+      if (!blockedNow) items.push(postMenuItem(m.id));
     } else {
       let why = "";
       if (blockedNow) why = "Je hebt deze speler geblokkeerd";
@@ -1174,6 +1187,7 @@ export function createGkHud(api) {
       items.push(menuItem("party-invite", m.id, "three-friends", "Uitnodigen voor groep", "", why));
       if (!blockedNow) items.push(menuItem("chat-whisper", m.id, "lips", "Fluisteren"));
       if (!blockedNow) items.push(swapMenuItem(m.id));
+      if (!blockedNow) items.push(postMenuItem(m.id));
     }
     // MMO stap 2 (3-11): blokkeren (twee keer tikken) of weer deblokkeren.
     if (m.id !== "group") {
@@ -1533,6 +1547,7 @@ export function createGkHud(api) {
   function closeTalk() {
     ui.trade = null;
     ui.craft = null;
+    ui.market = null;
     store.item = null;
     ui.story = null;
     if (data().dialogue) {
@@ -2269,7 +2284,7 @@ export function createGkHud(api) {
   // Gezicht, tekst, gesprekskeuzes én winkel/werkplaats blijven in hetzelfde onderdeel Gesprek.
   function renderTalk() {
     const d = data();
-    if (ui.story && !d.dialogue && !ui.serviceTalk && !ui.trade && !ui.craft) {
+    if (ui.story && !d.dialogue && !ui.serviceTalk && !ui.trade && !ui.craft && !ui.market) {
       const view = storyView();
       if (view) { renderStoryTalk(view); return; }
       ui.story = null;
@@ -2277,25 +2292,33 @@ export function createGkHud(api) {
     }
     const activeVendor = ui.trade ? api.vendor(ui.trade.vendorId) : null;
     const activeStation = ui.craft ? api.station(ui.craft.stationId) : null;
+    const activeMarket = ui.market ? marketAccess(ui.market.marketId) : null;
     const dialogue = d.dialogue || (ui.serviceTalk ? { dialogueId: "", entryId: "", speakerName: ui.serviceTalk.name, text: "Wat kan ik voor je doen?", choices: [], targetRef: "" }
       : activeVendor ? { dialogueId: "", entryId: "", speakerName: activeVendor.label || activeVendor.displayName || "Winkel", text: "Wat kan ik voor je doen?", choices: [], targetRef: "" }
-        : activeStation ? { dialogueId: "", entryId: "", speakerName: activeStation.label || "Werkplaats", text: "Wat wil je maken?", choices: [], targetRef: "" } : null);
+        : activeStation ? { dialogueId: "", entryId: "", speakerName: activeStation.label || "Werkplaats", text: "Wat wil je maken?", choices: [], targetRef: "" }
+          : activeMarket ? { dialogueId: "", entryId: "", speakerName: activeMarket.label || "Markt", text: "Wat wil je kopen of verkopen?", choices: [], targetRef: "" } : null);
     const npcId = String(dialogue?.targetRef || "").replace(/^target\.npc\./, "");
     // Winkel en werkplaats van deze NPC: via de NPC-kaart, of (oude NPC's) wat er op dezelfde plek staat.
     const extra = d.dialogue ? (ui.talkFor === String(d.dialogue.dialogueId || "") ? ui.talkServices : []) : (ui.serviceTalk?.services || []);
-    const pick = function (kind) { const found = extra.find(function (entry) { return entry.kind === kind; }); return found ? (kind === "vendor" ? api.vendor(found.id) : api.station(found.id)) : null; };
+    const pick = function (kind) {
+      const found = extra.find(function (entry) { return entry.kind === kind; });
+      return found ? (kind === "vendor" ? api.vendor(found.id) : kind === "market" ? marketAccess(found.id) : api.station(found.id)) : null;
+    };
     const vendor = activeVendor || (dialogue && has("vendor_hud") ? api.vendor("vendor." + npcId) || pick("vendor") : null);
     const station = activeStation || (dialogue && has("crafting_hud") ? api.station("station." + npcId) || pick("station") : null);
+    // Fase 8 herstel: een NPC met "Markt" aan heeft de keuze Markt (zolang de markt open is in Instellingen > Handel).
+    const market = activeMarket || (dialogue && marketOpen() ? marketAccess("market." + npcId) || pick("market") : null);
     const serviceParts = ui.trade
       ? [ui.trade, vendor, d.s03?.inventory, d.s03?.currencies, d.s03?.catalog, d.busy?.n05]
-      : ui.craft ? [ui.craft, station, d.s03?.inventory, d.s03?.currencies, d.s03?.catalog, d.s05?.crafting?.jobs, d.busy?.n05] : [];
+      : ui.craft ? [ui.craft, station, d.s03?.inventory, d.s03?.currencies, d.s03?.catalog, d.s05?.crafting?.jobs, d.busy?.n05]
+        : ui.market ? [ui.market, market, d.s05?.market, d.s03?.currencies, d.s03?.catalog, d.busy?.n05, ui.sure] : [];
     const signature = dialogue ? JSON.stringify([root.dataset.mode, root.dataset.dock, dialogue.speakerName, dialogue.dialogueId, dialogue.entryId, dialogue.text,
-      (dialogue.choices || []).map(function (c) { return c.choiceId; }), vendor?.vendorId || "", station?.stationId || "", d.busy?.n04, store.item, serviceParts]) : "";
+      (dialogue.choices || []).map(function (c) { return c.choiceId; }), vendor?.vendorId || "", station?.stationId || "", market?.marketAccessId || "", d.busy?.n04, store.item, serviceParts]) : "";
     if (ui.sig.talk === signature) return;
     ui.sig.talk = signature;
     talk.hidden = !dialogue || root.dataset.mode !== "talk" || root.dataset.dock !== "talk";
     if (!dialogue) { talk.classList.remove("gkTalk--service"); talk.replaceChildren(); return; }
-    const serviceActive = Boolean(ui.trade || ui.craft);
+    const serviceActive = Boolean(ui.trade || ui.craft || ui.market);
     const oldBody = talk.querySelector(".gkTalkService .gkBody, .gkTalkService .gkCraftList");
     const oldTop = talk.querySelector(".gkTalkService .gkSplitTop");
     const bodyScroll = oldBody ? oldBody.scrollTop : 0;
@@ -2308,6 +2331,7 @@ export function createGkHud(api) {
     if (!serviceActive) for (const choice of normal) choices.append(choiceButton(choice));
     if (vendor) choices.append(h("button", { type: "button", class: "gkChoice gkChoice--service" + (ui.trade ? " gkOn" : ""), "data-act": "service", "data-kind": "vendor", "data-id": vendor.vendorId }, [ico("shop"), "Handelen"]));
     if (station) choices.append(h("button", { type: "button", class: "gkChoice gkChoice--service" + (ui.craft ? " gkOn" : ""), "data-act": "service", "data-kind": "station", "data-id": station.stationId }, [ico("anvil-impact"), "Maken"]));
+    if (market) choices.append(h("button", { type: "button", class: "gkChoice gkChoice--service" + (ui.market ? " gkOn" : ""), "data-act": "service", "data-kind": "market", "data-id": market.marketAccessId }, [ico("scales"), "Markt"]));
     if (serviceActive) choices.append(h("button", { type: "button", class: "gkChoice", "data-act": "service-back" }, [ico("hand"), "Terug naar gesprek"]));
     else for (const choice of closing) choices.append(choiceButton(choice));
     const intro = h("div", { class: "gkTalkIntro" }, [
@@ -2319,9 +2343,9 @@ export function createGkHud(api) {
         choices
       ])
     ]);
-    const serviceView = serviceActive ? h("section", { class: "gkTalkService" }, ui.trade ? sheetTrade() : sheetCraft()) : null;
+    const serviceView = serviceActive ? h("section", { class: "gkTalkService" }, ui.trade ? sheetTrade() : ui.craft ? sheetCraft() : sheetMarket()) : null;
     talk.classList.toggle("gkTalk--service", serviceActive);
-    talk.replaceChildren(...[intro, serviceView].filter(Boolean));
+    keepFocus(function () { talk.replaceChildren(...[intro, serviceView].filter(Boolean)); });
     const nextBody = talk.querySelector(".gkTalkService .gkBody, .gkTalkService .gkCraftList");
     const nextTop = talk.querySelector(".gkTalkService .gkSplitTop");
     if (nextBody) nextBody.scrollTop = bodyScroll;
@@ -2341,8 +2365,10 @@ export function createGkHud(api) {
     const tabs = visibleTabs();
     if (!tabs.some(function (tab) { return tab.id === store.tab; })) store.tab = tabs[0]?.id || "bag";
     const questDot = (data().s04?.quests?.active || []).some(function (quest) { return quest.activeStep?.complete; });
+    // Fase 8 herstel: een stip op 📬 Post zolang er ongelezen post is.
+    const postDot = num(data().s05?.mail?.unreadCount) > 0;
     const dockNow = root.dataset.dock || "";
-    const signature = JSON.stringify([p, m, dockNow, store.tab, tabs.map(function (tab) { return tab.id; }), questDot]);
+    const signature = JSON.stringify([p, m, dockNow, store.tab, tabs.map(function (tab) { return tab.id; }), questDot, postDot]);
     if (ui.sig.rail === signature) return;
     ui.sig.rail = signature;
     rail.hidden = m === "trade" || m === "craft";
@@ -2351,7 +2377,7 @@ export function createGkHud(api) {
     for (const tab of tabs) {
       const on = p === "open" && tab.id === store.tab;
       items.push(h("button", { type: "button", class: "gkTab" + (on ? " gkOn" : ""), "data-act": "tab", "data-id": tab.id, title: tab.title + (tab.key ? " (" + tab.key.slice(3) + ")" : ""), "aria-pressed": on ? "true" : "false" },
-        [ico(tab.icon), tab.id === "quests" && questDot ? h("span", { class: "gkDot" }) : null]));
+        [ico(tab.icon), (tab.id === "quests" && questDot) || (tab.id === "post" && postDot) ? h("span", { class: "gkDot" }) : null]));
     }
     // Kevin (3-11): onderin wat geen tabblad is: Chat en (tijdens een gesprek) Gesprek.
     items.push(h("span", { class: "gkRailGap" }));
@@ -2387,6 +2413,9 @@ export function createGkHud(api) {
     if (view === "quests") parts.push(d.s04?.quests, d.s04?.trackedQuest?.questId);
     if (view === "money") parts.push(d.s03?.currencies, d.s05?.trade);
     if (view === "swap") parts.push(d.s05?.trade, d.s03?.catalog);
+    // Fase 8 herstel: tijdens de winkel toont de tas wat de winkel ervoor betaalt; de post zijn berichten.
+    if (view === "bag" && ui.trade) parts.push(api.vendor(ui.trade.vendorId)?.sells || null);
+    if (view === "post") parts.push(d.s05?.mail, ui.post.open, Boolean(ui.post.compose), ui.post.compose ? [d.s03?.inventory, d.s03?.currencies] : null);
     if (view === "skills") parts.push(d.s03?.skills?.slots, (d.s03?.skills?.list || []).map(function (e) { return e.abilityId + (e.unlocked ? "" : ":" + e.lock); }), d.s03?.skills?.auto, d.s03?.progression?.level, d.isAdmin);
     if (view === "chars") parts.push(ui.chars, ui.charsBusy);
     if (view === "settings") parts.push(d.isAdmin, d.defeated, store.floatNums, store.nameWorld, store.namePlayers, store.nameSelf,
@@ -2402,8 +2431,8 @@ export function createGkHud(api) {
     const oldTop = sheet.querySelector(".gkSplitTop");
     const topScroll = !viewChanged && oldTop ? oldTop.scrollTop : 0;
     const built = view === "bag" ? sheetBag() : view === "gear" ? sheetGear() : view === "skills" ? sheetSkills() : view === "quests" ? sheetQuests() : view === "money" ? sheetMoney() : view === "swap" ? sheetSwap()
-      : view === "chars" ? sheetChars() : view === "settings" ? sheetSettings() : view === "logout" ? sheetLogout() : view === "trade" ? sheetTrade() : sheetCraft();
-    replaceSheetChildren(built);
+      : view === "post" ? sheetPost() : view === "chars" ? sheetChars() : view === "settings" ? sheetSettings() : view === "logout" ? sheetLogout() : view === "trade" ? sheetTrade() : sheetCraft();
+    keepFocus(function () { replaceSheetChildren(built); });
     if (!viewChanged) sheet.style.animation = "none";
     else sheet.style.animation = "";
     const body = sheet.querySelector(".gkBody");
@@ -2568,11 +2597,11 @@ export function createGkHud(api) {
     const shown = all.filter(function (item) { return filterMatch(item.category, store.filter); });
     const body = h("div", { class: "gkBody" });
     if (!all.length) body.append(emptyNote("knapsack", "Je tas is nog leeg. Pak iets op of verzamel iets in de wereld."));
-    else body.append(h("div", { class: "gkGrid" }, shown.map(function (item) {
+    // Fase 8 herstel: in de winkel sleep je iets uit je tas naar de waren (verkopen) of een waar naar je tas (kopen).
+    else body.append(h("div", { class: "gkGrid", "data-drop": ui.trade ? "bag" : null }, shown.map(function (item) {
       const questItem = item.def.questItem === true || item.category === "quest";
-      return bagCell(item, ui.bagSelect
-        ? { act: "bag-pick", on: ui.bagSelection.has(item.key), no: questItem, disabled: questItem }
-        : { on: item.key === store.item });
+      if (ui.bagSelect) return bagCell(item, { act: "bag-pick", on: ui.bagSelection.has(item.key), no: questItem, disabled: questItem });
+      return bagCell(item, { on: item.key === store.item, drag: ui.trade && item.def.tradable !== false && !questItem ? "sell:" + item.key : null });
     }).concat(emptyCells(shown.length))));
     const parts = [head("knapsack", "Tas", filters), body];
     if (ui.bagSelect) parts.push(bagSelectionBar(all));
@@ -2637,9 +2666,16 @@ export function createGkHud(api) {
     if (def.vendorValue) stats.push(h("span", { class: "gkStat" }, [coin(def.vendorValue, currencies()[0]?.currencyId), "waarde"]));
     const busy = d.busy?.n03 || d.busy?.n05;
     const buttons = [];
-    if (options.sell) {
-      buttons.push(h("button", { type: "button", class: "gkBtn gkGo", "data-act": "sell", "data-id": options.sell.offerId, disabled: busy || !options.sell.canSell ? true : null },
-        [ico("two-coins", "plain"), "Verkopen ", coin(options.sell.buyPriceMinor, options.sell.buyCurrencyRef)]));
+    // Fase 8 herstel: staat de winkel open, dan verkoop je hier (de server zegt wat de winkel ervoor betaalt).
+    const sell = !equipped && ui.trade ? shopSellInfo(itemId) : null;
+    const stackQty = item ? bagEntryQuantity(item) : 1;
+    if (sell) {
+      if (sell.canSell) {
+        buttons.push(h("button", { type: "button", class: "gkBtn gkGo", "data-act": "sell", "data-id": itemId, "data-key": "1", disabled: busy ? true : null },
+          [ico("two-coins", "plain"), "Verkopen ", coin(sell.priceMinor, sell.currencyRef)]));
+        if (stackQty > 1) buttons.push(h("button", { type: "button", class: "gkBtn", "data-act": "sell", "data-id": itemId, "data-key": String(stackQty), disabled: busy ? true : null },
+          ["Alles (" + fmt(stackQty) + ") ", coin(sell.priceMinor * stackQty, sell.currencyRef)]));
+      } else stats.push(stat("info", sell.why || "Deze winkel koopt dit niet."));
     }
     if (equipped) {
       buttons.push(h("button", { type: "button", class: "gkBtn", "data-act": "unequip", "data-id": equipped.slotId, disabled: busy ? true : null }, [ico("knapsack", "plain"), "Uitdoen"]));
@@ -2653,12 +2689,12 @@ export function createGkHud(api) {
       }
       // Fase 8b: staat er een ruil open, dan kun je dit item erin leggen.
       const swap = openTrade();
-      if (swap && swap.state === "open" && !options.sell && def.tradable !== false) {
+      if (swap && swap.state === "open" && !ui.trade && def.tradable !== false) {
         const already = (swap.give || []).find(function (line) { return line.itemId === itemId; }) || null;
         buttons.push(h("button", { type: "button", class: "gkBtn gkGo", "data-act": "swap-give", "data-id": itemId, "data-key": String(Math.max(1, num(already?.quantity, 0) + 1)),
           disabled: busy ? true : null }, [ico("swap-bag", "plain"), already ? "Nog een erbij (" + fmt(already.quantity) + ")" : "Aanbieden"]));
       }
-      if (!def.questItem && !options.sell) {
+      if (!def.questItem && !sell?.canSell) {
         buttons.push(h("button", { type: "button", class: "gkBtn", "data-act": "select-all-item", "data-id": itemId, disabled: busy ? true : null },
           [ico("check-mark", "plain"), "Alles van dit item selecteren"]));
         const sure = ui.sure === "destroy:" + key;
@@ -2935,6 +2971,239 @@ export function createGkHud(api) {
     return [head("swap-bag", "Ruilen met " + trade.partnerName), body];
   }
 
+  // ---- Fase 8 herstel: hulpjes voor winkel, markt en post ----
+  // Een invulveld houdt zijn focus en cursor als het paneel opnieuw getekend wordt (bijv. als er post binnenkomt).
+  function keepFocus(draw) {
+    const active = document.activeElement;
+    const key = active && root.contains(active) ? String(active.dataset?.focusKey || "") : "";
+    let start = null;
+    let end = null;
+    if (key) { try { start = active.selectionStart; end = active.selectionEnd; } catch {} }
+    draw();
+    if (!key) return;
+    const next = root.querySelector('[data-focus-key="' + key + '"]');
+    if (!next || next === active) return;
+    try {
+      next.focus({ preventScroll: true });
+      if (typeof start === "number" && typeof next.setSelectionRange === "function") next.setSelectionRange(start, end);
+    } catch {}
+  }
+  function smallCell(itemId) {
+    return h("div", { class: "gkCell", "data-rarity": catalogItem(itemId)?.rarity || "common" }, [itemVisual(itemId)]);
+  }
+  function dayTime(stamp) {
+    const at = new Date(stamp || "");
+    if (Number.isNaN(at.getTime())) return "";
+    const time = String(at.getHours()).padStart(2, "0") + ":" + String(at.getMinutes()).padStart(2, "0");
+    return (at.toDateString() === new Date().toDateString() ? "vandaag" : at.toLocaleDateString("nl-NL", { weekday: "short", day: "numeric", month: "short" })) + " " + time;
+  }
+  // Wat de open winkel jou betaalt voor dit item (komt van de server; die rekent ook echt met dit bedrag).
+  function shopSellInfo(itemId) {
+    const vendor = ui.trade ? api.vendor(ui.trade.vendorId) : null;
+    const found = (vendor?.sells || []).find(function (entry) { return entry.itemId === itemId; }) || null;
+    if (found) return found;
+    return vendor ? { itemId, canSell: false, priceMinor: 0, currencyRef: vendor.currencyRef || null, why: "Even wachten: de winkel kijkt wat het waard is." } : null;
+  }
+  function marketData() { return data().s05?.market || null; }
+  function marketOpen() { return marketData()?.rules?.marketOn !== false; }
+  function marketAccess(marketId) { return marketId && typeof api.market === "function" ? api.market(marketId) : null; }
+  function marketSellText(pickNow, qtyIn, priceIn, tax, m) {
+    const qty = Math.max(1, Math.min(num(pickNow.quantity, 1), Math.round(num(qtyIn, 1))));
+    const price = Math.round(num(priceIn, 0));
+    const money = currencyName(m?.currencyId);
+    if (price < 1) return "Vul een prijs in (minstens 1).";
+    const gross = qty * price;
+    const net = gross - Math.min(gross, Math.round(gross * num(tax) / 100));
+    const days = Math.max(1, num(m?.rules?.marketDays, 1));
+    return "Je zet " + qty + "× " + pickNow.displayName + " neer voor " + fmt(price) + " " + money + " per stuk. Is alles verkocht, dan krijg je "
+      + fmt(net) + " " + money + (num(tax) > 0 ? " (de markt houdt " + num(tax) + " % in)" : "") + ". Het blijft " + days + (days === 1 ? " dag" : " dagen")
+      + " staan; daarna komt het met de post terug.";
+  }
+
+  // Post binnen = een korte melding (en een stip op 📬 Post zolang je hem niet geopend hebt).
+  function watchMail() {
+    const mail = data().s05?.mail;
+    if (!mail) return;
+    const unread = num(mail.unreadCount);
+    if (ui.mailSeen === null) {
+      ui.mailSeen = unread;
+      if (unread > 0) toast("Je hebt " + unread + (unread === 1 ? " nieuw bericht" : " nieuwe berichten") + " in je post (📬).", { icon: "envelope" });
+      return;
+    }
+    if (unread > ui.mailSeen) {
+      const newest = (mail.messages || []).find(function (entry) { return entry.state === "unread"; });
+      toast(newest ? "Post van " + newest.fromName + ": " + newest.subject : "Je hebt nieuwe post.", { icon: "envelope" });
+    }
+    ui.mailSeen = unread;
+  }
+
+  // ---- Fase 8 herstel: de markt bij een NPC (onder het gesprek; je tas staat erboven) ----
+  function sheetMarket() {
+    const d = data();
+    const m = marketData();
+    const access = marketAccess(ui.market?.marketId);
+    if (!access || !m) return [h("div", { class: "gkBody" }, [emptyNote("scales", "Deze markt is er niet meer.")])];
+    if (m.rules?.marketOn === false) return [h("div", { class: "gkBody" }, [emptyNote("scales", "De markt is gesloten (Instellingen > Handel).")])];
+    const busy = Boolean(d.busy?.n05);
+    const tab = ui.market.tab || "buy";
+    const orders = m.orders || [];
+    const mine = m.myOrders || [];
+    const tax = num(m.taxPct);
+    const tabs = h("div", { class: "gkMktTabs", role: "tablist" }, [["buy", "Kopen", orders.length], ["sell", "Verkopen", 0], ["mine", "Mijn aanbod", mine.length]].map(function (entry) {
+      return h("button", { type: "button", class: "gkMktTab" + (tab === entry[0] ? " gkOn" : ""), "data-act": "mkt-tab", "data-id": entry[0], role: "tab",
+        "aria-selected": tab === entry[0] ? "true" : "false" }, [entry[1] + (entry[2] ? " (" + entry[2] + ")" : "")]);
+    }));
+    // De tabjes blijven staan; alleen de inhoud eronder schuift.
+    const body = h("div", { class: "gkBody" });
+    if (tab === "buy") {
+      if (!orders.length) body.append(emptyNote("scales", "Er staat nog niets op de markt. Zet zelf iets neer bij Verkopen."));
+      else body.append(h("div", { class: "gkGrid" }, orders.map(function (order) {
+        return h("button", { type: "button", class: "gkCell" + (ui.market.orderId === order.orderId ? " gkOn" : ""), "data-act": "mkt-order", "data-id": order.orderId,
+          "data-rarity": catalogItem(order.itemId)?.rarity || "common", title: order.displayName + " van " + order.sellerName + ": " + fmt(order.unitPriceMinor) + " " + order.currencyName + " per stuk" },
+        [itemVisual(order.itemId), order.quantityRemaining > 1 ? h("span", { class: "gkQty", text: "×" + fmt(order.quantityRemaining) }) : null,
+          h("span", { class: "gkPrice" }, [currencyVisual(order.currencyId), fmt(order.unitPriceMinor)])]);
+      })));
+      const sel = orders.find(function (order) { return order.orderId === ui.market.orderId; });
+      if (sel) {
+        const funds = num((d.s03?.currencies || []).find(function (row) { return row.currencyId === sel.currencyId; })?.amountMinor);
+        const all = Math.max(1, num(sel.quantityRemaining, 1));
+        // De bevestiging: precies wat je betaalt en wat je krijgt.
+        const confirm = "Je betaalt " + fmt(sel.unitPriceMinor) + " " + sel.currencyName + " en krijgt 1× " + sel.displayName + " van " + sel.sellerName + "."
+          + (all > 1 ? " Alles: " + fmt(sel.unitPriceMinor * all) + " " + sel.currencyName + " voor " + all + "×." : "");
+        body.append(h("div", { class: "gkBar gkMktBar" }, [smallCell(sel.itemId),
+          h("div", { class: "gkBarText" }, [h("span", { text: sel.displayName + " · nog " + fmt(all) + " · van " + sel.sellerName }), h("small", { class: "gkPriceNote", text: confirm })]),
+          h("div", { class: "gkBtnCol" }, [
+            h("button", { type: "button", class: "gkBtn gkGo", "data-act": "mkt-buy", "data-id": sel.orderId, "data-key": "1", disabled: busy || funds < sel.unitPriceMinor ? true : null,
+              title: funds < sel.unitPriceMinor ? "Niet genoeg " + sel.currencyName : null }, [ico("two-coins", "plain"), "Kopen ", coin(sel.unitPriceMinor, sel.currencyId)]),
+            all > 1 ? h("button", { type: "button", class: "gkBtn", "data-act": "mkt-buy", "data-id": sel.orderId, "data-key": String(all),
+              disabled: busy || funds < sel.unitPriceMinor * all ? true : null }, ["Alles (" + all + ") ", coin(sel.unitPriceMinor * all, sel.currencyId)]) : null])]));
+      }
+    } else if (tab === "sell") {
+      const list = m.sellableItems || [];
+      body.append(h("div", { class: "gkShopHint" }, [ico("scales", "plain"), h("span", { text: "Tik wat je wilt verkopen, kies hoeveel en je prijs. De markt houdt " + tax + " % in als het verkocht is." })]));
+      if (!list.length) body.append(emptyNote("knapsack", "Je hebt niets in je tas dat op de markt mag."));
+      else body.append(h("div", { class: "gkGrid" }, list.map(function (entry) {
+        return h("button", { type: "button", class: "gkCell" + (ui.market.itemId === entry.itemId ? " gkOn" : ""), "data-act": "mkt-pick", "data-id": entry.itemId,
+          "data-key": String(entry.suggestedPriceMinor), "data-rarity": catalogItem(entry.itemId)?.rarity || "common", title: entry.displayName + " op de markt zetten" },
+        [itemVisual(entry.itemId), entry.quantity > 1 ? h("b", { text: fmt(entry.quantity) }) : null]);
+      })));
+      const pickNow = list.find(function (entry) { return entry.itemId === ui.market.itemId; });
+      if (pickNow) {
+        const qty = Math.max(1, Math.min(pickNow.quantity, Math.round(num(ui.market.qty, 1))));
+        const price = Math.max(1, Math.round(num(ui.market.price, pickNow.suggestedPriceMinor)));
+        ui.market.qty = qty;
+        ui.market.price = price;
+        body.append(h("div", { class: "gkMktForm" }, [
+          h("div", { class: "gkMktFormHead" }, [smallCell(pickNow.itemId), h("strong", { text: pickNow.displayName }), h("small", { text: "je hebt er " + fmt(pickNow.quantity) })]),
+          h("label", { class: "gkMktField" }, [h("span", { text: "Hoeveel" }), h("input", { type: "number", min: "1", max: String(pickNow.quantity), step: "1", value: String(qty),
+            inputmode: "numeric", "data-market-field": "qty", "data-focus-key": "mkt-qty" })]),
+          h("label", { class: "gkMktField" }, [h("span", { text: "Prijs per stuk" }), h("input", { type: "number", min: "1", step: "1", value: String(price),
+            inputmode: "numeric", "data-market-field": "price", "data-focus-key": "mkt-price" }), currencyVisual(m.currencyId)]),
+          h("div", { class: "gkSwapConfirm" }, [ico("scroll-unfurled", "plain"), h("strong", { "data-mkt-confirm": "1", text: marketSellText(pickNow, qty, price, tax, m) })]),
+          h("div", { class: "gkBtns" }, [h("button", { type: "button", class: "gkBtn gkGo", "data-act": "mkt-list", "data-id": pickNow.itemId, disabled: busy ? true : null },
+            [ico("scales", "plain"), "Op de markt zetten"])])]));
+      }
+    } else {
+      if (!mine.length) body.append(emptyNote("scales", "Je hebt niets op de markt staan."));
+      else body.append(h("div", { class: "gkList" }, mine.map(function (order) {
+        return h("div", { class: "gkCard gkMktMine" }, [smallCell(order.itemId),
+          h("div", { class: "gkBarText" }, [h("span", { text: order.displayName + " · nog " + fmt(order.quantityRemaining) + " van " + fmt(order.quantityTotal) }),
+            h("small", { class: "gkPriceNote", text: fmt(order.unitPriceMinor) + " " + order.currencyName + " per stuk · staat tot " + dayTime(order.expiresAt) })]),
+          h("button", { type: "button", class: "gkBtn gkWarn", "data-act": "mkt-cancel", "data-id": order.orderId, disabled: busy ? true : null }, [ico("cancel", "plain"), "Terugnemen"])]);
+      })));
+    }
+    return [tabs, body];
+  }
+
+  // ---- Fase 8 herstel: 📬 Post (je postbus; hoort bij je account, dus al je characters zien hem) ----
+  function postConfirmText(c) {
+    const to = String(c?.to || "").trim();
+    const money = currencies()[0] || null;
+    const amount = Math.max(0, Math.round(num(c?.money, 0)));
+    const entry = c?.itemId ? inventoryEntries().find(function (row) { return row.entry.itemId === c.itemId; }) : null;
+    const parts = [];
+    if (c?.itemId) parts.push(Math.max(1, Math.round(num(c.qty, 1))) + "× " + (entry?.name || c.itemId));
+    if (amount > 0 && money) parts.push(fmt(amount) + " " + money.displayName);
+    if (!to) return "Vul in aan wie je het stuurt.";
+    return parts.length ? "Je stuurt " + parts.join(" en ") + " naar " + to + ". Dat gaat meteen uit je tas." : "Je stuurt een bericht naar " + to + " (zonder spullen).";
+  }
+  function postCompose(c, busy) {
+    const options = new Map();
+    for (const row of inventoryEntries()) {
+      if (row.def.tradable === false || row.def.questItem) continue;
+      const qty = bagEntryQuantity(row);
+      const known = options.get(row.entry.itemId);
+      options.set(row.entry.itemId, { name: row.name, qty: (known ? known.qty : 0) + qty });
+    }
+    const money = currencies()[0] || null;
+    const maxQty = options.get(c.itemId)?.qty || 1;
+    const field = function (label, children) { return h("label", { class: "gkMktField gkPostField" }, [h("span", { text: label })].concat(children)); };
+    const textArea = h("textarea", { class: "gkPostInput", rows: "3", maxlength: "500", "data-post-field": "text", "data-focus-key": "post-text", placeholder: "Je bericht" });
+    textArea.value = c.text || "";
+    const sure = ui.sure === "post-send";
+    return h("div", { class: "gkPostCompose" }, [
+      field("Aan", [h("input", { type: "text", class: "gkPostInput", maxlength: "60", value: c.to || "", placeholder: "Naam van de speler", autocomplete: "off",
+        "data-post-field": "to", "data-focus-key": "post-to" })]),
+      field("Onderwerp", [h("input", { type: "text", class: "gkPostInput", maxlength: "60", value: c.subject || "", placeholder: "(mag leeg)", autocomplete: "off",
+        "data-post-field": "subject", "data-focus-key": "post-subject" })]),
+      field("Bericht", [textArea]),
+      field("Item erbij", [h("select", { class: "gkPostInput", "data-post-field": "itemId", "data-focus-key": "post-item" },
+        [h("option", { value: "", text: "Geen item" })].concat(Array.from(options, function (entry) {
+          return h("option", { value: entry[0], text: entry[1].name + " (" + entry[1].qty + ")", selected: c.itemId === entry[0] ? true : null });
+        }))),
+      c.itemId ? h("input", { type: "number", class: "gkPostQty", min: "1", max: String(maxQty), step: "1", value: String(Math.max(1, Math.min(maxQty, Math.round(num(c.qty, 1))))),
+        inputmode: "numeric", "data-post-field": "qty", "data-focus-key": "post-qty", "aria-label": "Hoeveel" }) : null]),
+      money ? field("Geld erbij", [h("input", { type: "number", class: "gkPostQty", min: "0", max: String(Math.max(0, money.amount)), step: "1", value: String(Math.max(0, Math.round(num(c.money, 0)))),
+        inputmode: "numeric", "data-post-field": "money", "data-focus-key": "post-money", "aria-label": money.displayName }), currencyVisual(money.currencyId)]) : null,
+      h("div", { class: "gkSwapConfirm" }, [ico("scroll-unfurled", "plain"), h("strong", { "data-post-confirm": "1", text: postConfirmText(c) })]),
+      h("div", { class: "gkBtns" }, [
+        h("button", { type: "button", class: "gkBtn gkGo" + (sure ? " gkSure" : ""), "data-act": "post-send", disabled: busy ? true : null },
+          [ico("paper-plane", "plain"), sure ? "Zeker? Tik nog eens" : "Versturen"]),
+        h("button", { type: "button", class: "gkBtn", "data-act": "post-cancel" }, [ico("cancel", "plain"), "Annuleren"])])]);
+  }
+  function postCard(msg, busy) {
+    const open = ui.post.open === msg.mailId;
+    const waiting = (msg.attachments || []).filter(function (entry) { return entry.state === "available"; });
+    const visual = function (entry) { return entry.itemId ? itemVisual(entry.itemId) : currencyVisual(entry.currencyId); };
+    const icon = msg.fromPlayerId ? "envelope" : String(msg.mailType || "").startsWith("market") ? "scales" : "scroll-unfurled";
+    const card = h("div", { class: "gkCard gkPost" + (msg.state === "unread" ? " gkPostNew" : "") + (open ? " gkOn" : "") });
+    card.append(h("button", { type: "button", class: "gkPostHead", "data-act": "post-open", "data-id": msg.mailId, "aria-expanded": open ? "true" : "false" }, [ico(icon),
+      h("span", { class: "gkPostTitle" }, [h("b", { text: msg.subject || "(geen onderwerp)" }), h("small", { text: "van " + msg.fromName + " · " + dayTime(msg.createdAt) })]),
+      waiting.length ? h("span", { class: "gkPostAtt" }, waiting.slice(0, 3).map(visual)) : null]));
+    if (!open) return card;
+    if (msg.body) card.append(h("p", { class: "gkPostText", text: msg.body }));
+    if (waiting.length) card.append(h("div", { class: "gkGrid gkSwapGrid" }, waiting.map(function (entry) {
+      return h("div", { class: "gkCell", "data-rarity": (entry.itemId ? catalogItem(entry.itemId)?.rarity : "") || "common", title: entry.displayName + (entry.quantityMinor > 1 ? " ×" + fmt(entry.quantityMinor) : "") },
+        [visual(entry), entry.quantityMinor > 1 ? h("span", { class: "gkQty", text: "×" + fmt(entry.quantityMinor) }) : null]);
+    })));
+    const sure = ui.sure === "post-delete:" + msg.mailId;
+    card.append(h("div", { class: "gkBtns" }, [
+      msg.canClaim ? h("button", { type: "button", class: "gkBtn gkGo", "data-act": "post-claim", "data-id": msg.mailId, disabled: busy ? true : null }, [ico("chest", "plain"), "Ophalen"]) : null,
+      msg.fromPlayerId ? h("button", { type: "button", class: "gkBtn", "data-act": "post-reply", "data-id": msg.mailId }, [ico("paper-plane", "plain"), "Antwoorden"]) : null,
+      !msg.canClaim ? h("button", { type: "button", class: "gkBtn gkWarn" + (sure ? " gkSure" : ""), "data-act": "post-delete", "data-id": msg.mailId, disabled: busy ? true : null },
+        [ico("trash-can", "plain"), sure ? "Zeker? Tik nog eens" : "Weggooien"]) : null]));
+    return card;
+  }
+  function sheetPost() {
+    const d = data();
+    const mail = d.s05?.mail || { messages: [], unreadCount: 0, total: 0, max: 100, rules: {} };
+    const busy = Boolean(d.busy?.n05);
+    const list = mail.messages || [];
+    const sendOff = mail.rules?.mailOn === false;
+    const compose = ui.post.compose;
+    const body = h("div", { class: "gkBody" });
+    body.append(h("div", { class: "gkBtns gkPostTools" }, [
+      compose ? null : h("button", { type: "button", class: "gkBtn gkGo", "data-act": "post-new", disabled: sendOff ? true : null,
+        title: sendOff ? "Post sturen staat uit in deze wereld" : null }, [ico("paper-plane", "plain"), "Nieuw bericht"]),
+      list.some(function (entry) { return entry.canClaim; }) ? h("button", { type: "button", class: "gkBtn", "data-act": "post-claim-all", disabled: busy ? true : null },
+        [ico("chest", "plain"), "Alles ophalen"]) : null]));
+    if (compose) body.append(postCompose(compose, busy));
+    if (!list.length && !compose) body.append(emptyNote("envelope", "Je postbus is leeg. Hier komt post van andere spelers en het geld van wat je op de markt verkocht."));
+    for (const msg of list) body.append(postCard(msg, busy));
+    body.append(h("div", { class: "gkPostFoot", text: fmt(mail.total) + " van " + fmt(mail.max) + " berichten · al je characters zien deze postbus" }));
+    return [head("envelope", "Post" + (num(mail.unreadCount) ? " (" + num(mail.unreadCount) + " nieuw)" : "")), body];
+  }
+
   // Fase 5: 📖 vaardigheden. Vak 1 = vaste auto-aanval; de rest sleep je naar vak 2 of 3 (of tik op 2/3).
   // Vergrendeld zegt waarom. Een admin-account krijgt de maker-knoppen (level, XP).
   function sheetSkills() {
@@ -3095,15 +3364,18 @@ export function createGkHud(api) {
         "data-rarity": def.rarity || "common", title: (offer.displayName || def.displayName || offer.itemRef) + " kopen", "data-drag": "buy:" + offer.offerId },
       [itemVisual(offer.itemRef), h("span", { class: "gkPrice" }, [currencyVisual(offer.sellCurrencyRef), fmt(offer.sellPriceMinor)])]);
     }));
-    const top = h("div", { class: "gkBody" }, [offers.length ? wares : emptyNote("shop", "Deze winkel verkoopt niets.")]);
+    // Fase 8 herstel: zeg erbij hoe verkopen gaat (de tas staat boven de winkel).
+    const top = h("div", { class: "gkBody" }, [h("div", { class: "gkShopHint" }, [ico("two-coins", "plain"),
+      h("span", { text: "Verkopen: tik iets in je tas en kies Verkopen, of sleep het hierheen." })]),
+      offers.length ? wares : emptyNote("shop", "Deze winkel verkoopt niets.")]);
     const selected = offers.find(function (offer) { return offer.offerId === ui.trade.offerId; });
     if (selected) {
       // Fase 8: zegt erbij of de prijs automatisch uit de waarde van het item komt, en wat de winkel ervoor teruggeeft.
       const priceNote = [selected.sellPriceAuto ? "prijs automatisch" : "eigen prijs",
         selected.buyPriceMinor > 0 ? "winkel geeft " + fmt(selected.buyPriceMinor) + " terug" : ""].filter(Boolean).join(" · ");
       top.append(h("div", { class: "gkBar" }, [h("div", { class: "gkCell", "data-rarity": catalogItem(selected.itemRef)?.rarity || "common" }, [itemVisual(selected.itemRef)]),
-        h("span", { text: (selected.displayName || selected.itemRef) + (selected.owned ? " · je hebt er " + fmt(selected.owned) : "") }),
-        h("small", { class: "gkPriceNote", text: priceNote }),
+        h("div", { class: "gkBarText" }, [h("span", { text: (selected.displayName || selected.itemRef) + (selected.owned ? " · je hebt er " + fmt(selected.owned) : "") }),
+          h("small", { class: "gkPriceNote", text: priceNote })]),
         h("button", { type: "button", class: "gkBtn gkGo", "data-act": "buy", "data-id": selected.offerId, disabled: d.busy?.n05 || !selected.canBuy ? true : null },
           [ico("two-coins", "plain"), "Kopen ", coin(selected.sellPriceMinor, selected.sellCurrencyRef)])]));
     }
@@ -3959,7 +4231,7 @@ export function createGkHud(api) {
     const dialogue = String(target.action) === "node04:start_dialogue" ? target : near.find(function (t) { return t.action === "node04:start_dialogue"; }) || null;
     const services = near.filter(function (t) { return t.action === "node05:focus_service"; }).map(function (t) {
       const kind = String(t.kind || t.targetKind || "");
-      return { kind: kind === "crafting" ? "station" : kind === "vendor" ? "vendor" : "", id: String(t.id || t.targetId || ""), name: t.displayName || t.label || "" };
+      return { kind: kind === "crafting" ? "station" : kind === "vendor" ? "vendor" : kind === "market" ? "market" : "", id: String(t.id || t.targetId || ""), name: t.displayName || t.label || "" };
     }).filter(function (entry) { return entry.kind && entry.id; });
     ui.serviceTalk = null;
     if (dialogue) {
@@ -3980,6 +4252,7 @@ export function createGkHud(api) {
     if (!ui.serviceTalk) return;
     ui.trade = null;
     ui.craft = null;
+    ui.market = null;
     store.item = null;
     ui.serviceTalk = null;
     applyLayout();
@@ -3998,9 +4271,10 @@ export function createGkHud(api) {
     renderChat();
   }
   function openTab(id) {
-    if (ui.trade || ui.craft) {
+    if (ui.trade || ui.craft || ui.market) {
       ui.trade = null;
       ui.craft = null;
+      ui.market = null;
       store.item = null;
     }
     const panelNow = root.dataset.panel;
@@ -4019,7 +4293,7 @@ export function createGkHud(api) {
     const panelNow = root.dataset.panel;
     // Bij een gesprek sluit het pijltje alles in één keer. Zo blijft na een
     // winkel of werkplaats niet eerst alleen het gesprek achter.
-    if (root.dataset.dock === "talk" || ui.trade || ui.craft) {
+    if (root.dataset.dock === "talk" || ui.trade || ui.craft || ui.market) {
       closeTalk();
       setPanel("closed");
       return;
@@ -4030,8 +4304,13 @@ export function createGkHud(api) {
   }
   function startService(kind, id) {
     store.item = null;
-    if (kind === "vendor") { ui.trade = { vendorId: id, offerId: null }; ui.craft = null; }
-    else { ui.craft = { stationId: id, recipeId: null }; ui.craftSearch = ""; ui.trade = null; }
+    ui.trade = null;
+    ui.craft = null;
+    ui.market = null;
+    // Fase 8 herstel: in de winkel staat je tas erboven (daar verkoop je).
+    if (kind === "vendor") { ui.trade = { vendorId: id, offerId: null }; store.tab = "bag"; save(); }
+    else if (kind === "market") ui.market = { marketId: id, tab: "buy", orderId: null, itemId: null, qty: 1, price: 0 };
+    else { ui.craft = { stationId: id, recipeId: null }; ui.craftSearch = ""; }
     ui.dockPick = "talk";
     ui.farTradeSince = 0;
     applyLayout();
@@ -4040,13 +4319,16 @@ export function createGkHud(api) {
   function endService() {
     ui.trade = null;
     ui.craft = null;
+    ui.market = null;
     store.item = null;
     applyLayout();
     render();
   }
+  // Fase 8 herstel: tijdens winkel of markt staat de tas erboven; die tekent nu ook meteen bij
+  // (eerst niet, en dan kwam de knop Verkopen pas veel later of niet in beeld).
   function renderSheetOrService() {
-    if (ui.trade || ui.craft) renderTalk();
-    else renderSheet();
+    renderSheet();
+    if (ui.trade || ui.craft || ui.market) renderTalk();
   }
   function confirmTwice(key) {
     if (ui.sure === key) {
@@ -4165,7 +4447,7 @@ export function createGkHud(api) {
       case "handle": shrinkPanel(); break;
       case "grow": setPanel("rail"); break;
       case "bag": openTab("bag"); break;
-      case "close": if (ui.trade || ui.craft) endService(); else setPanel("closed"); break;
+      case "close": if (ui.trade || ui.craft || ui.market) endService(); else setPanel("closed"); break;
       case "filter": store.filter = id; store.item = null; save(); renderSheet(); break;
       case "bag-select":
         ui.bagSelect = !ui.bagSelect;
@@ -4364,7 +4646,7 @@ export function createGkHud(api) {
       case "toast-close": api.dismissNotice(); break;
       case "ware": if (ui.trade) { ui.trade.offerId = ui.trade.offerId === id ? null : id; store.item = null; renderTalk(); } break;
       case "buy": if (ui.trade) api.run05("vendor_buy", { vendorId: ui.trade.vendorId, offerId: id, quantity: 1 }); break;
-      case "sell": if (ui.trade && id) api.run05("vendor_sell", { vendorId: ui.trade.vendorId, offerId: id, quantity: 1 }); break;
+      case "sell": if (ui.trade && id) api.run05("vendor_sell", { vendorId: ui.trade.vendorId, itemId: id, quantity: Math.max(1, num(key, 1)) }); break;
       case "buyback": if (ui.trade && id) api.run05("vendor_buy_back", { vendorId: ui.trade.vendorId, entryId: id }); break;
       // Fase 8b: ruilen met een speler.
       case "swap-invite": closeMenu(); api.run05("trade_invite", { targetPlayerId: id }); break;
@@ -4393,6 +4675,74 @@ export function createGkHud(api) {
         const swap = openTrade();
         const field = root.querySelector('[data-swap-amount="' + String(id).replace(/"/g, "") + '"]');
         if (swap && id) api.run05("trade_offer", { tradeId: swap.tradeId, currencyId: id, quantity: Math.max(0, Math.round(num(field?.value, 0))) });
+        break;
+      }
+      // Fase 8 herstel: de markt.
+      case "mkt-tab": if (ui.market) { ui.market.tab = id; ui.market.orderId = null; ui.market.itemId = null; renderTalk(); } break;
+      case "mkt-order": if (ui.market) { ui.market.orderId = ui.market.orderId === id ? null : id; renderTalk(); } break;
+      case "mkt-buy": if (ui.market && id) api.run05("market_buy", { marketId: ui.market.marketId, orderId: id, quantity: Math.max(1, num(key, 1)) }); break;
+      case "mkt-pick":
+        if (ui.market) {
+          const same = ui.market.itemId === id;
+          ui.market.itemId = same ? null : id;
+          ui.market.qty = 1;
+          ui.market.price = same ? 0 : Math.max(1, num(key, 1));
+          renderTalk();
+        }
+        break;
+      case "mkt-list": {
+        const market = ui.market;
+        if (!market || !market.itemId) break;
+        const pickNow = (marketData()?.sellableItems || []).find(function (entry) { return entry.itemId === market.itemId; });
+        const qty = Math.max(1, Math.min(num(pickNow?.quantity, 1), Math.round(num(market.qty, 1))));
+        const price = Math.round(num(market.price, 0));
+        if (price < 1) { toast("Vul een prijs in (minstens 1).", { tone: "error" }); break; }
+        Promise.resolve(api.run05("market_list", { marketId: market.marketId, itemId: market.itemId, quantity: qty, unitPriceMinor: price, currencyId: marketData()?.currencyId || null }))
+          .then(function (result) { if (result && result.ok && ui.market) { ui.market.itemId = null; ui.market.tab = "mine"; renderTalk(); } });
+        break;
+      }
+      case "mkt-cancel": if (id) api.run05("market_cancel", { orderId: id }); break;
+      // Fase 8 herstel: de post.
+      case "post-open": {
+        const msg = (data().s05?.mail?.messages || []).find(function (entry) { return entry.mailId === id; });
+        ui.post.open = ui.post.open === id ? "" : id;
+        if (msg && msg.state === "unread" && ui.post.open === id) api.run05("mail_read", { mailId: id });
+        renderSheet();
+        break;
+      }
+      case "post-claim": api.run05("mail_claim", { mailId: id }); break;
+      case "post-claim-all": api.run05("mail_claim_all", {}); break;
+      case "post-delete": if (confirmTwice("post-delete:" + id)) api.run05("mail_delete", { mailId: id }); break;
+      case "post-new": ui.post.compose = { to: "", subject: "", text: "", itemId: "", qty: 1, money: 0 }; renderSheet(); break;
+      case "post-reply": {
+        const msg = (data().s05?.mail?.messages || []).find(function (entry) { return entry.mailId === id; });
+        ui.post.compose = { to: msg?.fromName || "", subject: msg?.subject ? ("Re: " + msg.subject).slice(0, 60) : "", text: "", itemId: "", qty: 1, money: 0 };
+        renderSheet();
+        break;
+      }
+      case "post-cancel": ui.post.compose = null; ui.sure = ""; renderSheet(); break;
+      case "post-to": {
+        const name = ui.menu?.name || "";
+        closeMenu();
+        if (ui.trade || ui.craft || ui.market) endService();
+        ui.post.compose = { to: name, subject: "", text: "", itemId: "", qty: 1, money: 0 };
+        store.tab = "post";
+        store.item = null;
+        ui.combatAt = -1e9;
+        setPanel("open");
+        break;
+      }
+      case "post-send": {
+        const c = ui.post.compose;
+        if (!c) break;
+        const money = currencies()[0] || null;
+        const amount = Math.max(0, Math.round(num(c.money, 0)));
+        const hasStuff = Boolean(c.itemId) || amount > 0;
+        // Met spullen of geld erbij: twee keer tikken (je geeft het echt weg).
+        if (hasStuff && !confirmTwice("post-send")) break;
+        Promise.resolve(api.run05("mail_send", { toName: c.to, subject: c.subject, text: c.text, itemId: c.itemId || null,
+          quantity: c.itemId ? Math.max(1, Math.round(num(c.qty, 1))) : null, currencyId: amount > 0 && money ? money.currencyId : null, amountMinor: amount > 0 ? amount : null }))
+          .then(function (result) { if (result && result.ok) { ui.post.compose = null; renderSheet(); } });
         break;
       }
       case "craft": if (ui.craft) api.run05("craft", { stationId: ui.craft.stationId, recipeId: id }); break;
@@ -4522,6 +4872,8 @@ export function createGkHud(api) {
   // De selectie voert zelf geen actie uit: weggooien blijft achter de bevestigingsknop zitten.
   function startBagTouchSelection(event, cell) {
     if (!cell || cell.disabled || event.pointerType === "mouse" || event.button > 0) return false;
+    // Fase 8 herstel: in de winkel betekent slepen uit je tas "verkopen", ook op een telefoon.
+    if (ui.trade && cell.dataset.drag) return false;
     const start = { x: event.clientX, y: event.clientY };
     let active = false;
     let cancelled = false;
@@ -4621,8 +4973,13 @@ export function createGkHud(api) {
       }
       if (over) {
         over.classList.remove("gkDropOk");
-        const [kind, offerId] = String(source.dataset.drag).split(":");
-        if (ui.trade && offerId) api.run05(kind === "buy" ? "vendor_buy" : "vendor_sell", { vendorId: ui.trade.vendorId, offerId, quantity: 1 });
+        // "buy:<waar>" = kopen; "sell:<tasvak>" = verkopen (Fase 8 herstel: per item uit je tas, niet alleen wat de winkel zelf verkoopt).
+        const parts = String(source.dataset.drag).split(":");
+        const ref = parts.slice(1).join(":");
+        if (ui.trade && ref) {
+          if (parts[0] === "buy") api.run05("vendor_buy", { vendorId: ui.trade.vendorId, offerId: ref, quantity: 1 });
+          else { const itemId = itemPayload(ref).itemId; if (itemId) api.run05("vendor_sell", { vendorId: ui.trade.vendorId, itemId, quantity: 1 }); }
+        }
       }
     };
     window.addEventListener("pointermove", move);
@@ -4639,7 +4996,7 @@ export function createGkHud(api) {
       if (chatShown()) { closeChat(); return true; }
       if (ui.bigMap) { ui.bigMap = false; syncBigMap(); return true; }
       if (store.item) { store.item = null; save(); renderSheetOrService(); return true; }
-      if (ui.trade || ui.craft) { endService(); return true; }
+      if (ui.trade || ui.craft || ui.market) { endService(); return true; }
       if (ui.serviceTalk) { endServiceTalk(); return true; }
       if (data().dialogue) { api.closeDialogue(); return true; }
       if (root.dataset.panel === "open") { setPanel("rail"); return true; }
@@ -4695,6 +5052,29 @@ export function createGkHud(api) {
     const empty = root.querySelector("[data-craft-empty]");
     if (empty) empty.hidden = visible > 0;
   });
+  // Fase 8 herstel: invulvelden van de markt en de post. Typen tekent niets opnieuw; alleen de bevestigingszin
+  // (wat je geeft en krijgt) loopt meteen mee. Een andere keuze in een lijst tekent het formulier wel opnieuw.
+  function onFieldInput(event) {
+    const el = event.target;
+    if (!el || !root.contains(el) || !el.dataset) return;
+    if (el.dataset.marketField && ui.market) {
+      ui.market[el.dataset.marketField] = num(el.value, 0);
+      const line = root.querySelector("[data-mkt-confirm]");
+      const m = marketData();
+      const pickNow = (m?.sellableItems || []).find(function (entry) { return entry.itemId === ui.market.itemId; });
+      if (line && pickNow) line.textContent = marketSellText(pickNow, ui.market.qty, ui.market.price, num(m.taxPct), m);
+      return;
+    }
+    if (el.dataset.postField && ui.post.compose) {
+      const field = el.dataset.postField;
+      ui.post.compose[field] = field === "qty" || field === "money" ? num(el.value, 0) : String(el.value || "");
+      if (field === "itemId" && event.type === "change") { ui.post.compose.qty = 1; ui.sig.sheet = ""; renderSheet(); return; }
+      const line = root.querySelector("[data-post-confirm]");
+      if (line) line.textContent = postConfirmText(ui.post.compose);
+    }
+  }
+  root.addEventListener("input", onFieldInput);
+  root.addEventListener("change", onFieldInput);
   root.addEventListener("pointerdown", onPointerDown);
   // MMO (3-11): rechtsklik op een teamlid = spelermenu; nooit het browsermenu over het spelermenu heen.
   root.addEventListener("contextmenu", function (event) {

@@ -115,6 +115,33 @@ function itemIsTradable(item) {
   return item && item.tradable !== false && item.bindPolicy !== "quest_bound" && item.questItem !== true && item.category !== "quest";
 }
 
+// Fase 8 herstel: alles wat je mag ruilen mag ook op de markt (een oud item kan het nog expliciet uitzetten).
+function itemMarketOk(item) {
+  return Boolean(item) && item.marketEligible !== false && itemIsTradable(item);
+}
+
+// De valuta van een winkel: "Betalen met" op de NPC-kaart, anders die van zijn waren, anders de eerste valuta.
+function vendorCurrency(catalogs, catalog, item) {
+  const offers = Array.isArray(catalog?.offers) ? catalog.offers : [];
+  const first = Object.keys(catalogSection(catalogs, "currencies"))[0] || "currency.gold";
+  return catalog?.currencyRef || offers.find((offer) => offer.sellCurrencyRef)?.sellCurrencyRef || item?.vendorCurrencyRef || first;
+}
+
+// De eerste valuta van de wereld (de markt rekent standaard daarmee).
+function firstCurrencyId(catalogs) {
+  return Object.keys(catalogSection(catalogs, "currencies"))[0] || "currency.gold";
+}
+
+// Een stukje tekst van een speler: zonder regeleinden aan het eind, nooit langer dan max.
+function playerText(value, max) {
+  return String(value === null || value === undefined ? "" : value).replace(/\r\n?/g, "\n").trim().slice(0, max);
+}
+
+const TRADE_ACTION_TYPES = [
+  "trade_invite", "trade:invite", "trade_accept", "trade:accept", "trade_offer", "trade:offer",
+  "trade_confirm", "trade:confirm", "market_list", "market:create", "market_buy", "market:buy", "mail_send", "mail:send"
+];
+
 function operationIdFromPayload(payload) {
   return safeString(payload?.operationId || payload?.operation_id || "", "");
 }
@@ -230,7 +257,10 @@ export class Node05EconomyRuntimeService {
     const operationId = operationIdFromPayload(payload) || randomId("node05_operation");
     const hash = normalizedActionPayloadHash(action, payload);
     if (action === "reset_node05") assertDeveloperActionAllowed(ctx);
-    return runOperation(this.db, {
+    // Fase 8 herstel: wie er ook bij hoort (de ander in een ruil, wie post krijgt, de verkoper op de markt) krijgt
+    // na de transactie meteen een seintje. Zijn scherm hoeft dan niet op de volgende ronde (3,5 s) te wachten.
+    let notify = [];
+    const response = runOperation(this.db, {
       operationId,
       playerId: ctx.profile.id,
       operationType: action || "unknown",
@@ -239,10 +269,28 @@ export class Node05EconomyRuntimeService {
       faultHook: this.operationFaultHook || null,
       perform: () => {
         this.ensureRuntime(ctx);
-        return this.performAction(ctx, action, payload, operationId);
+        const result = this.performAction(ctx, action, payload, operationId);
+        notify = Array.isArray(result?.notify) ? result.notify : [];
+        return result;
       },
-      buildResponse: (result) => Object.assign({ ok: true, operationId }, result, { snapshot: this.buildSnapshot(ctx) })
+      buildResponse: (result) => {
+        const clean = Object.assign({}, result);
+        delete clean.notify;
+        return Object.assign({ ok: true, operationId }, clean, { snapshot: this.buildSnapshot(ctx) });
+      }
     });
+    this.pingPlayers(notify.filter((id) => id && id !== ctx.profile.id));
+    return response;
+  }
+
+  // Seintje naar de game van een andere speler: haal je handelsstand nu op (na de COMMIT, anders zie je de oude stand).
+  pingPlayers(playerIds) {
+    const ids = Array.from(new Set((playerIds || []).filter(Boolean)));
+    if (!ids.length || typeof this.mmoService?.sendToPlayer !== "function") return;
+    const timer = setTimeout(() => {
+      for (const id of ids) { try { this.mmoService.sendToPlayer(id, { type: "node05:refresh" }); } catch {} }
+    }, 30);
+    if (typeof timer?.unref === "function") timer.unref();
   }
 
   performAction(ctx, action, payload, operationId) {
@@ -270,6 +318,10 @@ export class Node05EconomyRuntimeService {
     if (action === "market_cancel" || action === "market:cancel") return this.cancelMarketOrder(ctx, payload, operationId);
     if (action === "mail_claim" || action === "mail:claim") return this.claimMail(ctx, payload, operationId);
     if (action === "mail_claim_all" || action === "mail:claim_all") return this.claimAllMail(ctx, operationId);
+    // Fase 8 herstel: post sturen, lezen en weggooien.
+    if (action === "mail_send" || action === "mail:send") return this.sendMail(ctx, payload, operationId);
+    if (action === "mail_read" || action === "mail:read") return this.readMail(ctx, payload);
+    if (action === "mail_delete" || action === "mail:delete") return this.deleteMail(ctx, payload);
     if (action === "reset_node05") return this.resetNode05(ctx, operationId);
     const error = new Error("Onbekende handelsactie: " + (action || "-"));
     error.status = 400;
@@ -492,9 +544,12 @@ export class Node05EconomyRuntimeService {
       return Object.assign({}, vendor, {
         displayName: vendor.linkedEntity?.label || catalog.displayName || vendor.vendorId,
         catalogId: catalog.id || vendor.vendorCatalogRef || null,
+        currencyRef: vendorCurrency(ctx.catalogs, catalog, null),
         offers,
         // Fase 8: wat jij hier verkocht en voor dezelfde prijs kunt terugkopen.
-        buyBack: this.buyBackRows(ctx, vendor)
+        buyBack: this.buyBackRows(ctx, vendor),
+        // Fase 8 herstel: wat deze winkel jou betaalt voor wat er in je tas zit (alleen als je bij de winkel staat).
+        sells: vendor.inRange === true ? this.bagSellList(ctx, vendor) : []
       });
     });
     return {
@@ -651,42 +706,41 @@ export class Node05EconomyRuntimeService {
   buildMarketSnapshot(ctx) {
     // Fase 8b: de marktregels komen uit Instellingen > 🤝 Handel en de belasting uit 💰 Geld.
     const rules = this.tradeRules(ctx);
-    const accesses = this.marketAccesses(ctx);
-    const orders = this.loadMarketOrders(ctx, false);
-    const myOrders = this.loadMarketOrders(ctx, true);
-    const sellableItems = this.sellableMarketItems(ctx);
+    this.expireMarketOrders(ctx);
     return {
       rules,
       taxPct: Math.max(0, safeInteger(economyRules(ctx.project).marketTaxPct, 0)),
-      accesses,
-      orders,
-      myOrders,
-      sellableItems
+      currencyId: firstCurrencyId(ctx.catalogs),
+      accesses: this.marketAccesses(ctx),
+      orders: this.loadMarketOrders(ctx, false),
+      myOrders: this.loadMarketOrders(ctx, true),
+      sellableItems: this.sellableMarketItems(ctx)
     };
   }
 
   loadMarketOrders(ctx, mineOnly) {
+    const stamp = now();
     const rows = mineOnly
       ? this.db.prepare(`
         SELECT o.*, pp.display_name AS seller_name
         FROM market_orders o
         LEFT JOIN player_profiles pp ON pp.id = o.seller_player_id
-        WHERE o.seller_player_id = ? AND o.status IN ('active', 'partially_filled')
+        WHERE o.seller_player_id = ? AND o.status IN ('active', 'partially_filled') AND o.expires_at > ?
         ORDER BY o.created_at DESC
-        LIMIT 8
-      `).all(ctx.profile.id)
+        LIMIT 60
+      `).all(ctx.profile.id, stamp)
       : this.db.prepare(`
         SELECT o.*, pp.display_name AS seller_name
         FROM market_orders o
         LEFT JOIN player_profiles pp ON pp.id = o.seller_player_id
-        WHERE o.status IN ('active', 'partially_filled')
+        WHERE o.status IN ('active', 'partially_filled') AND o.expires_at > ? AND o.seller_player_id <> ?
         ORDER BY o.created_at DESC
-        LIMIT 8
-      `).all();
+        LIMIT 60
+      `).all(stamp, ctx.profile.id);
     return rows.map((row) => ({
       orderId: row.id,
       sellerPlayerId: row.seller_player_id,
-      sellerName: row.seller_name || row.seller_player_id,
+      sellerName: row.seller_name || "Speler",
       itemKind: row.item_kind,
       itemId: row.item_id,
       displayName: displayForItem(ctx.catalogs, row.item_id),
@@ -703,37 +757,36 @@ export class Node05EconomyRuntimeService {
     }));
   }
 
+  // Wat je uit je tas op de markt kunt zetten (alles wat je mag ruilen), met een voorstel voor de prijs:
+  // dezelfde prijs als in een winkel (Verkoopwaarde × winkelprijs uit 💰 Geld).
   sellableMarketItems(ctx) {
-    return this.db.prepare(`
-      SELECT * FROM player_inventory_stacks
-      WHERE player_id = ? AND quantity > 0
-      ORDER BY updated_at DESC
-      LIMIT 12
-    `).all(ctx.profile.id).map((row) => {
-      const item = catalogSection(ctx.catalogs, "items")[row.item_id] || {};
-      const eligible = item.marketEligible === true && itemIsTradable(item);
+    const items = catalogSection(ctx.catalogs, "items");
+    const markup = economyRules(ctx.project).shopMarkupPct;
+    return this.bagItems(ctx.profile.id).map((entry) => {
+      const item = items[entry.itemId] || null;
       return {
-        stackId: row.stack_id,
-        itemId: row.item_id,
-        displayName: displayForItem(ctx.catalogs, row.item_id),
-        quantity: safeInteger(row.quantity, 0),
-        bindState: row.bind_state,
-        marketEligible: eligible,
-        suggestedPriceMinor: Math.max(1, safeInteger(item.vendorBaseValueMinor, 1) * 3)
+        itemId: entry.itemId,
+        displayName: displayForItem(ctx.catalogs, entry.itemId),
+        quantity: entry.quantity,
+        marketEligible: itemMarketOk(item),
+        suggestedPriceMinor: Math.max(1, shopSellPrice(safeInteger(item?.vendorBaseValueMinor, 0), 0, markup))
       };
     }).filter(function (entry) {
       return entry.marketEligible;
     });
   }
 
+  // Fase 8 herstel: de postbus hoort bij je account (al je characters zien dezelfde post).
   buildMailSnapshot(ctx) {
-    const messages = this.db.prepare(`
-      SELECT *
-      FROM player_mail
-      WHERE player_id = ? AND state IN ('unread', 'read', 'partially_claimed')
-      ORDER BY created_at DESC
-      LIMIT 8
-    `).all(ctx.profile.id).map((row) => {
+    const rules = this.tradeRules(ctx);
+    const owners = this.mailOwnerIds(ctx);
+    const marks = owners.map(() => "?").join(", ");
+    const stamp = now();
+    const visible = `player_id IN (${marks}) AND state IN ('unread', 'read', 'partially_claimed') AND (expires_at IS NULL OR expires_at > ?)`;
+    const counts = this.db.prepare(`
+      SELECT COUNT(*) AS total, SUM(CASE WHEN state = 'unread' THEN 1 ELSE 0 END) AS unread FROM player_mail WHERE ${visible}
+    `).get(...owners, stamp);
+    const messages = this.db.prepare(`SELECT * FROM player_mail WHERE ${visible} ORDER BY created_at DESC LIMIT 40`).all(...owners, stamp).map((row) => {
       const attachments = this.db.prepare(`
         SELECT *
         FROM player_mail_attachments
@@ -743,10 +796,14 @@ export class Node05EconomyRuntimeService {
         attachmentId: attachment.id,
         kind: attachment.asset_kind,
         assetId: attachment.asset_id,
+        itemId: attachment.asset_kind === "currency" ? null : attachment.asset_id,
+        currencyId: attachment.asset_kind === "currency" ? attachment.asset_id : null,
         displayName: attachment.asset_kind === "currency" ? displayForCurrency(ctx.catalogs, attachment.asset_id) : displayForItem(ctx.catalogs, attachment.asset_id),
         quantityMinor: safeInteger(attachment.quantity_minor, 0),
         state: attachment.state
       }));
+      const source = String(row.source_ref || "");
+      const fromId = source.startsWith("player:") ? source.slice("player:".length) : null;
       return {
         mailId: row.id,
         mailType: row.mail_type,
@@ -755,13 +812,18 @@ export class Node05EconomyRuntimeService {
         state: row.state,
         createdAt: row.created_at,
         expiresAt: row.expires_at,
+        // Van wie: een speler, of de markt / het spel zelf.
+        fromName: fromId ? this.playerName(fromId) : (String(row.mail_type || "").startsWith("market") ? "Markt" : "Spel"),
+        fromPlayerId: fromId,
         attachments,
         canClaim: attachments.some(function (attachment) { return attachment.state === "available"; })
       };
     });
     return {
-      rules: this.tradeRules(ctx),
-      unreadCount: messages.filter(function (message) { return message.state === "unread"; }).length,
+      rules,
+      unreadCount: safeInteger(counts?.unread, 0),
+      total: safeInteger(counts?.total, 0),
+      max: Math.max(1, safeInteger(rules.mailMax, 100)),
       messages
     };
   }
@@ -786,10 +848,12 @@ export class Node05EconomyRuntimeService {
     return vendors.find(function (vendor) { return vendor.vendorId === id; }) || vendors[0] || null;
   }
 
-  findMarketAccess(ctx) {
-    return this.marketAccesses(ctx).find(function (access) {
-      return access.remoteAccessAllowed === true || access.inRange === true;
-    }) || this.marketAccesses(ctx)[0] || null;
+  findMarketAccess(ctx, marketId = "") {
+    const accesses = this.marketAccesses(ctx);
+    const id = safeString(marketId, "");
+    return (id && accesses.find(function (access) { return access.marketAccessId === id; }))
+      || accesses.find(function (access) { return access.remoteAccessAllowed === true || access.inRange === true; })
+      || accesses[0] || null;
   }
 
   findRecipe(ctx, recipeId) {
@@ -949,42 +1013,58 @@ export class Node05EconomyRuntimeService {
     return { action: "vendor_buy", grants, message: "Gekocht: " + displayForItem(ctx.catalogs, offer.itemRef) + "." };
   }
 
+  // Fase 8 herstel: wat een winkel jou per stuk betaalt. Staat het item in zijn lijst met een eigen terugkoopprijs,
+  // dan die; anders de Verkoopwaarde × "Winkel koopt terug voor" uit Instellingen > 💰 Geld. 0 = koopt het niet.
+  shopPaysFor(ctx, vendor, itemId) {
+    const item = catalogSection(ctx.catalogs, "items")[itemId] || null;
+    const catalog = this.vendorCatalogs(ctx)[vendor.vendorCatalogRef] || {};
+    const offer = (Array.isArray(catalog.offers) ? catalog.offers : []).find((entry) => entry.itemRef === itemId) || null;
+    const currencyId = offer?.buyCurrencyRef || vendorCurrency(ctx.catalogs, catalog, item);
+    const name = displayForItem(ctx.catalogs, itemId);
+    if (!item) return { itemId, priceMinor: 0, currencyId, own: false, why: "Dit item bestaat niet meer." };
+    if (!itemIsTradable(item)) {
+      const quest = item.questItem === true || item.category === "quest" || item.bindPolicy === "quest_bound";
+      return { itemId, priceMinor: 0, currencyId, own: false, why: quest ? "Een questitem kun je niet verkopen." : name + " kun je niet verkopen." };
+    }
+    const own = offer ? Math.max(0, safeInteger(offer.buyPriceMinor, 0)) : 0;
+    const priceMinor = shopBuyPrice(safeInteger(item.vendorBaseValueMinor, 0), own, economyRules(ctx.project).shopBuyPct);
+    return { itemId, priceMinor, currencyId, own: own > 0, why: priceMinor > 0 ? "" : "Deze winkel koopt " + name + " niet (het heeft geen Verkoopwaarde)." };
+  }
+
+  bagSellList(ctx, vendor) {
+    return this.bagItems(ctx.profile.id).map((entry) => {
+      const pays = this.shopPaysFor(ctx, vendor, entry.itemId);
+      return { itemId: entry.itemId, owned: entry.quantity, priceMinor: pays.priceMinor, currencyRef: pays.currencyId, ownPrice: pays.own,
+        canSell: pays.priceMinor > 0 && entry.quantity > 0, why: pays.why };
+    });
+  }
+
   vendorSell(ctx, payload, operationId) {
     const vendor = this.findVendor(ctx, payload.vendorId || payload.vendor_id);
-    if (!vendor) {
-      const error = new Error("Vendor niet gevonden in deze zone.");
-      error.status = 404;
-      throw error;
-    }
+    if (!vendor) throw httpError(404, "Vendor niet gevonden in deze zone.");
     this.assertInRange(vendor, "Vendor");
-    const catalog = this.vendorCatalogs(ctx)[vendor.vendorCatalogRef] || {};
-    const offer = (Array.isArray(catalog.offers) ? catalog.offers : []).find(function (entry) {
-      return entry.offerId === safeString(payload.offerId || payload.offer_id, "");
-    }) || null;
-    if (!offer) {
-      const error = new Error("Vendor koopt dit item niet.");
-      error.status = 404;
-      throw error;
+    // Je verkoopt wat er in je tas zit (itemId). Een oude knop stuurt nog een offerId: dan het item van die waar.
+    let itemId = safeString(payload.itemId || payload.item_id, "");
+    if (!itemId) {
+      const catalog = this.vendorCatalogs(ctx)[vendor.vendorCatalogRef] || {};
+      const offerId = safeString(payload.offerId || payload.offer_id, "");
+      itemId = (Array.isArray(catalog.offers) ? catalog.offers : []).find((entry) => entry.offerId === offerId)?.itemRef || "";
     }
-    const quantity = normalizeQuantity(payload.quantity, 1);
-    const sold = catalogSection(ctx.catalogs, "items")[offer.itemRef] || null;
-    if (sold && (sold.questItem === true || sold.category === "quest")) {
-      const error = new Error("Een questitem kun je niet verkopen.");
-      error.status = 409;
-      throw error;
-    }
-    const summary = this.vendorOfferSummary(ctx, vendor, offer);
-    if (summary.buyPriceMinor <= 0) {
-      const error = new Error("Deze winkel koopt " + displayForItem(ctx.catalogs, offer.itemRef) + " niet.");
-      error.status = 409;
-      throw error;
-    }
-    this.removeItem(ctx, offer.itemRef, quantity, "vendor_sell", vendor.vendorId, operationId);
-    const grant = this.node03RuntimeService.grantCurrency(ctx, summary.buyCurrencyRef, summary.buyPriceMinor * quantity, "vendor_sell", offer.offerId, operationId);
+    if (!itemId) throw httpError(400, "Kies iets uit je tas om te verkopen.");
+    const pays = this.shopPaysFor(ctx, vendor, itemId);
+    if (pays.priceMinor <= 0) throw httpError(409, pays.why);
+    const name = displayForItem(ctx.catalogs, itemId);
+    // Vraag je er meer dan je hebt (de tas veranderde net), dan verkoop je wat er nog is.
+    const quantity = Math.min(normalizeQuantity(payload.quantity, 1), this.bagCount(ctx.profile.id, itemId));
+    if (quantity <= 0) throw httpError(400, "Je hebt geen " + name + " in je tas.");
+    const total = pays.priceMinor * quantity;
+    this.removeItem(ctx, itemId, quantity, "vendor_sell", vendor.vendorId, operationId);
+    const grant = this.node03RuntimeService.grantCurrency(ctx, pays.currencyId, total, "vendor_sell", vendor.vendorId, operationId);
     // Fase 8: het blijft bij de winkel liggen, zodat je het voor dezelfde prijs kunt terugkopen.
-    this.rememberBuyBack(ctx, vendor, offer.itemRef, quantity, summary.buyCurrencyRef, summary.buyPriceMinor);
-    this.node03RuntimeService.recordGameplayEvent(ctx, "vendor_sell", "player", vendor.vendorId, { offerId: offer.offerId, quantity });
-    return { action: "vendor_sell", grants: [grant].filter(Boolean), message: "Verkocht: " + displayForItem(ctx.catalogs, offer.itemRef) + "." };
+    this.rememberBuyBack(ctx, vendor, itemId, quantity, pays.currencyId, pays.priceMinor);
+    this.node03RuntimeService.recordGameplayEvent(ctx, "vendor_sell", "player", vendor.vendorId, { itemId, quantity, total });
+    return { action: "vendor_sell", grants: [grant].filter(Boolean),
+      message: "Verkocht: " + (quantity > 1 ? quantity + "× " : "") + name + " voor " + total + " " + displayForCurrency(ctx.catalogs, pays.currencyId) + "." };
   }
 
   // ---- Fase 8: terugkopen bij de winkel ----
@@ -1074,13 +1154,11 @@ export class Node05EconomyRuntimeService {
   assertTradePace(ctx, rules) {
     const limit = Math.max(1, safeInteger(rules.actionsPerHour, 60));
     const since = new Date(Date.now() - 3600000).toISOString();
+    const marks = TRADE_ACTION_TYPES.map(() => "?").join(", ");
     const row = this.db.prepare(`
       SELECT COUNT(*) AS total FROM operation_idempotency
-      WHERE player_id = ? AND created_at >= ? AND operation_type IN (
-        'trade_invite', 'trade:invite', 'trade_accept', 'trade:accept', 'trade_offer', 'trade:offer',
-        'trade_confirm', 'trade:confirm', 'market_list', 'market:create', 'market_buy', 'market:buy'
-      )
-    `).get(ctx.profile.id, since);
+      WHERE player_id = ? AND created_at >= ? AND operation_type IN (${marks})
+    `).get(ctx.profile.id, since, ...TRADE_ACTION_TYPES);
     if (safeInteger(row?.total, 0) > limit) {
       throw httpError(429, "Je handelt te snel. Even wachten (grens: " + limit + " handelsacties per uur).");
     }
@@ -1096,6 +1174,10 @@ export class Node05EconomyRuntimeService {
       throw httpError(409, "De ruil is verlopen. Vraag het opnieuw.");
     }
     return row;
+  }
+
+  tradePartnerId(row, ctx) {
+    return row.player_a_id === ctx.profile.id ? row.player_b_id : row.player_a_id;
   }
 
   closeTrade(tradeId, state) {
@@ -1173,7 +1255,7 @@ export class Node05EconomyRuntimeService {
       VALUES (?, ?, ?, 'invited', 0, 0, 1, ?, ?, ?, ?)
     `).run(tradeId, ctx.profile.id, targetId, stamp, stamp, addSeconds(Math.max(20, safeInteger(rules.tradeHoldSeconds, 120))), operationId);
     this.node03RuntimeService.recordGameplayEvent(ctx, "trade_invite", "player", targetId, { tradeId });
-    return { action: "trade_invite", tradeId, message: "Ruil gevraagd aan " + name + "." };
+    return { action: "trade_invite", tradeId, notify: [targetId], message: "Ruil gevraagd aan " + name + "." };
   }
 
   acceptTrade(ctx, payload) {
@@ -1188,7 +1270,7 @@ export class Node05EconomyRuntimeService {
     this.assertTradeDistance(ctx, row.player_a_id, rules, name);
     this.db.prepare("UPDATE direct_trade_sessions SET state = 'open', updated_at = ?, expires_at = ?, revision = revision + 1 WHERE id = ?")
       .run(now(), addSeconds(Math.max(20, safeInteger(rules.tradeHoldSeconds, 120))), row.id);
-    return { action: "trade_accept", tradeId: row.id, message: "Ruil begonnen met " + name + "." };
+    return { action: "trade_accept", tradeId: row.id, notify: [row.player_a_id], message: "Ruil begonnen met " + name + "." };
   }
 
   offerToTrade(ctx, payload) {
@@ -1205,10 +1287,11 @@ export class Node05EconomyRuntimeService {
       this.db.prepare("DELETE FROM direct_trade_offers WHERE trade_session_id = ? AND owner_player_id = ? AND asset_kind = ? AND asset_id = ?")
         .run(row.id, ctx.profile.id, kind, assetId);
       this.touchTrade(row.id);
-      return { action: "trade_offer", tradeId: row.id, message: "Uit de ruil gehaald." };
+      return { action: "trade_offer", tradeId: row.id, notify: [this.tradePartnerId(row, ctx)], message: "Uit de ruil gehaald." };
     }
-    const have = itemId ? this.itemCount(ctx.profile.id, itemId) : this.currencyAmount(ctx.profile.id, assetId);
-    if (have < quantity) throw httpError(400, "Zoveel heb je niet.");
+    // Alleen wat echt in je tas zit telt (niet wat je draagt).
+    const have = itemId ? this.bagCount(ctx.profile.id, itemId) : this.currencyAmount(ctx.profile.id, assetId);
+    if (have < quantity) throw httpError(400, itemId ? "Zoveel " + displayForItem(ctx.catalogs, itemId) + " heb je niet in je tas." : "Zoveel heb je niet.");
     if (itemId && !itemIsTradable(catalogSection(ctx.catalogs, "items")[itemId] || {})) {
       throw httpError(403, displayForItem(ctx.catalogs, itemId) + " kun je niet ruilen.");
     }
@@ -1224,7 +1307,7 @@ export class Node05EconomyRuntimeService {
         updated_at = excluded.updated_at
     `).run(row.id, ctx.profile.id, kind, assetId, quantity, now());
     this.touchTrade(row.id);
-    return { action: "trade_offer", tradeId: row.id, message: "In de ruil gelegd." };
+    return { action: "trade_offer", tradeId: row.id, notify: [this.tradePartnerId(row, ctx)], message: "In de ruil gelegd." };
   }
 
   confirmTrade(ctx, payload, operationId) {
@@ -1239,7 +1322,7 @@ export class Node05EconomyRuntimeService {
     this.db.prepare("UPDATE direct_trade_sessions SET " + column + " = 1, updated_at = ? WHERE id = ?").run(now(), row.id);
     const fresh = this.db.prepare("SELECT * FROM direct_trade_sessions WHERE id = ? LIMIT 1").get(row.id);
     if (!safeInteger(fresh.player_a_confirmed, 0) || !safeInteger(fresh.player_b_confirmed, 0)) {
-      return { action: "trade_confirm", tradeId: row.id, message: "Jij hebt ja gezegd. Nu de ander nog." };
+      return { action: "trade_confirm", tradeId: row.id, notify: [this.tradePartnerId(row, ctx)], message: "Jij hebt ja gezegd. Nu de ander nog." };
     }
     return this.commitTrade(ctx, fresh, operationId);
   }
@@ -1263,7 +1346,7 @@ export class Node05EconomyRuntimeService {
       .run(stamp, stamp, row.id);
     this.node03RuntimeService.recordGameplayEvent(ctx, "trade_completed", "player", partnerId, { tradeId: row.id, given, got });
     const text = function (lines) { return lines.length ? lines.map(function (line) { return line.text; }).join(", ") : "niets"; };
-    return { action: "trade_confirm", tradeId: row.id, traded: { given, got, partnerName },
+    return { action: "trade_confirm", tradeId: row.id, traded: { given, got, partnerName }, notify: [partnerId],
       message: "Geruild met " + partnerName + ": je gaf " + text(given) + " en kreeg " + text(got) + "." };
   }
 
@@ -1277,7 +1360,7 @@ export class Node05EconomyRuntimeService {
         continue;
       }
       const name = displayForItem(fromCtx.catalogs, entry.asset_id);
-      if (this.itemCount(fromCtx.profile.id, entry.asset_id) < quantity) throw httpError(409, "De ruil ging niet door: " + name + " is er niet meer.");
+      if (this.bagCount(fromCtx.profile.id, entry.asset_id) < quantity) throw httpError(409, "De ruil ging niet door: " + name + " is er niet meer.");
       const item = catalogSection(fromCtx.catalogs, "items")[entry.asset_id] || {};
       if (!itemIsTradable(item)) throw httpError(403, "De ruil ging niet door: " + name + " kun je niet ruilen.");
       if (item.unique === true && this.itemCount(toCtx.profile.id, entry.asset_id) >= 1) {
@@ -1300,7 +1383,7 @@ export class Node05EconomyRuntimeService {
   cancelTrade(ctx, payload) {
     const row = this.tradeSession(ctx, payload.tradeId || payload.trade_id);
     this.closeTrade(row.id, "cancelled");
-    return { action: "trade_cancel", tradeId: row.id, message: "Ruil afgebroken." };
+    return { action: "trade_cancel", tradeId: row.id, notify: [this.tradePartnerId(row, ctx)], message: "Ruil afgebroken." };
   }
 
   decrementVendorStock(vendor, offer, quantity) {
@@ -1551,80 +1634,60 @@ export class Node05EconomyRuntimeService {
   }
 
   createMarketOrder(ctx, payload, operationId) {
-    const access = this.findMarketAccess(ctx);
-    if (!access) {
-      const error = new Error("Marketplace access niet gevonden.");
-      error.status = 404;
-      throw error;
-    }
-    if (access.remoteAccessAllowed !== true) this.assertInRange(access, "Marketplace");
-    const itemId = safeString(payload.itemId || payload.item_id, "");
-    const quantity = normalizeQuantity(payload.quantity, 1);
-    const item = catalogSection(ctx.catalogs, "items")[itemId] || null;
-    if (!item || item.marketEligible !== true || !itemIsTradable(item)) {
-      const error = new Error("Item mag niet op de market.");
-      error.status = 400;
-      throw error;
-    }
+    const access = this.findMarketAccess(ctx, payload.marketId);
+    if (!access) throw httpError(404, "Hier is geen markt. Zet bij een NPC 'Markt' aan.");
+    if (access.remoteAccessAllowed !== true) this.assertInRange(access, "De markt");
     // Fase 8b: de marktregels komen uit Instellingen > 🤝 Handel.
     const rules = this.tradeRules(ctx);
     if (rules.marketOn === false) throw httpError(403, "De markt staat uit (Instellingen > 🤝 Handel).");
     this.assertTradePace(ctx, rules);
+    this.expireMarketOrders(ctx);
+    const itemId = safeString(payload.itemId || payload.item_id, "");
+    const item = catalogSection(ctx.catalogs, "items")[itemId] || null;
+    const name = displayForItem(ctx.catalogs, itemId);
+    if (!item) throw httpError(400, "Kies iets uit je tas.");
+    if (!itemMarketOk(item)) throw httpError(403, name + " mag niet op de markt.");
+    const quantity = normalizeQuantity(payload.quantity, 1);
+    if (this.bagCount(ctx.profile.id, itemId) < quantity) throw httpError(400, "Zoveel " + name + " heb je niet in je tas.");
     const mineActive = safeInteger(this.db.prepare("SELECT COUNT(*) AS total FROM market_orders WHERE seller_player_id = ? AND status IN ('active', 'partially_filled')")
       .get(ctx.profile.id)?.total, 0);
     const maxListings = Math.max(1, safeInteger(rules.marketMaxPerPlayer, 20));
     if (mineActive >= maxListings) throw httpError(409, "Je hebt al " + mineActive + " dingen op de markt staan (grens: " + maxListings + ").");
-    const currencyId = safeString(payload.currencyId || payload.currency_id || item.vendorCurrencyRef || "currency.gold", "currency.gold");
-    const unitPrice = Math.max(1, safeInteger(payload.unitPriceMinor || payload.unit_price_minor, Math.max(1, safeInteger(item.vendorBaseValueMinor, 1) * 3)));
-    const durationSeconds = safeInteger(payload.durationSeconds || payload.duration_seconds, Math.max(1, safeInteger(rules.marketDays, 1)) * 86400);
+    const currencyId = safeString(payload.currencyId || payload.currency_id, "") || firstCurrencyId(ctx.catalogs);
+    if (!catalogSection(ctx.catalogs, "currencies")[currencyId]) throw httpError(400, "Die valuta bestaat niet.");
+    const unitPrice = safeInteger(payload.unitPriceMinor || payload.unit_price_minor, 0);
+    if (unitPrice < 1) throw httpError(400, "Vul een prijs in (minstens 1).");
+    const days = Math.max(1, safeInteger(rules.marketDays, 1));
+    const expiresAt = addDays(days);
     this.removeItem(ctx, itemId, quantity, "market_listing_escrow", access.marketAccessId, operationId);
     const orderId = randomId("market_order");
     const stamp = now();
     this.db.prepare(`
       INSERT INTO market_orders (id, seller_player_id, item_kind, item_id, item_instance_id, quantity_total, quantity_remaining, currency_id, unit_price_minor, status, created_at, expires_at, updated_at, metadata_json)
       VALUES (?, ?, 'item_stack', ?, NULL, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
-    `).run(orderId, ctx.profile.id, itemId, quantity, quantity, currencyId, unitPrice, stamp, addSeconds(durationSeconds), stamp, stableJson({ marketAccessId: access.marketAccessId }));
+    `).run(orderId, ctx.profile.id, itemId, quantity, quantity, currencyId, unitPrice, stamp, expiresAt, stamp, stableJson({ marketAccessId: access.marketAccessId }));
     this.db.prepare(`
       INSERT INTO asset_reservations (id, owner_player_id, reservation_kind, reservation_ref, asset_kind, asset_id, quantity_minor, status, created_at, expires_at)
       VALUES (?, ?, 'market', ?, 'item_stack', ?, ?, 'active', ?, ?)
-    `).run(randomId("reservation"), ctx.profile.id, orderId, itemId, quantity, stamp, addSeconds(durationSeconds));
-    return { action: "market_list", orderId, message: "Listing aangemaakt: " + displayForItem(ctx.catalogs, itemId) + "." };
+    `).run(randomId("reservation"), ctx.profile.id, orderId, itemId, quantity, stamp, expiresAt);
+    return { action: "market_list", orderId,
+      message: "Op de markt: " + quantity + "× " + name + " voor " + unitPrice + " " + displayForCurrency(ctx.catalogs, currencyId) + " per stuk." };
   }
 
   buyMarketOrder(ctx, payload, operationId) {
-    const access = this.findMarketAccess(ctx);
-    if (!access) {
-      const error = new Error("Marketplace access niet gevonden.");
-      error.status = 404;
-      throw error;
-    }
-    if (access.remoteAccessAllowed !== true) this.assertInRange(access, "Marketplace");
+    const access = this.findMarketAccess(ctx, payload.marketId);
+    if (!access) throw httpError(404, "Hier is geen markt. Zet bij een NPC 'Markt' aan.");
+    if (access.remoteAccessAllowed !== true) this.assertInRange(access, "De markt");
     const rules = this.tradeRules(ctx);
     if (rules.marketOn === false) throw httpError(403, "De markt staat uit (Instellingen > 🤝 Handel).");
     this.assertTradePace(ctx, rules);
     const orderId = safeString(payload.orderId || payload.order_id, "");
     const order = this.db.prepare("SELECT * FROM market_orders WHERE id = ? LIMIT 1").get(orderId);
-    if (!order || !["active", "partially_filled"].includes(order.status)) {
-      const error = new Error("Market order is niet actief.");
-      error.status = 404;
-      throw error;
-    }
-    if (Date.parse(order.expires_at) <= Date.now()) {
-      const error = new Error("Market order is verlopen.");
-      error.status = 409;
-      throw error;
-    }
-    if (order.seller_player_id === ctx.profile.id) {
-      const error = new Error("Je kunt je eigen listing niet kopen.");
-      error.status = 400;
-      throw error;
-    }
+    if (!order || !["active", "partially_filled"].includes(order.status)) throw httpError(404, "Dat staat niet meer op de markt.");
+    if (Date.parse(order.expires_at) <= Date.now()) throw httpError(409, "Dat staat niet meer op de markt (de tijd is om).");
+    if (order.seller_player_id === ctx.profile.id) throw httpError(400, "Je eigen aanbod koop je niet; neem het terug bij Mijn aanbod.");
     const quantity = Math.min(normalizeQuantity(payload.quantity, 1), safeInteger(order.quantity_remaining, 0));
-    if (quantity <= 0) {
-      const error = new Error("Market order heeft geen quantity meer.");
-      error.status = 409;
-      throw error;
-    }
+    if (quantity <= 0) throw httpError(409, "Dat is net uitverkocht.");
     const gross = safeInteger(order.unit_price_minor, 0) * quantity;
     this.spendCurrency(ctx, order.currency_id, gross, "market_buy", order.id, operationId);
     // Fase 8b: de marktbelasting staat op één plek: Instellingen > 💰 Geld.
@@ -1651,7 +1714,8 @@ export class Node05EconomyRuntimeService {
       INSERT INTO market_trades (id, operation_id, order_id, buyer_player_id, seller_player_id, quantity, currency_id, unit_price_minor, gross_amount_minor, tax_amount_minor, seller_amount_minor, created_at, metadata_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}')
     `).run(randomId("market_trade"), operationId, order.id, ctx.profile.id, order.seller_player_id, quantity, order.currency_id, safeInteger(order.unit_price_minor, 0), gross, tax, sellerAmount, now());
-    return { action: "market_buy", orderId: order.id, message: "Market aankoop voltooid: " + displayForItem(ctx.catalogs, order.item_id) + "." };
+    return { action: "market_buy", orderId: order.id, notify: [order.seller_player_id],
+      message: "Gekocht op de markt: " + quantity + "× " + displayForItem(ctx.catalogs, order.item_id) + " voor " + gross + " " + displayForCurrency(ctx.catalogs, order.currency_id) + "." };
   }
 
   // amount = wat de verkoper krijgt, taxMinor = wat de markt eraf haalde (dat geld verdwijnt uit het spel).
@@ -1675,7 +1739,8 @@ export class Node05EconomyRuntimeService {
       this.node03RuntimeService.recordLedger(operationId, sellerPlayerId, "currency", currencyId, amount, before, before + amount, "market_sale", order.id);
       return;
     }
-    this.createSystemMail(sellerPlayerId, "market_sale", "Verkocht op de markt", "Je verkoop op de markt is betaald.", [
+    this.createSystemMail(sellerPlayerId, "market_sale", "Verkocht op de markt",
+      "Iemand kocht je " + displayForItem(ctx.catalogs, order.item_id) + " op de markt. Dit is je geld" + (tax > 0 ? " (de markt hield " + tax + " in)." : "."), [
       { kind: "currency", assetId: currencyId, quantityMinor: amount }
     ], order.id, Math.max(1, safeInteger(this.tradeRules(ctx).mailKeepDays, 30)));
   }
@@ -1684,9 +1749,7 @@ export class Node05EconomyRuntimeService {
     const orderId = safeString(payload.orderId || payload.order_id, "");
     const order = this.db.prepare("SELECT * FROM market_orders WHERE id = ? LIMIT 1").get(orderId);
     if (!order || !["active", "partially_filled"].includes(order.status) || order.seller_player_id !== ctx.profile.id) {
-      const error = new Error("Market order kan niet geannuleerd worden.");
-      error.status = 404;
-      throw error;
+      throw httpError(404, "Dat staat niet (meer) van jou op de markt.");
     }
     const remaining = safeInteger(order.quantity_remaining, 0);
     if (remaining > 0) this.node03RuntimeService.grantItem(ctx, order.item_id, remaining, "market_cancel_return", order.id, operationId);
@@ -1700,7 +1763,7 @@ export class Node05EconomyRuntimeService {
       SET status = 'released', released_at = ?
       WHERE reservation_kind = 'market' AND reservation_ref = ? AND status = 'active'
     `).run(now(), order.id);
-    return { action: "market_cancel", orderId: order.id, message: "Listing geannuleerd en item teruggezet." };
+    return { action: "market_cancel", orderId: order.id, message: "Teruggenomen van de markt: " + displayForItem(ctx.catalogs, order.item_id) + "." };
   }
 
   createSystemMail(playerId, type, subject, body, attachments, sourceRef = null, keepDays = 30) {
@@ -1719,49 +1782,185 @@ export class Node05EconomyRuntimeService {
     return mailId;
   }
 
+  // Alle characters van je account delen één postbus.
+  mailOwnerIds(ctx) {
+    const userId = ctx.profile?.user_id || null;
+    if (!userId) return [ctx.profile.id];
+    const ids = this.db.prepare("SELECT id FROM player_profiles WHERE user_id = ?").all(userId).map((row) => row.id);
+    return ids.length ? ids : [ctx.profile.id];
+  }
+
+  ownedMail(ctx, mailId) {
+    const owners = this.mailOwnerIds(ctx);
+    const mail = this.db.prepare(`SELECT * FROM player_mail WHERE id = ? AND player_id IN (${owners.map(() => "?").join(", ")}) LIMIT 1`)
+      .get(safeString(mailId, ""), ...owners);
+    if (!mail) throw httpError(404, "Dat bericht is er niet (meer).");
+    return mail;
+  }
+
   claimMail(ctx, payload, operationId) {
-    const mailId = safeString(payload.mailId || payload.mail_id, "");
-    const mail = this.db.prepare("SELECT * FROM player_mail WHERE id = ? AND player_id = ? LIMIT 1").get(mailId, ctx.profile.id);
-    if (!mail) {
-      const error = new Error("Mail niet gevonden.");
-      error.status = 404;
-      throw error;
-    }
-    return this.claimMailRow(ctx, mail, operationId);
+    return this.claimMailRow(ctx, this.ownedMail(ctx, payload.mailId || payload.mail_id), operationId);
   }
 
   claimAllMail(ctx, operationId) {
+    const owners = this.mailOwnerIds(ctx);
     const rows = this.db.prepare(`
       SELECT *
       FROM player_mail
-      WHERE player_id = ? AND state IN ('unread', 'read', 'partially_claimed')
+      WHERE player_id IN (${owners.map(() => "?").join(", ")}) AND state IN ('unread', 'read', 'partially_claimed') AND (expires_at IS NULL OR expires_at > ?)
       ORDER BY created_at ASC
       LIMIT 50
-    `).all(ctx.profile.id);
+    `).all(...owners, now());
     const grants = [];
+    const kept = [];
     for (const row of rows) {
       const result = this.claimMailRow(ctx, row, operationId + ":" + row.id);
       grants.push.apply(grants, result.grants || []);
+      kept.push.apply(kept, result.kept || []);
     }
-    return { action: "mail_claim_all", grants, message: grants.length ? "Alle mail attachments geclaimed." : "Geen mail attachments om te claimen." };
+    const note = kept.length ? " Bleef liggen (heb je al, mag maar 1×): " + kept.join(", ") + "." : "";
+    return { action: "mail_claim_all", grants, message: (grants.length ? "Alles uit de post gehaald." : "Er lag niets om op te halen.") + note };
   }
 
   claimMailRow(ctx, mail, operationId) {
     const attachments = this.db.prepare("SELECT * FROM player_mail_attachments WHERE mail_id = ? AND state = 'available'").all(mail.id);
     const grants = [];
+    const kept = [];
     for (const attachment of attachments) {
       if (attachment.asset_kind === "currency") {
         const grant = this.node03RuntimeService.grantCurrency(ctx, attachment.asset_id, safeInteger(attachment.quantity_minor, 0), "mail_claim", mail.id, operationId);
         if (grant) grants.push(grant);
       } else {
+        // Een uniek item dat je al hebt blijft in de post liggen (anders zou het verdwijnen).
+        const item = catalogSection(ctx.catalogs, "items")[attachment.asset_id] || {};
+        if (item.unique === true && this.node03RuntimeService.ownedItemCount(ctx.profile.id, attachment.asset_id) >= 1) {
+          kept.push(displayForItem(ctx.catalogs, attachment.asset_id));
+          continue;
+        }
         grants.push.apply(grants, this.node03RuntimeService.grantItem(ctx, attachment.asset_id, safeInteger(attachment.quantity_minor, 1), "mail_claim", mail.id, operationId));
       }
       this.db.prepare("UPDATE player_mail_attachments SET state = 'claimed', claimed_operation_id = ?, claimed_at = ? WHERE id = ?")
         .run(operationId, now(), attachment.id);
     }
-    this.db.prepare("UPDATE player_mail SET state = 'claimed', claimed_at = ?, revision = revision + 1 WHERE id = ?")
-      .run(now(), mail.id);
-    return { action: "mail_claim", mailId: mail.id, grants, message: grants.length ? "Mail geclaimed." : "Mail had geen beschikbare attachments." };
+    this.db.prepare("UPDATE player_mail SET state = ?, read_at = COALESCE(read_at, ?), claimed_at = ?, revision = revision + 1 WHERE id = ?")
+      .run(kept.length ? "partially_claimed" : "claimed", now(), now(), mail.id);
+    const note = kept.length ? " Bleef liggen (heb je al, mag maar 1×): " + kept.join(", ") + "." : "";
+    return { action: "mail_claim", mailId: mail.id, grants, kept, message: (grants.length ? "Uit de post gehaald." : "Er zat niets (meer) bij.") + note };
+  }
+
+  readMail(ctx, payload) {
+    const mail = this.ownedMail(ctx, payload.mailId || payload.mail_id);
+    if (mail.state === "unread") {
+      this.db.prepare("UPDATE player_mail SET state = 'read', read_at = ?, revision = revision + 1 WHERE id = ?").run(now(), mail.id);
+    }
+    return { action: "mail_read", mailId: mail.id, message: "" };
+  }
+
+  deleteMail(ctx, payload) {
+    const mail = this.ownedMail(ctx, payload.mailId || payload.mail_id);
+    const open = this.db.prepare("SELECT COUNT(*) AS total FROM player_mail_attachments WHERE mail_id = ? AND state = 'available'").get(mail.id);
+    if (safeInteger(open?.total, 0) > 0) throw httpError(409, "Haal eerst op wat erbij zit.");
+    this.db.prepare("UPDATE player_mail SET state = 'claimed', claimed_at = COALESCE(claimed_at, ?), revision = revision + 1 WHERE id = ?").run(now(), mail.id);
+    return { action: "mail_delete", mailId: mail.id, message: "Bericht weggegooid." };
+  }
+
+  // Aan wie: een spelers-ID (uit het spelermenu) of een naam. Een naam hoort bij een account; de post gaat naar
+  // het character waarmee die speler nu speelt (en elk character van dat account ziet hem).
+  findMailTarget(payload) {
+    const byId = safeString(payload.targetPlayerId || payload.target_player_id, "");
+    const name = playerText(payload.toName || payload.to_name, 60);
+    let row = null;
+    if (byId) row = this.db.prepare("SELECT id, user_id, display_name FROM player_profiles WHERE id = ? LIMIT 1").get(byId) || null;
+    else if (name) {
+      row = this.db.prepare(`
+        SELECT p.id, p.user_id, p.display_name FROM player_profiles p
+        LEFT JOIN users u ON u.id = p.user_id
+        WHERE lower(p.display_name) = lower(?)
+        ORDER BY CASE WHEN u.active_profile_id = p.id THEN 0 ELSE 1 END, p.updated_at DESC
+        LIMIT 1
+      `).get(name) || null;
+    }
+    if (!row) throw httpError(404, name ? "Er is geen speler die " + name + " heet." : "Aan wie? Vul een naam in.");
+    return row;
+  }
+
+  // Fase 8 herstel: post naar een andere speler, met een item en/of geld erbij als je wilt.
+  // Wat je meestuurt gaat in dezelfde transactie uit je tas en zit dan in de post: nooit dubbel, nooit kwijt.
+  sendMail(ctx, payload, operationId) {
+    const rules = this.tradeRules(ctx);
+    if (rules.mailOn === false) throw httpError(403, "Post sturen staat uit (Instellingen > 🤝 Handel).");
+    this.assertTradePace(ctx, rules);
+    const target = this.findMailTarget(payload);
+    const name = target.display_name || "Die speler";
+    const myUser = ctx.profile?.user_id || null;
+    if (target.id === ctx.profile.id || (myUser && target.user_id === myUser)) throw httpError(400, "Post naar jezelf hoeft niet: al je characters zien dezelfde postbus.");
+    const chat = this.mmoService?.chatRuntime || null;
+    if (chat && chat.hasBlocked(target.id, ctx.profile.id)) throw httpError(403, name + " wil geen post van jou.");
+    if (chat && chat.hasBlocked(ctx.profile.id, target.id)) throw httpError(409, "Je hebt " + name + " geblokkeerd. Deblokkeer eerst (spelermenu).");
+    const owners = this.mailOwnerIds({ profile: { id: target.id, user_id: target.user_id } });
+    const full = safeInteger(this.db.prepare(`
+      SELECT COUNT(*) AS total FROM player_mail
+      WHERE player_id IN (${owners.map(() => "?").join(", ")}) AND state IN ('unread', 'read', 'partially_claimed') AND (expires_at IS NULL OR expires_at > ?)
+    `).get(...owners, now())?.total, 0);
+    const max = Math.max(1, safeInteger(rules.mailMax, 100));
+    if (full >= max) throw httpError(409, "De postbus van " + name + " is vol (" + max + " berichten).");
+    const itemId = safeString(payload.itemId || payload.item_id, "");
+    const itemQty = itemId ? normalizeQuantity(payload.quantity, 1) : 0;
+    const currencyId = safeString(payload.currencyId || payload.currency_id, "");
+    const amount = currencyId ? Math.max(0, safeInteger(payload.amountMinor || payload.amount_minor, 0)) : 0;
+    if (itemId) {
+      const item = catalogSection(ctx.catalogs, "items")[itemId] || null;
+      if (!item) throw httpError(400, "Dat item bestaat niet (meer).");
+      if (!itemIsTradable(item)) throw httpError(403, displayForItem(ctx.catalogs, itemId) + " kun je niet versturen.");
+      if (this.bagCount(ctx.profile.id, itemId) < itemQty) throw httpError(400, "Zoveel " + displayForItem(ctx.catalogs, itemId) + " heb je niet in je tas.");
+    }
+    if (amount > 0 && !catalogSection(ctx.catalogs, "currencies")[currencyId]) throw httpError(400, "Die valuta bestaat niet.");
+    const text = playerText(payload.text, 500);
+    if (!text && !itemId && amount <= 0) throw httpError(400, "Schrijf iets, of stuur een item of geld mee.");
+    const me = this.playerName(ctx.profile.id);
+    const subject = playerText(payload.subject, 60) || "Post van " + me;
+    const attachments = [];
+    if (itemId) attachments.push({ kind: "item_stack", assetId: itemId, quantityMinor: itemQty });
+    if (amount > 0) attachments.push({ kind: "currency", assetId: currencyId, quantityMinor: amount });
+    const mailId = this.createSystemMail(target.id, "system_delivery", subject, text, attachments, "player:" + ctx.profile.id,
+      Math.max(1, safeInteger(rules.mailKeepDays, 30)));
+    if (itemId) this.removeItem(ctx, itemId, itemQty, "mail_send", mailId, operationId);
+    if (amount > 0) this.spendCurrency(ctx, currencyId, amount, "mail_send", mailId, operationId);
+    this.node03RuntimeService.recordGameplayEvent(ctx, "mail_send", "player", target.id, { mailId, itemId: itemId || null, quantity: itemQty, currencyId: amount > 0 ? currencyId : null, amount });
+    const parts = [itemId ? itemQty + "× " + displayForItem(ctx.catalogs, itemId) : "", amount > 0 ? amount + " " + displayForCurrency(ctx.catalogs, currencyId) : ""].filter(Boolean);
+    return { action: "mail_send", mailId, notify: [target.id], message: "Post verstuurd naar " + name + (parts.length ? " met " + parts.join(" en ") : "") + "." };
+  }
+
+  // Fase 8 herstel: wat te lang op de markt stond, gaat met de post terug naar de verkoper.
+  expireMarketOrders(ctx) {
+    const due = this.db.prepare(`
+      SELECT * FROM market_orders WHERE status IN ('active', 'partially_filled') AND expires_at <= ? ORDER BY expires_at ASC LIMIT 20
+    `).all(now());
+    if (!due.length) return 0;
+    const own = this.db.isTransaction !== true;
+    if (own) this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const keepDays = Math.max(1, safeInteger(this.tradeRules(ctx).mailKeepDays, 30));
+      for (const order of due) {
+        const stamp = now();
+        const changed = this.db.prepare("UPDATE market_orders SET status = 'expired', closed_at = ?, updated_at = ?, revision = revision + 1 WHERE id = ? AND status IN ('active', 'partially_filled')")
+          .run(stamp, stamp, order.id);
+        if (!safeInteger(changed?.changes, 0)) continue;
+        const remaining = safeInteger(order.quantity_remaining, 0);
+        if (remaining > 0) {
+          this.createSystemMail(order.seller_player_id, "market_return", "Terug van de markt",
+            "Niemand kocht dit op tijd. Hier is het terug: " + remaining + "× " + displayForItem(ctx.catalogs, order.item_id) + ".",
+            [{ kind: "item_stack", assetId: order.item_id, quantityMinor: remaining }], order.id, keepDays);
+        }
+        this.db.prepare("UPDATE asset_reservations SET status = 'released', released_at = ? WHERE reservation_kind = 'market' AND reservation_ref = ? AND status = 'active'")
+          .run(stamp, order.id);
+      }
+      if (own) this.db.exec("COMMIT");
+    } catch (error) {
+      if (own) { try { this.db.exec("ROLLBACK"); } catch {} }
+      throw error;
+    }
+    return due.length;
   }
 
   resetNode05(ctx, operationId) {
@@ -1786,6 +1985,23 @@ export class Node05EconomyRuntimeService {
 
   itemCount(playerId, itemId) {
     return this.node03RuntimeService.ownedItemCount(playerId, itemId);
+  }
+
+  // Fase 8 herstel: alleen wat echt in je tas zit (niet wat je draagt, niet wat op de markt of in de post ligt).
+  bagCount(playerId, itemId) {
+    const stack = this.db.prepare("SELECT COALESCE(SUM(quantity), 0) AS qty FROM player_inventory_stacks WHERE player_id = ? AND item_id = ?").get(playerId, itemId);
+    const loose = this.db.prepare("SELECT COUNT(*) AS total FROM player_item_instances WHERE player_id = ? AND item_id = ? AND location_type = 'inventory'").get(playerId, itemId);
+    return safeInteger(stack?.qty, 0) + safeInteger(loose?.total, 0);
+  }
+
+  bagItems(playerId) {
+    return this.db.prepare(`
+      SELECT item_id, SUM(qty) AS qty FROM (
+        SELECT item_id, quantity AS qty FROM player_inventory_stacks WHERE player_id = ? AND quantity > 0
+        UNION ALL
+        SELECT item_id, 1 AS qty FROM player_item_instances WHERE player_id = ? AND location_type = 'inventory'
+      ) GROUP BY item_id ORDER BY item_id LIMIT 200
+    `).all(playerId, playerId).map((row) => ({ itemId: row.item_id, quantity: safeInteger(row.qty, 0) })).filter((row) => row.quantity > 0);
   }
 
   spendCurrency(ctx, currencyId, amountMinor, reason, sourceRef, operationId) {

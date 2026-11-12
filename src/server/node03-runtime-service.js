@@ -3079,7 +3079,8 @@ export class Node03RuntimeService {
         stackable: item.stackable !== false,
         // Echte uitrusting blijft per exemplaar in de database; deze vlag groepeert alleen exact gelijke exemplaren in de tas.
         groupIdentical: item.visualStackable === true || item.stackable !== false,
-        marketEligible: item.marketEligible === true,
+        // Fase 8 herstel: alles wat je mag ruilen mag ook op de markt.
+        marketEligible: item.marketEligible !== false,
         tags: Array.isArray(item.tags) ? item.tags.slice(0, 12) : [],
         // Stap 4 (HUD): plaatje in de tas en de knoppen Uitrusten / Gebruiken / Weggooien.
         iconAssetId: item.iconAssetId || null,

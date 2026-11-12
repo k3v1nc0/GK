@@ -274,7 +274,7 @@ test("markt: de belasting gaat eraf en de verkoper krijgt de rest", () => {
   // Je eigen aanbod kun je niet kopen.
   world.give("p1", "item.pelt", 1);
   const mine = world.act("p1", "market_list", { itemId: "item.pelt", quantity: 1, unitPriceMinor: 5 });
-  assert.throws(() => world.act("p1", "market_buy", { orderId: mine.orderId }), /eigen listing/);
+  assert.throws(() => world.act("p1", "market_buy", { orderId: mine.orderId }), /eigen aanbod/);
 });
 
 test("markt: de grens voor hoeveel je tegelijk mag aanbieden, en de markt uitzetten", () => {

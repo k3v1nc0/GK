@@ -957,7 +957,7 @@
   display: grid; place-items: center; font-size: 11px; font-weight: 900; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6); pointer-events: none; }
 
 /* Fase 8: winkel. "prijs automatisch" bij het gekozen item en de rij terugkopen. */
-.gkPriceNote { opacity: .75; font-size: 11px; white-space: nowrap; }
+.gkPriceNote { opacity: .8; font-size: 11px; white-space: normal; line-height: 1.25; }
 .gkBuyBackHead { display: flex; align-items: center; gap: 6px; padding: 6px 8px 2px; font-size: 12px; font-weight: 700; opacity: .85; }
 .gkBuyBack { padding: 0 8px 8px; }
 .gkCell .gkQty { position: absolute; right: 3px; top: 2px; padding: 0 4px; border-radius: 6px; background: #0f1016cc; font-size: 11px; font-weight: 800; }
@@ -969,5 +969,51 @@
 .gkSwapNote { padding: 6px 8px; font-size: 12px; opacity: .8; }
 .gkSwapConfirm { display: flex; align-items: center; gap: 8px; margin: 6px 8px; padding: 8px 10px; border-radius: 10px;
   background: #0f1016cc; border: 1px solid var(--gk-gold); font-size: 13px; line-height: 1.35; }
+.gkSwapConfirm > .gkIco, .gkSwapHead .gkIco, .gkBuyBackHead .gkIco { width: 20px; height: 20px; flex: none; }
+.gkSwapConfirm strong { min-width: 0; overflow-wrap: anywhere; }
 .gkMoneySwap { display: flex; align-items: center; gap: 6px; padding: 0 8px 8px; }
 .gkMoneyAmount { width: 7em; padding: 4px 6px; border-radius: 8px; border: 1px solid #ffffff30; background: #0f1016cc; color: inherit; font: inherit; }
+
+/* Fase 8 herstel: winkel (koopbalk met tekst onder elkaar, zodat de knop altijd in beeld blijft), markt en post. */
+.gkBarText { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.gkBarText span { overflow-wrap: anywhere; }
+.gkBtnCol { flex: none; display: flex; flex-direction: column; gap: 6px; }
+.gkShopHint { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; padding: 6px 8px; border-radius: 9px; font-size: 12px; line-height: 1.3;
+  color: var(--gk-muted); background: rgba(6, 10, 18, 0.38); border: 1px dashed var(--gk-line); }
+.gkShopHint .gkIco { width: 18px; height: 18px; flex: none; }
+.gkMktTabs { flex: none; display: flex; gap: 6px; padding: 8px 8px 0; flex-wrap: wrap; }
+.gkMktTab { flex: 1 1 auto; min-height: 36px; padding: 0 10px; border-radius: 9px; border: 1px solid var(--gk-line); background: var(--gk-bg2); color: var(--gk-text);
+  font-size: 12px; font-weight: 700; cursor: pointer; }
+.gkMktTab.gkOn { border-color: rgba(70, 163, 255, 0.85); box-shadow: inset 0 0 0 1px rgba(70, 163, 255, 0.4); }
+.gkMktForm { display: grid; gap: 8px; margin-top: 8px; padding: 10px; border-radius: 12px; background: var(--gk-cell); border: 1px solid var(--gk-line); }
+.gkMktFormHead { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.gkMktFormHead .gkCell, .gkMktMine .gkCell, .gkMktBar .gkCell { width: 40px; height: 40px; flex: none; box-sizing: border-box; padding: 4px; }
+.gkMktFormHead small { margin-left: auto; color: var(--gk-muted); font-size: 11px; }
+.gkMktField { display: flex; align-items: center; gap: 8px; font-size: 12px; min-width: 0; }
+.gkMktField > span:first-child { flex: 0 0 92px; color: var(--gk-muted); }
+.gkMktField input, .gkPostInput, .gkPostQty { min-width: 0; min-height: 36px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--gk-line2);
+  background: rgba(6, 10, 18, 0.6); color: var(--gk-text); font: inherit; font-size: 14px; box-sizing: border-box; }
+.gkMktField input { flex: 1 1 auto; width: 100%; }
+.gkMktField .gkIco, .gkMktField svg { width: 22px; height: 22px; flex: none; }
+.gkMktMine { display: flex; align-items: center; gap: 8px; }
+.gkPostTools { margin: 0 0 8px; }
+.gkPost { padding: 0; gap: 0; overflow: hidden; }
+.gkPost.gkPostNew { border-color: rgba(246, 197, 68, 0.75); }
+.gkPostHead { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; padding: 8px 10px; border: 0; background: transparent; color: var(--gk-text);
+  text-align: left; cursor: pointer; font: inherit; }
+.gkPostHead > .gkIco { width: 22px; height: 22px; flex: none; }
+.gkPostTitle { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.gkPostTitle b { font-size: 13px; overflow-wrap: anywhere; }
+.gkPostTitle small { font-size: 11px; color: var(--gk-muted); }
+.gkPostNew .gkPostTitle b::after { content: " •"; color: var(--gk-gold); }
+.gkPostAtt { flex: none; display: flex; gap: 3px; }
+.gkPostAtt > * { width: 22px; height: 22px; }
+.gkPost > .gkPostText, .gkPost > .gkGrid, .gkPost > .gkBtns { margin: 0 10px 10px; }
+.gkPostText { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.35; color: #d7e1ef; }
+.gkPostCompose { display: grid; gap: 8px; margin: 0 0 10px; padding: 10px; border-radius: 12px; background: var(--gk-cell); border: 1px solid var(--gk-line2); }
+.gkPostField { align-items: flex-start; }
+.gkPostField .gkPostInput { flex: 1 1 auto; width: 100%; }
+.gkPostField textarea.gkPostInput { min-height: 64px; padding: 6px 8px; resize: vertical; }
+.gkPostQty { flex: 0 0 82px; width: 82px; }
+.gkPostFoot { margin-top: 8px; font-size: 11px; color: var(--gk-muted); text-align: center; }
+.gkHud[data-orient="port"] .gkMktField > span:first-child { flex-basis: 76px; }

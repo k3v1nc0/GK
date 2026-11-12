@@ -134,7 +134,7 @@ export function compileGameSection(documents, options = {}) {
       npcId: doc.body.npcId, displayName: doc.body.displayName, modelAssetId: doc.body.modelAssetId || null,
       modelScaleBp: doc.body.modelScaleBp || 10000, idleClip: doc.body.idleClip || null, greeting: doc.body.greeting || "",
       x: doc.body.x, y: Number(doc.body.y) || 0, z: doc.body.z, rotationY: Number(doc.body.rotationY) || 0,
-      crafting: doc.body.crafting === true, talkRange: Number(doc.body.talkRange) > 0 ? Number(doc.body.talkRange) : 2.5,
+      crafting: doc.body.crafting === true, market: doc.body.market === true, talkRange: Number(doc.body.talkRange) > 0 ? Number(doc.body.talkRange) : 2.5,
       shopCurrencyId: doc.body.shopCurrencyRef ? idFromRef(doc.body.shopCurrencyRef) : null,
       shopOffers: offers.map((row) => ({ itemId: idFromRef(row.ref), price: row.price, buyBack: row.buyBack }))
     }, flagGateOf(doc.body));

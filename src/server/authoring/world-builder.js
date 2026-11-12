@@ -645,7 +645,7 @@ function withGame(world, source, options) {
     outputItems: [{ itemRef: recipe.outputItemId, amount: recipe.outputAmount }]
   }]));
   catalogs.vendorCatalogs = Object.fromEntries(npcs.filter((npc) => npc.shopOffers.length).map((npc) => ["vendor_catalog." + npc.npcId, {
-    id: "vendor_catalog." + npc.npcId, displayName: npc.displayName,
+    id: "vendor_catalog." + npc.npcId, displayName: npc.displayName, currencyRef: npc.shopCurrencyId || null,
     offers: npc.shopOffers.map((offer) => ({
       offerId: "offer." + npc.npcId + "." + offer.itemId, itemRef: offer.itemId, mode: offer.buyBack > 0 ? "both" : "sell_to_player",
       sellCurrencyRef: npc.shopCurrencyId, sellPriceMinor: offer.price, buyCurrencyRef: npc.shopCurrencyId, buyPriceMinor: offer.buyBack, stockMode: "infinite"
@@ -669,6 +669,9 @@ function withGame(world, source, options) {
       vendorCatalogRef: "vendor_catalog." + npc.npcId, interactionPrompt: "Handelen", range: talkRangeOf(npc) + 0.5 });
     if (npc.crafting) components.push({ nodeType: "crafting_station_component", componentId: "station." + npc.npcId, linkedEntityId: id, stationId: "station." + npc.npcId,
       stationType: CRAFTING_STATION_TYPE, recipeRefs: [], range: talkRangeOf(npc) + 0.5, interactionPrompt: "Maken" });
+    // Fase 8 herstel: een NPC kan een markt zijn (spelers verkopen hier aan elkaar).
+    if (npc.market) components.push({ nodeType: "marketplace_access_component", componentId: "market." + npc.npcId, linkedEntityId: id,
+      marketAccessId: "market." + npc.npcId, range: talkRangeOf(npc) + 0.5, interactionPrompt: "Markt", remoteAccessAllowed: false });
     zoneEntities.push({ nodeType: "model_entity", nodeId: id, entityId: id, label: npc.displayName, modelAssetId: npc.modelAssetId || null,
       x: npc.x, y: npc.y, z: npc.z, rotationY: npc.rotationY, scaleX: scale, scaleY: scale, scaleZ: scale, components });
     questTargets.push({ nodeType: "quest_target", targetId: npcTargetId(npc.npcId), label: npc.displayName, targetKind: "npc", zoneRef: WORLD_ZONE_ID,

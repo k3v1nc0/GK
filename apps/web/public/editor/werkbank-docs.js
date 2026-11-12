@@ -20,6 +20,7 @@ const REASON_TEXT = {
   market_sale: "Verkocht op de markt", market_purchase: "Gekocht op de markt", market_tax: "Marktbelasting",
   market_listing_fee: "Kosten om op de markt te zetten", crafting_cost: "Craftkosten", crafting_input: "Grondstoffen (craften)",
   crafting_output: "Gemaakt met craften", portal_travel: "Reiskosten", trade: "Geruild met een speler", mail_claim: "Uit de post",
+  market_buy: "Gekocht op de markt", mail_send: "Met de post verstuurd",
   starting_character: "Startgeld", hud_debug_add: "Maker: geld erbij", maker_xp: "Maker"
 };
 
@@ -552,19 +553,30 @@ export function createDocBench(options = {}) {
       remove.addEventListener("click", () => { rows.splice(index, 1); commit(); });
       wrap.append(el("div", { class: "wbdLootRow" }, [slot, el("div", { class: "wbdLootChance", title: "Kans" }, ["🎲", chance]), el("div", { class: "wbdLootQty", title: "Aantal" }, ["🔢", qty("minQty"), "–", qty("maxQty")]), remove]));
     });
+    // Fase 8 herstel (Kevin 12-11): ook het lege ➕-vak neemt een valuta aan (slepen én kiezen in de lijst),
+    // net als een bestaande regel. Eerst kon geld alleen via een omweg in de loottabel.
     const add = dropSlot({
-      filled: false, icon: "➕", name: "", emptyText: "Sleep een item of loottabel hier om een regel toe te voegen",
+      filled: false, icon: "➕", name: "", emptyText: "Sleep een item, valuta of loottabel hier om een regel toe te voegen",
       accepts: (transfer) => Array.from(transfer.types || []).includes(DOC_MIME),
       onDrop: (transfer) => {
         const docKey = transfer.getData(DOC_MIME);
         const entry = { chanceBp: 10000, minQty: 1, maxQty: 1 };
         if (docKey.startsWith("item_definition:")) entry.itemRef = docKey;
         else if (docKey.startsWith("loot_table:")) entry.tableRef = docKey;
-        else { setStatus("Sleep een item of een loottabel.", "error"); return; }
+        else if (docKey.startsWith("currency:")) entry.currencyRef = docKey;
+        else { setStatus("Sleep een item, een valuta of een loottabel.", "error"); return; }
         rows.push(entry); commit();
       },
-      pickerOptions: bench.docs("item_definition").map((doc) => ({ value: doc.docKey, label: "🎒 " + docName(doc) })),
-      onPick: (docKey) => { rows.push({ itemRef: docKey, chanceBp: 10000, minQty: 1, maxQty: 1 }); commit(); }
+      pickerOptions: bench.docs("item_definition").map((doc) => ({ value: doc.docKey, label: "🎒 " + docName(doc) }))
+        .concat(bench.docs("currency").map((doc) => ({ value: doc.docKey, label: "🪙 " + docName(doc) })))
+        .concat(bench.docs("loot_table").map((doc) => ({ value: doc.docKey, label: "🎁 " + docName(doc) }))),
+      onPick: (docKey) => {
+        const entry = { chanceBp: 10000, minQty: 1, maxQty: 1 };
+        if (docKey.startsWith("loot_table:")) entry.tableRef = docKey;
+        else if (docKey.startsWith("currency:")) entry.currencyRef = docKey;
+        else entry.itemRef = docKey;
+        rows.push(entry); commit();
+      }
     });
     add.classList.add("wbdSlotAdd");
     wrap.append(add);

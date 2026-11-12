@@ -454,6 +454,13 @@ Elke fase eindigt met: één commit op main ("Werkbank Fase N"), de lijst-regels
 
 In de game: een loottabel mag geld laten vallen (🪙 in de editor, met proef); de winkel laat zien of de prijs automatisch is en wat hij teruggeeft, met een rij "Terugkopen" van wat je net verkocht; craften toont wat het in geld kost; en ruilen gaat via het spelermenu (Ruilen) met een tabblad 🤝 Ruilen dat precies zegt "Je geeft … en je krijgt …". Elke ruil is alles of niets in één transactie: verandert er iets, dan vervallen beide ja's, en een bevestiging van een oude versie wordt geweigerd.
 
+**Handtest 12-11: A (geld in de buit) en D GO; B, C, E en F nog niet. Herstel 12-11 (wacht op handtest):**
+- **B:** geld in een loottabel kon alleen via een omweg. Nu neemt ook het lege ➕-vak een valuta aan, slepen én kiezen in de lijst (🎒 items, 🪙 valuta, 🎁 loottabellen).
+- **C:** verkopen kon niet: geen knop, en de winkel kocht alleen wat hij zelf verkocht. Nu: tik in de tas op een item → **Verkopen** (en **Alles (n)** bij een stapel), of sleep het uit je tas naar de waren. De winkel betaalt zijn eigen terugkoopprijs, anders de Verkoopwaarde × "Winkel koopt terug voor" (💰 Geld). Questitems en items zonder Verkoopwaarde zeggen waarom niet.
+- **E:** ruilen en terugkopen kwamen nooit bij de server aan: de game had een eigen lijstje velden en liet tradeId, entryId en revision weg ("bestaat niet of is verlopen"). Nu staat dat lijstje op één plek (`game/node05-request.js`) en een test loopt alle HUD-acties na. De ander krijgt na elke ruilstap meteen een seintje, zodat zijn scherm niet hoeft te wachten.
+- **F markt:** op de NPC-kaart staat het vinkje **🏪 Markt (spelers handelen hier)**. Bij die NPC kies je **Markt**: kopen, verkopen (eigen prijs, de bevestiging zegt wat je krijgt na 5 % belasting) en Mijn aanbod (terugnemen). Is de verkoper offline, dan komt het geld met de post; wat niet op tijd verkocht is, komt met de post terug. Praat-afstand staat daarom nu onder ⚙️ meer (hooguit ±6 velden in beeld).
+- **F post:** een eigen tab **📬 Post** in het spelmenu (één postbus per account), en **Post sturen** in het spelermenu. Een bericht mag een item en/of geld meenemen; dat gaat bij versturen meteen uit je tas (twee keer tikken), dus niets dubbel of kwijt. Nieuw vinkje "Spelers mogen post sturen" in 🤝 Handel. Een huis of model als markt of postkantoor past bij Fase 9 ("een werkplek hoort bij een NPC of een model").
+
 #### Fase 9 — Beroepen en uitrusting
 **Waarom:** nu kan elke crafting-NPC alle recepten, er zijn geen beroepen of recepten om te leren, en er is geen pad naar betere uitrusting.
 **Bouw:**
