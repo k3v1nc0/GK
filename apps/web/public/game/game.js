@@ -6,7 +6,7 @@ import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../s
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createActorPresentation } from "./actor-presentation.js?v=20261110-fase5b";
-import { createGkHud } from "./hud/gk-hud.js?v=20261113-fase8e";
+import { createGkHud } from "./hud/gk-hud.js?v=20261113-fase9";
 import { node05ActionBody, node05OperationId } from "./node05-request.js?v=20261113-fase8d";
 import {
   worldToMinimapPoint,
@@ -7610,6 +7610,8 @@ async function runNode03Action(action, targetId, extra = {}) {
         xp: extra.xp === null || extra.xp === undefined ? null : Number(extra.xp),
         // Fase 8 herstel 2/3: buitvenster (welke soort pakken) en of auto-buit aan staat (de server onthoudt het).
         entryKey: extra.entryKey || null,
+        // Fase 9: een beroep vergeten.
+        professionId: extra.professionId || null,
         autoLoot: gkHud && typeof gkHud.autoLoot === "function" ? gkHud.autoLoot() === true : null,
         operationId: "node03:" + state.net.clientSessionId + ":" + Date.now() + ":" + Math.random().toString(36).slice(2, 8)
       })
@@ -8831,7 +8833,8 @@ function node05RuntimeTargetsForScene() {
       radius: 0,
       // De NPC zelf is het klikdoel (praten); winkel en crafting staan in hun venster.
       // Kleinste klikvlak: anders pakt een klik in de buurt van de NPC dit onzichtbare doel en loop je terug.
-      clickRadius: 0.4,
+      // Fase 9: een model als werkplek (aambeeld) heeft geen NPC om op te klikken: dan het model zelf (clickRadius uit de build).
+      clickRadius: num(target.clickRadius, 0) > 0 ? num(target.clickRadius, 0.4) : 0.4,
       renderBody: false
     });
   });

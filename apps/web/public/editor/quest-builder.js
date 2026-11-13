@@ -1020,7 +1020,7 @@ function objectiveRow(state, step, objective, issues, change, remove, steps = []
 const END_REWARD_AMOUNT = { key: "amount", label: "Aantal", icon: "🔢", min: 1, max: QUEST_LIMITS.amount, default: 1 };
 function endRewardBox(state, step, change) {
   const rewards = Array.isArray(step.rewards) ? step.rewards : [];
-  const list = state.bench.refListControl({ refKinds: ["item_definition", "currency", "ability"], columns: [END_REWARD_AMOUNT], maxItems: QUEST_CHOICE_LIMITS.rewards }, rewards,
+  const list = state.bench.refListControl({ refKinds: ["item_definition", "currency", "ability", "recipe"], columns: [END_REWARD_AMOUNT], maxItems: QUEST_CHOICE_LIMITS.rewards }, rewards,
     (rows) => change("beloning einde", (target) => {
       if (rows && rows.length) target.rewards = rows;
       else delete target.rewards;

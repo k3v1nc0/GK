@@ -3,6 +3,7 @@
 // Werkbank Fase 1: per veld icoon, bediening, plek, standaard en Ⓘ-hulp (zie ./ui.js).
 import { MAX_WORLD_MM } from "../../../../apps/web/public/shared/spatial.js";
 import { HELP_ID, HELP_MODEL, HELP_NAME, HELP_RESPAWN, HELP_SCALE, help, ui } from "./ui.js";
+import { professionFields } from "./profession.js";
 
 const POS_HELP = help(
   "Waar dit in de wereld staat.",
@@ -66,7 +67,9 @@ export const LOOT_KINDS = {
       gatherMode: { type: "select", required: false, options: ["shared", "personal"], optionIcons: { shared: "🌍", personal: "🧍" },
         optionLabels: { shared: "Gedeeld: wie het eerst komt", personal: "Ieder zijn eigen" }, audience: "server", label: "Oogsten",
         ui: ui("🤲", "select", "werkbank"), default: "shared",
-        help: help("Wie hem kan oogsten. Gedeeld: wie het eerst komt; daarna is hij voor iedereen weg tot hij terugkomt. Ieder zijn eigen: voor jou weg (tot Terug na), anderen zien en oogsten hem nog.", "Gedeeld voor gewone grondstoffen; Ieder zijn eigen voor hout of kruiden voor een quest.", "Spelers oogsten elkaars questhout weg → kies Ieder zijn eigen.") }
+        help: help("Wie hem kan oogsten. Gedeeld: wie het eerst komt; daarna is hij voor iedereen weg tot hij terugkomt. Ieder zijn eigen: voor jou weg (tot Terug na), anderen zien en oogsten hem nog.", "Gedeeld voor gewone grondstoffen; Ieder zijn eigen voor hout of kruiden voor een quest.", "Spelers oogsten elkaars questhout weg → kies Ieder zijn eigen.") },
+      // Fase 9: bij welk beroep, vanaf welk niveau en hoeveel beroeps-XP per keer oogsten.
+      ...professionFields("deze grondstof", "oogsten", "oogst")
     }
   },
   resource_spawn: {

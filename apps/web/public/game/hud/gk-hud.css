@@ -561,6 +561,24 @@
 .gkCraftMake .gkIco { width: 24px; height: 24px; }
 .gkCraftMake > span { position: absolute; left: 2px; right: 2px; bottom: 2px; font-size: 9px; font-weight: 900; line-height: 1.15; }
 .gkCraftMake > small { position: absolute; top: 2px; right: 2px; padding: 0 2px; border-radius: 4px; background: rgba(4, 8, 16, 0.75); font-size: 8px; }
+/* Fase 9: grijze recepten met de reden, de knop Leren, het beroep bovenaan Maken en de beroepen bij Uitrusting. */
+.gkCraftGrey .gkCraftStrip > :not(.gkCraftLearn) { opacity: 0.5; filter: grayscale(0.6); }
+.gkCraftWhy { padding: 3px 2px 0; color: var(--gk-muted); font-size: 11px; line-height: 1.3; white-space: normal; }
+.gkCraftLearn { border-color: rgba(255, 210, 120, 0.6); background: linear-gradient(180deg, #c9932f, #7d5a1f); }
+.gkCraftProf { flex: none; display: grid; grid-template-columns: 22px auto 1fr auto; align-items: center; gap: 6px; padding: 4px 8px;
+  border-bottom: 1px solid var(--gk-line); font-size: 12px; }
+.gkCraftProf > .gkIco, .gkProfImg { width: 22px; height: 22px; object-fit: contain; }
+.gkCraftProf small, .gkProf small { color: var(--gk-muted); font-size: 11px; white-space: nowrap; }
+.gkProfs { margin-top: 10px; display: grid; gap: 6px; }
+.gkProfs h4 { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 13px; }
+.gkProfs h4 .gkIco { width: 18px; height: 18px; }
+.gkProfs h4 small { margin-left: auto; color: var(--gk-muted); font-weight: 400; }
+.gkProf { display: grid; grid-template-columns: 26px 1fr auto; align-items: center; gap: 8px; padding: 6px; border: 1px solid var(--gk-line); border-radius: 8px; }
+.gkProf > .gkIco, .gkProf > .gkProfImg { width: 26px; height: 26px; }
+.gkProfNew { opacity: 0.6; }
+.gkProfMain { display: grid; gap: 3px; min-width: 0; }
+.gkProfName { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+.gkProf .gkBtn { min-height: 30px; padding: 3px 8px; }
 .gkCraftEmpty { padding: 14px 8px; color: var(--gk-muted); text-align: center; font-size: 12px; }
 .gkCraftJobs { flex: none; max-height: 92px; overflow: auto; padding: 0 6px 5px; border-top: 1px solid var(--gk-line); }
 .gkJob { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; white-space: nowrap; }

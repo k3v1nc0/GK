@@ -326,6 +326,53 @@ export const PLAYER_CHARACTER_ID = "player.default";
 export const PLAYER_STAT_BLOCK_ID = "stat_block.player";
 export const PLAYER_XP_CURVE_ID = "stat_curve.player_xp";
 export const CRAFTING_STATION_TYPE = "crafting.station";
+// Fase 9: een werkplek met een beroep maakt alleen recepten van dat beroep; zonder beroep alleen recepten zonder beroep.
+export const stationTypeFor = (professionId) => (professionId ? "profession." + professionId : CRAFTING_STATION_TYPE);
+
+// Fase 9: waar komt een item vandaan? itemId -> [{ kind, id, name, points? }] (hooguit 6 per item).
+// points = plekken van een grondstof in meters, zodat de server de dichtstbijzijnde kan noemen.
+export function itemSourcesFor(actors, npcs, recipes, quests, itemName = (id) => id) {
+  const out = {};
+  const add = (itemId, entry) => {
+    if (!itemId) return;
+    const list = out[itemId] || (out[itemId] = []);
+    if (list.length >= 6 || list.some((row) => row.kind === entry.kind && row.id === entry.id)) return;
+    list.push(entry);
+  };
+  const tables = actors?.lootTables || {};
+  const itemsOf = (tableId, seen = new Set()) => {
+    if (!tableId || seen.has(tableId)) return [];
+    seen.add(tableId);
+    const result = [];
+    for (const entry of tables[tableId]?.entries || []) {
+      if (entry.itemId) result.push(entry.itemId);
+      else if (entry.lootTableId) result.push(...itemsOf(entry.lootTableId, seen));
+    }
+    return result;
+  };
+  const spawnsOf = new Map();
+  for (const spawn of actors?.resourceSpawns || []) {
+    const list = spawnsOf.get(spawn.resourceId) || [];
+    if (list.length < 8) list.push({ x: Math.round(spawn.xMm) / 1000, z: Math.round(spawn.zMm) / 1000 });
+    spawnsOf.set(spawn.resourceId, list);
+  }
+  for (const [resourceId, def] of Object.entries(actors?.resources || {})) {
+    const points = spawnsOf.get(resourceId) || [];
+    for (const itemId of itemsOf(def.lootTableId)) add(itemId, { kind: "resource", id: resourceId, name: def.displayName || resourceId, points });
+  }
+  const placedActors = new Set((actors?.spawns || []).map((spawn) => spawn.actorId));
+  for (const [actorId, def] of Object.entries(actors?.archetypes || {})) {
+    if (!placedActors.has(actorId)) continue;
+    for (const itemId of itemsOf(def.lootTableId)) add(itemId, { kind: "enemy", id: actorId, name: def.displayName || actorId });
+  }
+  for (const npc of npcs || []) for (const offer of npc.shopOffers || []) add(offer.itemId, { kind: "shop", id: npc.npcId, name: npc.displayName || npc.npcId });
+  for (const recipe of recipes || []) add(recipe.outputItemId, { kind: "recipe", id: recipe.recipeId, name: recipe.displayName || itemName(recipe.outputItemId) });
+  for (const quest of quests || []) {
+    const rows = (quest.rewards || []).concat(...(quest.steps || []).map((step) => step.rewards || []));
+    for (const grant of rows) if (grant?.itemId) add(grant.itemId, { kind: "quest", id: quest.questId, name: quest.displayName || quest.questId });
+  }
+  return out;
+}
 const NPC_TALK_RANGE = 2.5;
 const FOG_CELL_M = 8;
 
@@ -460,6 +507,7 @@ function rewardActions(xp, grants) {
   for (const grant of grants) {
     if (grant.currencyId) rewards.push({ actionKind: "currency", currencyRef: grant.currencyId, amountMinor: grant.amount });
     else if (grant.abilityId) rewards.push({ actionKind: "ability", abilityRef: grant.abilityId });
+    else if (grant.recipeId) rewards.push({ actionKind: "recipe", recipeRef: grant.recipeId });
     else rewards.push({ actionKind: "item", itemRef: grant.itemId, amount: grant.amount });
   }
   return rewards;
@@ -638,12 +686,21 @@ function withGame(world, source, options) {
   catalogs.currencies = Object.fromEntries(currencyList.map((currency, index) => [currency.currencyId, {
     id: currency.currencyId, displayName: currency.displayName, iconAssetId: currency.iconAssetId || null, showInPrimaryWallet: true, sortOrder: index, enabled: true
   }]));
+  // Fase 9: beroepen. Een recept met een beroep kan alleen bij een werkplek van dat beroep (stationType per beroep).
+  catalogs.professions = Object.fromEntries((game?.professions || []).map((entry, index) => [entry.professionId, {
+    id: entry.professionId, displayName: entry.displayName, iconAssetId: entry.iconAssetId || null,
+    maxLevel: entry.maxLevel, xpPerLevel: entry.xpPerLevel, sortOrder: index
+  }]));
   catalogs.recipes = Object.fromEntries(recipes.map((recipe) => [recipe.recipeId, {
-    id: recipe.recipeId, displayName: recipe.displayName, stationType: CRAFTING_STATION_TYPE, craftDurationMs: recipe.craftSeconds * 1000,
+    id: recipe.recipeId, displayName: recipe.displayName, stationType: stationTypeFor(recipe.professionId), craftDurationMs: recipe.craftSeconds * 1000,
     unlockMode: "default_available", enabled: true, outputCurrencies: [],
     ingredients: recipe.ingredients.map((entry) => ({ kind: "item", itemRef: entry.itemId, amount: entry.amount, consume: true })),
-    outputItems: [{ itemRef: recipe.outputItemId, amount: recipe.outputAmount }]
+    outputItems: [{ itemRef: recipe.outputItemId, amount: recipe.outputAmount }],
+    professionId: recipe.professionId || null, professionLevel: recipe.professionLevel || 1, professionXp: recipe.professionXp || 0,
+    learn: recipe.learn || "start", learnPrice: recipe.learnPrice || 0
   }]));
+  // Fase 9: waar een item vandaan komt (grondstof, vijand, winkel, recept, quest), voor een grijs recept en ⚖️ Balans.
+  catalogs.itemSources = itemSourcesFor(source.actors || null, npcs, recipes, quests, itemName);
   catalogs.vendorCatalogs = Object.fromEntries(npcs.filter((npc) => npc.shopOffers.length).map((npc) => ["vendor_catalog." + npc.npcId, {
     id: "vendor_catalog." + npc.npcId, displayName: npc.displayName, currencyRef: npc.shopCurrencyId || null,
     offers: npc.shopOffers.map((offer) => ({
@@ -668,7 +725,7 @@ function withGame(world, source, options) {
     if (npc.shopOffers.length) components.push({ nodeType: "vendor_component", componentId: "vendor." + npc.npcId, linkedEntityId: id, vendorId: "vendor." + npc.npcId,
       vendorCatalogRef: "vendor_catalog." + npc.npcId, interactionPrompt: "Handelen", range: talkRangeOf(npc) + 0.5 });
     if (npc.crafting) components.push({ nodeType: "crafting_station_component", componentId: "station." + npc.npcId, linkedEntityId: id, stationId: "station." + npc.npcId,
-      stationType: CRAFTING_STATION_TYPE, recipeRefs: [], range: talkRangeOf(npc) + 0.5, interactionPrompt: "Maken" });
+      stationType: stationTypeFor(npc.craftProfessionId), professionId: npc.craftProfessionId || null, recipeRefs: [], range: talkRangeOf(npc) + 0.5, interactionPrompt: "Maken" });
     // Fase 8 herstel: een NPC kan een markt zijn (spelers verkopen hier aan elkaar).
     if (npc.market) components.push({ nodeType: "marketplace_access_component", componentId: "market." + npc.npcId, linkedEntityId: id,
       marketAccessId: "market." + npc.npcId, range: talkRangeOf(npc) + 0.5, interactionPrompt: "Markt", remoteAccessAllowed: false });
@@ -684,6 +741,16 @@ function withGame(world, source, options) {
       modelAssetId: model.modelAssetId, x: model.x, y: model.y, z: model.z, rotationX: model.rotationX, rotationY: model.rotationY, rotationZ: model.rotationZ, scale: model.scale,
       solid: model.solid, collisionRadius: model.collisionRadius, idleClip: model.idleClip, flagId: editor ? null : model.flagId, flagOn: model.flagOn }));
     if (!editor && model.flagId) flagGates.push({ entityId: "placed." + model.placedModelId, npcId: null, flagId: model.flagId, on: model.flagOn !== false });
+    // Fase 9: een model als werkplek (aambeeld, oven): loop erheen en druk E.
+    if (!editor && model.crafting) {
+      const id = "placed." + model.placedModelId;
+      const reach = Math.max(0.5, Number(model.collisionRadius) || 1);
+      zoneEntities.push({ nodeType: "model_entity", nodeId: id, entityId: id, label: model.displayName, modelAssetId: model.modelAssetId || null,
+        x: model.x, y: model.y, z: model.z, rotationY: model.rotationY, scaleX: model.scale, scaleY: model.scale, scaleZ: model.scale,
+        components: [{ nodeType: "crafting_station_component", componentId: "station.model." + model.placedModelId, linkedEntityId: id,
+          stationId: "station.model." + model.placedModelId, stationType: stationTypeFor(model.craftProfessionId), professionId: model.craftProfessionId || null,
+          recipeRefs: [], range: reach + 2.5, clickRadius: reach + 0.3, interactionPrompt: "Maken" }] });
+    }
   }
   // Portals (8-11): een model in de wereld; de server onthoudt per speler welke vrij zijn (zie runtime/portal-runtime.js).
   const portals = [];
@@ -763,7 +830,7 @@ function withGame(world, source, options) {
     chat_rules: [Object.assign({ id: "rules.chat" }, game?.chat || chatValues(null))]
   } };
   const modules = hudModules(hud, { currencyIds: currencyList.map((currency) => currency.currencyId),
-    hasVendor: npcs.some((npc) => npc.shopOffers.length), hasStation: npcs.some((npc) => npc.crafting) });
+    hasVendor: npcs.some((npc) => npc.shopOffers.length), hasStation: npcs.some((npc) => npc.crafting) || (game?.placedModels || []).some((model) => model.crafting) });
 
   const patchZone = (pkg) => (pkg && pkg.zoneId === WORLD_ZONE_ID
     ? Object.assign({}, pkg, { entities: (pkg.entities || []).concat(zoneEntities), questTargets: (pkg.questTargets || []).concat(questTargets) })

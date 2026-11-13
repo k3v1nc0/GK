@@ -4,6 +4,7 @@
 // Speler en Game-scherm (HUD) staan onder Instellingen. De wereldbouwer maakt hieruit de spelwereld.
 import { HELP_ID, HELP_MODEL, HELP_NAME, HELP_SCALE, help, ui } from "./ui.js";
 import { FLAG_SCOPES, QUEST_LIMITS, QUEST_SPAWN_LIMITS } from "../../../../apps/web/public/shared/quest-graph.js";
+import { professionFields, recipeLearnFields, workstationProfessionField } from "./profession.js";
 
 const idField = (label, wat) => ({ type: "id", required: true, maxLength: 120, audience: "client", label,
   ui: ui("🔖", "id", "werkbank", { more: true }), default: null, help: HELP_ID(wat) });
@@ -149,7 +150,9 @@ export const GAME_KINDS = {
       shopCurrencyRef: refField("Betalen met", "🪙", "currency", false,
         help("Met welke valuta je bij deze NPC betaalt.", "Sleep een valuta (bijv. Goud) uit de Bibliotheek op dit vak.", "Melding 'winkel zonder valuta' → sleep hier een valuta op.")),
       crafting: toggle("Kan dingen maken", "🔨", false, "werkbank",
-        help("Kun je bij deze NPC recepten maken (crafting)?", "Aan voor een smid of kok. Alle recepten werken bij elke NPC met dit aan.", "Je ziet geen recepten → zet dit aan en maak een Recept-kaart.")),
+        help("Kun je bij deze NPC recepten maken (crafting)? Bij 🔨 Werkplek kies je voor welk beroep.", "Aan voor een smid of kok, en sleep bij 🔨 Werkplek het beroep erop (bijv. Smeden).", "Je ziet geen recepten → zet dit aan, kies het beroep en geef de recepten hetzelfde beroep.")),
+      // Fase 9: een werkplek hoort bij één beroep (de smid bij Smeden).
+      craftProfessionRef: workstationProfessionField("deze NPC", "🔨 Werkplek"),
       // Fase 8 herstel: bij deze NPC zetten spelers dingen op de markt en kopen ze van elkaar.
       market: toggle("Markt (spelers handelen hier)", "🏪", false, "werkbank",
         help("Is deze NPC een markt? Dan zetten spelers hier dingen neer voor hun eigen prijs en kopen ze van elkaar.", "Zet dit aan bij één NPC op een plein. Hoe lang iets blijft staan en hoeveel per speler staat in Instellingen > 🤝 Handel; de marktbelasting in 💰 Geld.", "Je ziet in de game geen knop Markt → zet dit aan, SAVE TO GAME en praat met deze NPC.")),
@@ -226,8 +229,8 @@ export const GAME_KINDS = {
       spawns: { type: "questSpawns", required: false, maxItems: QUEST_SPAWN_LIMITS.spawns, audience: "client", label: "Verschijnen",
         ui: ui("👾", "questSpawns", "questbuilder"), default: null,
         help: help("Vijanden die deze quest laat verschijnen, bijv. een wolvengroep bij het 5e hout.", "Geef ze een naam (Wolvengroep), kies voor wie (meestal de groep) en zet bij een stap (⚡ Wat gebeurt er onderweg) een regel: Dan 👾 laat vijanden verschijnen.", "Ze verschijnen nooit → kijk in de Quest Builder (🧪 Testen) wat de quest-check zegt.") },
-      rewards: refList("Beloning", "🎁", ["item_definition", "currency", "ability"], [AMOUNT], "werkbank",
-        help("Wat de speler krijgt als de quest klaar is: items, geld of een vaardigheid (die leert hij dan; het aantal telt niet).", "Sleep items, valuta of een vaardigheid uit de Bibliotheek, bijv. 10 goud of een zwaard. Een vaardigheid met 'Alleen via een quest' komt zo vrij.", "Spelers worden te snel rijk → minder of goedkopere beloningen. Vaardigheid komt niet vrij → staat hij bij de klasse van de speler?")),
+      rewards: refList("Beloning", "🎁", ["item_definition", "currency", "ability", "recipe"], [AMOUNT], "werkbank",
+        help("Wat de speler krijgt als de quest klaar is: items, geld, een vaardigheid of een recept (die leert hij dan; het aantal telt niet).", "Sleep items, valuta, een vaardigheid of een recept uit de Bibliotheek, bijv. 10 goud of een zwaard. Een vaardigheid met 'Alleen via een quest' of een recept met 'Van een quest' komt zo vrij.", "Spelers worden te snel rijk → minder of goedkopere beloningen. Vaardigheid komt niet vrij → staat hij bij de klasse van de speler?")),
       rewardXp: int("XP", "⭐", 50, 0, 1000000, "werkbank", { range: [0, 1000] },
         help("Hoeveel ervaring de speler krijgt bij het inleveren.", "50-200 voor een eerste quest.", "Spelers stijgen te snel → minder XP.")),
       // 5-11: het verhaal bij de start, in de Quest Builder (tab 🚪 Start). Bij een NPC vertelt de NPC het; bij een brief,
@@ -281,7 +284,10 @@ export const GAME_KINDS = {
       outputAmount: int("Aantal", "🔢", 1, 1, 9999, "werkbank", { range: [1, 20] },
         help("Hoeveel je er krijgt per keer.", "Meestal 1; bij pijlen of brood meer.", "Te veel → minder.")),
       craftSeconds: int("Duurt", "⏱️", 0, 0, 3600, "werkbank", { unit: "s", range: [0, 120] },
-        help("Hoe lang maken duurt. 0 = meteen.", "0 voor eenvoudige dingen; 10-60 s voor waardevolle.", "Te traag → korter. Na de tijd haal je het op in het crafting-venster."))
+        help("Hoe lang maken duurt. 0 = meteen.", "0 voor eenvoudige dingen; 10-60 s voor waardevolle.", "Te traag → korter. Na de tijd haal je het op in het crafting-venster.")),
+      // Fase 9: beroep, niveau, beroeps-XP en hoe je het recept leert. Maken kan alleen bij een werkplek van dat beroep.
+      ...professionFields("dit recept", "maken", "maakt"),
+      ...recipeLearnFields()
     }
   },
   placed_model: {
@@ -318,6 +324,11 @@ export const GAME_KINDS = {
         help("Legt de onderkant van het model op het hoogste stuk grond eronder, dus bij een brug op de oevers.",
           "Aan voor een brug over een rivier of een plank over een kuil. Na verplaatsen (G), draaien of groter maken zoekt hij opnieuw.",
           "Wil je Hoogte zelf bijstellen → zet dit uit; het model blijft liggen waar het lag.")),
+      // Fase 9: een model (bijv. een aambeeld) kan een werkplek zijn, net als een NPC.
+      crafting: toggle("Werkplek (hier maken)", "🔨", false, "werkbank",
+        help("Kun je bij dit model dingen maken? Loop erheen en druk E (of klik het).", "Aan voor een aambeeld, oven of kookpot, en sleep bij Werkplek voor het beroep erop.", "Je kunt er niets maken → zet dit aan, kies het beroep en geef de recepten hetzelfde beroep."),
+        { group: "🔨 Werkplek" }),
+      craftProfessionRef: workstationProfessionField("dit model", "🔨 Werkplek"),
       ...flagGate("dit model"),
       x: pos("X", "↔️"),
       y: Object.assign({}, height, { ui: ui("↕️", "slider", "werkbank", { step: 0.1, unit: "m", range: [-20, 20] }) }),

@@ -14,7 +14,7 @@ import { hasOwnSteps, questGraphIssues, questStartIssues, questRepeatOf, questSt
 import { areaPointsMeters, areaSoort } from "../../shared/authoring/kinds/area.js";
 
 export const GAME_SECTION_VERSION = "gk-game-1";
-export const GAME_DOC_KINDS = Object.freeze(["currency", "player_class", "hud_settings", "minimap_settings", "combat_settings", "network_settings", "water_walk_settings", "party_settings", "chat_settings", "balance_settings", "respawn_settings", "equipment_settings", "economy_settings", "trade_settings", "npc", "quest", "recipe", "placed_model", "world_flag", "portal", "portal_settings"]);
+export const GAME_DOC_KINDS = Object.freeze(["currency", "player_class", "hud_settings", "minimap_settings", "combat_settings", "network_settings", "water_walk_settings", "party_settings", "chat_settings", "balance_settings", "respawn_settings", "equipment_settings", "economy_settings", "trade_settings", "npc", "quest", "recipe", "profession", "placed_model", "world_flag", "portal", "portal_settings"]);
 
 const idFromRef = (ref) => String(ref || "").replace(/^[a-z_]+:/, "");
 const kindOfRef = (ref) => String(ref || "").split(":")[0];
@@ -35,7 +35,9 @@ function grants(rows) {
   return (Array.isArray(rows) ? rows : []).map((row) => (kindOfRef(row.ref) === "currency"
     ? { currencyId: idFromRef(row.ref), amount: row.amount }
     : kindOfRef(row.ref) === "ability" ? { abilityId: idFromRef(row.ref), amount: 1 }
-      : { itemId: idFromRef(row.ref), amount: row.amount }));
+      // Fase 9: een recept als questbeloning (dan ken je het).
+      : kindOfRef(row.ref) === "recipe" ? { recipeId: idFromRef(row.ref), amount: 1 }
+        : { itemId: idFromRef(row.ref), amount: row.amount }));
 }
 
 // Stap 9: "alleen als vlag" op een NPC of model -> { flagId, flagOn } (niets als hij er altijd is).
@@ -62,6 +64,18 @@ export function compileGameSection(documents, options = {}) {
     const info = assetInfo.get(assetId);
     if (!info) fail(doc, "ASSET_UNKNOWN", label + " gebruikt onbekend asset " + assetId);
     else if (!types.includes(info.assetType)) fail(doc, "ASSET_TYPE", label + ": " + assetId + " is geen " + types.join("/"));
+  };
+
+  // Fase 9: beroepen (naam, icoon, hoogste niveau, XP per niveau).
+  const professions = of("profession").map((doc) => {
+    needAsset(doc, doc.body.iconAssetId, ["image", "texture"], "Beroep " + doc.body.displayName);
+    return { professionId: doc.body.professionId, displayName: doc.body.displayName, iconAssetId: doc.body.iconAssetId || null,
+      maxLevel: Number.isInteger(doc.body.maxLevel) ? doc.body.maxLevel : 10, xpPerLevel: Number.isInteger(doc.body.xpPerLevel) ? doc.body.xpPerLevel : 100 };
+  });
+  const professionIdOf = (doc, ref, label) => {
+    if (!ref) return null;
+    needRef(doc, ref, label);
+    return idFromRef(ref);
   };
 
   const currencies = {};
@@ -135,6 +149,7 @@ export function compileGameSection(documents, options = {}) {
       modelScaleBp: doc.body.modelScaleBp || 10000, idleClip: doc.body.idleClip || null, greeting: doc.body.greeting || "",
       x: doc.body.x, y: Number(doc.body.y) || 0, z: doc.body.z, rotationY: Number(doc.body.rotationY) || 0,
       crafting: doc.body.crafting === true, market: doc.body.market === true, talkRange: Number(doc.body.talkRange) > 0 ? Number(doc.body.talkRange) : 2.5,
+      craftProfessionId: doc.body.crafting === true ? professionIdOf(doc, doc.body.craftProfessionRef, label + " (werkplek voor)") : null,
       shopCurrencyId: doc.body.shopCurrencyRef ? idFromRef(doc.body.shopCurrencyRef) : null,
       shopOffers: offers.map((row) => ({ itemId: idFromRef(row.ref), price: row.price, buyBack: row.buyBack }))
     }, flagGateOf(doc.body));
@@ -264,10 +279,16 @@ export function compileGameSection(documents, options = {}) {
     const label = "Recept " + doc.body.displayName;
     needRows(doc, doc.body.ingredients, label);
     needRef(doc, doc.body.outputItemRef, label);
+    const professionId = professionIdOf(doc, doc.body.professionRef, label + " (beroep)");
+    const learn = ["start", "buy", "quest", "level"].includes(doc.body.learn) ? doc.body.learn : "start";
     return {
       recipeId: doc.body.recipeId, displayName: doc.body.displayName,
       ingredients: grants(doc.body.ingredients), outputItemId: idFromRef(doc.body.outputItemRef),
-      outputAmount: doc.body.outputAmount || 1, craftSeconds: doc.body.craftSeconds || 0
+      outputAmount: doc.body.outputAmount || 1, craftSeconds: doc.body.craftSeconds || 0,
+      // Fase 9: beroep, niveau, beroeps-XP en hoe je het leert.
+      professionId, professionLevel: professionId && Number.isInteger(doc.body.professionLevel) ? doc.body.professionLevel : 1,
+      professionXp: professionId ? (Number.isInteger(doc.body.professionXp) ? doc.body.professionXp : 10) : 0,
+      learn, learnPrice: learn === "buy" ? (Number.isInteger(doc.body.learnPrice) ? doc.body.learnPrice : 50) : 0
     };
   });
   const placedModels = of("placed_model").map((doc) => {
@@ -277,6 +298,9 @@ export function compileGameSection(documents, options = {}) {
       scale: Number(doc.body.scale) || 1, rotationY: Number(doc.body.rotationY) || 0, solid: doc.body.solid === true,
       rotationX: Number(doc.body.rotationX) || 0, rotationZ: Number(doc.body.rotationZ) || 0,
       collisionRadius: Number(doc.body.collisionRadius) || 1, idleClip: doc.body.idleClip || null,
+      // Fase 9: een model als werkplek (aambeeld, oven).
+      crafting: doc.body.crafting === true,
+      craftProfessionId: doc.body.crafting === true ? professionIdOf(doc, doc.body.craftProfessionRef, "Model " + doc.body.displayName + " (werkplek voor)") : null,
       x: doc.body.x, y: Number(doc.body.y) || 0, z: doc.body.z, ...flagGateOf(doc.body)
     };
   });
@@ -328,6 +352,7 @@ export function compileGameSection(documents, options = {}) {
 
   return {
     server: Object.assign({ schema: GAME_SECTION_VERSION, currencies, player, hud, minimap, combat, network, waterWalk, party, chat, npcs, quests, recipes, placedModels },
+      professions.length ? { professions } : {},
       questAreas.length ? { questAreas } : {}, flags.length ? { flags } : {}, portals.length || portalDoc ? { portals, portalRules } : {},
       balanceDoc ? { balance: balanceValues(balanceDoc.body) } : {},
       respawnDoc ? { respawn: settingsValues("respawn_settings", respawnDoc.body) } : {},

@@ -285,7 +285,7 @@ export function questStepsShapeIssues(value) {
         const at = where + ", beloning " + (number + 1);
         if (!isObject(reward) || Object.keys(reward).some((key) => !END_REWARD_KEYS.has(key))) { issues.push(at + " is ongeldig."); return; }
         if (reward.ref !== undefined && reward.ref !== null) {
-          if (typeof reward.ref !== "string" || reward.ref.length > 160 || !(reward.ref.startsWith("item_definition:") || reward.ref.startsWith("currency:") || reward.ref.startsWith("ability:"))) issues.push(at + ": moet een item, geld of vaardigheid zijn.");
+          if (typeof reward.ref !== "string" || reward.ref.length > 160 || !(reward.ref.startsWith("item_definition:") || reward.ref.startsWith("currency:") || reward.ref.startsWith("ability:") || reward.ref.startsWith("recipe:"))) issues.push(at + ": moet een item, geld, vaardigheid of recept zijn.");
           else refs.push(reward.ref);
         }
         if (reward.amount !== undefined && reward.amount !== null && (!Number.isInteger(reward.amount) || reward.amount < 1 || reward.amount > QUEST_LIMITS.amount)) issues.push(at + ": aantal moet tussen 1 en " + QUEST_LIMITS.amount + " liggen.");

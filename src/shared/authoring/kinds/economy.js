@@ -8,6 +8,7 @@ import { help, ui } from "./ui.js";
 const SHOP_GROUP = "🛒 Winkel";
 const SINK_GROUP = "💸 Waar geld weer verdwijnt";
 const LOOT_GROUP = "🎁 Buit";
+const PROFESSION_GROUP = "🧰 Beroepen";
 
 const slider = (label, icon, def, min, max, step, unit, range, group, helpText) => ({ type: "integer", required: false, min, max, audience: "client", label,
   ui: ui(icon, "slider", "instellingen", Object.assign({ step, range, group }, unit ? { unit } : {})), default: def, help: helpText });
@@ -49,7 +50,12 @@ export const ECONOMY_KINDS = {
       lootShowS: slider("Eén soort even tonen", "🎁", 3, 0, 10, 1, "s", [2, 5], LOOT_GROUP,
         help("Buit van één soort (bijv. 3× Hout) en een los item gaan met één klik of E meteen in je tas. Zo lang zie je daarna een kaartje met wat het was: plaatje, naam en aantal. 0 = geen kaartje.",
           "3 s: even zien wat je kreeg, zonder nog eens te klikken.",
-          "Het kaartje zit in de weg tijdens farmen → lager. Spelers missen wat ze kregen → hoger."))
+          "Het kaartje zit in de weg tijdens farmen → lager. Spelers missen wat ze kregen → hoger.")),
+      // Fase 9 (keuze van Kevin 13-11): hoeveel beroepen een character mag hebben. 0 = alle.
+      professionLimit: slider("Beroepen per character", "🧰", 0, 0, 20, 1, "", [0, 6], PROFESSION_GROUP,
+        help("Hoeveel verschillende beroepen één character mag leren. Een beroep leer je vanzelf de eerste keer dat je iets oogst of maakt voor dat beroep. 0 = alle beroepen.",
+          "0 (alle), zoals in ESO: iedereen kan alles. 2 zoals in WoW: dan moet je kiezen en handel je met anderen.",
+          "Iedereen kan alles en niemand handelt → zet een grens. Spelers zitten vast aan een verkeerde keuze → ze kunnen een beroep vergeten bij Uitrusting (C) onder Beroepen."))
     }
   }
 };

@@ -208,6 +208,150 @@ export function balanceReport(documents, { buildErrors = [] } = {}) {
       + " " + where + " en levert " + entry.sell.price + " op. Spelers kunnen zo eindeloos geld maken. Maak de terugkoopprijs lager of de winkelprijs hoger (Instellingen → 💰 Geld).");
   }
 
+  // ---- Fase 9: beroepen, recepten en uitrusting ----
+  const professionsReport = [];
+  const ingredientSources = [];
+  const gearByLevel = [];
+  {
+    const professions = of("profession");
+    const professionMax = (ref) => Math.max(1, int(byKey.get(ref)?.body?.maxLevel, 10));
+    const professionName = (ref) => (ref ? nameOfRef(ref) : "");
+    // Werkplekken per beroep ("" = zonder beroep): NPC's en modellen met maken aan.
+    const stations = new Map();
+    for (const doc of of("npc").concat(of("placed_model"))) {
+      if (doc.body.crafting !== true) continue;
+      const key = doc.body.craftProfessionRef || "";
+      stations.set(key, (stations.get(key) || []).concat(doc));
+    }
+    // Waar beroeps-XP vandaan komt.
+    const xpFrom = new Map();
+    const noteXp = (ref, doc) => { if (ref && int(doc.body.professionXp, 10) > 0) xpFrom.set(ref, (xpFrom.get(ref) || []).concat(doc)); };
+    for (const doc of of("resource_definition")) noteXp(doc.body.professionRef, doc);
+    for (const doc of of("recipe")) noteXp(doc.body.professionRef, doc);
+    // Waar een item vandaan komt: grondstof, vijand, winkel, recept, quest, los in de wereld of bij de start.
+    const sources = new Map();
+    const noteSource = (ref, text, docKey) => {
+      if (!ref) return;
+      const list = sources.get(ref) || [];
+      if (!list.some((entry) => entry.text === text)) list.push({ text, docKey });
+      sources.set(ref, list);
+    };
+    const lootItems = (ref, seen = new Set()) => {
+      const table = byKey.get(ref);
+      if (!table || table.kind !== "loot_table" || seen.has(ref)) return [];
+      seen.add(ref);
+      const result = [];
+      for (const entry of Array.isArray(table.body.entries) ? table.body.entries : []) {
+        if (entry?.itemRef) result.push(entry.itemRef);
+        else if (entry?.tableRef) result.push(...lootItems(entry.tableRef, seen));
+      }
+      return result;
+    };
+    for (const doc of of("resource_definition")) for (const ref of lootItems(doc.body.lootTableRef)) noteSource(ref, "🪨 " + nameOf(doc), doc.docKey);
+    for (const actor of actors) {
+      if (!placedActors.has(actor.docKey)) continue;
+      for (const ref of lootItems(actor.body.lootTableRef)) noteSource(ref, "⚔️ " + nameOf(actor), actor.docKey);
+    }
+    for (const npc of of("npc")) for (const row of Array.isArray(npc.body.shopOffers) ? npc.body.shopOffers : []) noteSource(row?.ref, "🛒 " + nameOf(npc), npc.docKey);
+    for (const recipe of of("recipe")) noteSource(recipe.body.outputItemRef, "🔨 " + nameOf(recipe), recipe.docKey);
+    for (const [ref, givers] of questRewardRefs) for (const quest of givers) noteSource(ref, "📜 " + nameOf(quest), quest.docKey);
+    for (const pickup of of("pickup")) noteSource(pickup.body.itemRef, "📍 los in de wereld", pickup.docKey);
+    for (const cls of classes) for (const row of Array.isArray(cls.body.startItems) ? cls.body.startItems : []) noteSource(row?.ref, "🎒 start (" + nameOf(cls) + ")", cls.docKey);
+
+    for (const recipe of of("recipe")) {
+      const body = recipe.body || {};
+      const prof = body.professionRef && byKey.get(body.professionRef)?.kind === "profession" ? body.professionRef : null;
+      const need = prof ? Math.max(1, int(body.professionLevel, 1)) : 1;
+      const where = prof ? " (" + professionName(prof) + ")" : "";
+      if (prof && need > professionMax(prof)) {
+        add("red", "RECIPE_LEVEL", recipe.docKey, "Recept " + nameOf(recipe) + " vraagt " + professionName(prof) + " niveau " + need + ", maar het hoogste niveau van dat beroep is " + professionMax(prof) + ": niemand kan het ooit maken.");
+      }
+      if (!(stations.get(prof || "") || []).length) {
+        add("red", "RECIPE_NO_STATION", recipe.docKey, "Recept " + nameOf(recipe) + where + " kan nergens gemaakt worden: geen NPC of model is een werkplek" + (prof ? " voor " + professionName(prof) : " zonder beroep")
+          + ". Zet bij een NPC of model 'Kan dingen maken' aan" + (prof ? " en sleep " + professionName(prof) + " op 'Werkplek voor'." : " en laat 'Werkplek voor' leeg."));
+      }
+      if (body.learn === "quest" && !questRewardRefs.has(recipe.docKey)) {
+        add("red", "RECIPE_NO_QUEST", recipe.docKey, "Recept " + nameOf(recipe) + " leer je alleen van een quest, maar geen enkele quest geeft het. Sleep het bij een quest op Beloning, of kies bij 'Hoe leer je het' iets anders.");
+      }
+      if (prof && need > 1 && !xpFrom.has(prof)) {
+        add("red", "PROFESSION_NO_XP", recipe.docKey, "Recept " + nameOf(recipe) + " vraagt " + professionName(prof) + " niveau " + need + ", maar geen grondstof of recept geeft " + professionName(prof) + "-XP: niemand komt boven niveau 1.");
+      }
+      for (const row of Array.isArray(body.ingredients) ? body.ingredients : []) {
+        if (!row?.ref || !byKey.has(row.ref)) continue;
+        if (!sources.has(row.ref)) {
+          add("red", "RECIPE_NO_SOURCE", recipe.docKey, "Recept " + nameOf(recipe) + " heeft " + nameOfRef(row.ref) + " nodig, maar dat krijg je nergens: geen grondstof, vijand, winkel, recept of quest geeft het.");
+        }
+      }
+      // Geldlus via een recept: alles kopen, maken en verkopen levert meer op dan het kost.
+      const output = byKey.get(body.outputItemRef);
+      const rows = Array.isArray(body.ingredients) ? body.ingredients : [];
+      if (output && output.kind === "item_definition" && rows.length) {
+        const currencies = new Set(Array.from(prices.values()).map((entry) => entry.currency));
+        for (const currency of currencies) {
+          const sell = prices.get(body.outputItemRef + "|" + currency)?.sell;
+          if (!sell) continue;
+          let cost = 0;
+          let buyable = true;
+          for (const row of rows) {
+            const buy = prices.get(row?.ref + "|" + currency)?.buy;
+            if (!buy) { buyable = false; break; }
+            cost += buy.price * Math.max(1, int(row.amount, 1));
+          }
+          if (!buyable) continue;
+          const amount = Math.max(1, int(body.outputAmount, 1));
+          cost += Math.round(Math.max(0, int(output.body.vendorValue, 0)) * amount * economy.craftCostPct / 100);
+          const revenue = sell.price * amount;
+          if (revenue > cost) {
+            add("red", "MONEY_LOOP", recipe.docKey, "Geldlus via recept " + nameOf(recipe) + ": alles kopen en maken kost " + cost + " " + nameOfRef(currency) + ", " + nameOfRef(body.outputItemRef)
+              + " verkopen bij " + sell.shop + " levert " + revenue + " op. Maak de Verkoopwaarde lager of de craftkosten hoger (Instellingen → 💰 Geld).");
+          }
+        }
+      }
+    }
+    for (const doc of of("resource_definition")) {
+      const prof = doc.body.professionRef && byKey.get(doc.body.professionRef)?.kind === "profession" ? doc.body.professionRef : null;
+      if (!prof) continue;
+      const need = Math.max(1, int(doc.body.professionLevel, 1));
+      if (need > professionMax(prof)) {
+        add("red", "RESOURCE_LEVEL", doc.docKey, "Grondstof " + nameOf(doc) + " vraagt " + professionName(prof) + " niveau " + need + ", maar het hoogste niveau van dat beroep is " + professionMax(prof) + ": niemand kan hem oogsten.");
+      } else if (need > 1 && !xpFrom.has(prof)) {
+        add("red", "PROFESSION_NO_XP", doc.docKey, "Grondstof " + nameOf(doc) + " vraagt " + professionName(prof) + " niveau " + need + ", maar geen grondstof of recept geeft " + professionName(prof) + "-XP: niemand komt boven niveau 1.");
+      }
+    }
+    for (const prof of professions) {
+      const recipesOf = of("recipe").filter((doc) => doc.body.professionRef === prof.docKey);
+      const resourcesOf = of("resource_definition").filter((doc) => doc.body.professionRef === prof.docKey);
+      const stationList = stations.get(prof.docKey) || [];
+      const xpList = xpFrom.get(prof.docKey) || [];
+      if (!recipesOf.length && !resourcesOf.length) add("orange", "PROFESSION_EMPTY", prof.docKey, "Beroep " + nameOf(prof) + " heeft nog geen grondstoffen of recepten: niemand leert het. Sleep het op een grondstof of recept.");
+      professionsReport.push({ docKey: prof.docKey, name: nameOf(prof), maxLevel: professionMax(prof.docKey), recipes: recipesOf.length, resources: resourcesOf.length,
+        stations: stationList.map(nameOf), xpSources: xpList.slice(0, 4).map(nameOf), reachable: xpList.length ? professionMax(prof.docKey) : 1 });
+    }
+    // Grondstofbronnen: per item dat in een recept zit, waar je het vindt.
+    const usedInRecipes = new Map();
+    for (const recipe of of("recipe")) for (const row of Array.isArray(recipe.body.ingredients) ? recipe.body.ingredients : []) {
+      if (row?.ref && byKey.has(row.ref)) usedInRecipes.set(row.ref, (usedInRecipes.get(row.ref) || []).concat(nameOf(recipe)));
+    }
+    for (const [ref, names] of usedInRecipes) {
+      ingredientSources.push({ docKey: ref, name: nameOfRef(ref), recipes: Array.from(new Set(names)).slice(0, 3), sources: (sources.get(ref) || []).slice(0, 5).map((entry) => entry.text) });
+    }
+    ingredientSources.sort((a, b) => (a.sources.length > 0) - (b.sources.length > 0) || a.name.localeCompare(b.name));
+    // Uitrusting per levelbereik: te vinden (buit, quest, winkel, los) of te maken (recept).
+    const gear = of("item_definition").filter((item) => item.body.equipSlot);
+    const made = new Set(of("recipe").map((recipe) => recipe.body.outputItemRef));
+    const step = maxLevel <= 10 ? 5 : maxLevel <= 30 ? 10 : Math.ceil(maxLevel / 5);
+    for (let from = 1; from <= maxLevel; from += step) {
+      const to = Math.min(maxLevel, from + step - 1);
+      const inRange = gear.filter((item) => { const need = Math.max(1, int(item.body.requiredLevel, 1)); return need >= from && need <= to; });
+      const find = inRange.filter((item) => (sources.get(item.docKey) || []).some((entry) => !entry.text.startsWith("🔨")));
+      const make = inRange.filter((item) => made.has(item.docKey));
+      gearByLevel.push({ from, to, find: find.map(nameOf).slice(0, 6), make: make.map(nameOf).slice(0, 6), findCount: find.length, makeCount: make.length });
+      if (gear.length && !find.length && !make.length) {
+        add("orange", "GEAR_GAP", null, "Level " + from + "-" + to + ": er is geen uitrusting te vinden of te maken. Geef een item met een uitrustingsplek 'Vanaf level' " + from + " of hoger, en laat het vallen, verkopen of maken.");
+      }
+    }
+  }
+
   // ---- XP per gebied ----
   const regions = of("region").sort((a, b) => nameOf(a).localeCompare(nameOf(b)));
   const regionAt = (xMm, zMm, ref = null) => {
@@ -303,6 +447,7 @@ export function balanceReport(documents, { buildErrors = [] } = {}) {
     findings,
     counts: { red: findings.filter((finding) => finding.severity === "red").length, orange: findings.filter((finding) => finding.severity === "orange").length },
     xpByArea, strength, classes: classRows.map((cls) => ({ docKey: cls.docKey, name: cls.name })),
+    professions: professionsReport, ingredientSources, gearByLevel,
     balance, economy, maxLevel, assumption: BALANCE_ASSUMPTION
   };
 }

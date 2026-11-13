@@ -142,6 +142,15 @@ export function compileActorSection(documents, options = {}) {
     const split = splitByAudience(doc.kind, doc.body);
     const server = Object.assign({}, split.server, { lootTableId: idFromRef(doc.body.lootTableRef) });
     delete server.lootTableRef;
+    // Fase 9: bij welk beroep, vanaf welk niveau en hoeveel beroeps-XP (zonder beroep: iedereen, geen XP).
+    delete server.professionRef;
+    delete server.professionLevel;
+    delete server.professionXp;
+    if (doc.body.professionRef && needRef(doc, doc.body.professionRef, "profession", label + " (beroep)")) {
+      server.professionId = idFromRef(doc.body.professionRef);
+      server.professionLevel = Number.isInteger(doc.body.professionLevel) ? doc.body.professionLevel : 1;
+      server.professionXp = Number.isInteger(doc.body.professionXp) ? doc.body.professionXp : 10;
+    }
     resources.server[doc.body.resourceId] = server;
     resources.client[doc.body.resourceId] = split.client;
   }

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { ActionCooldowns, assertDeveloperActionAllowed, developerActionsAllowed, normalizedActionPayloadHash } from "./action-security.js";
 import { runOperation } from "./persistence/operation-contract.js";
 import { economyValues } from "../shared/authoring/kinds/economy.js";
+import { professionProgress } from "../shared/authoring/kinds/profession.js";
 import { isCombatIntent, sanitizeCombatIntent } from "./runtime/combat-adapter.js";
 import { computeDamage } from "../../apps/web/public/shared/combat-math.js";
 import { equipBonusAt, levelEdgePct, statAtLevel, toRealPool } from "../../apps/web/public/shared/level-math.js";
@@ -76,6 +77,13 @@ function rollLootAmount(minValue, maxValue, multiplier = 1) {
   const rolled = min + Math.floor(Math.random() * (max - min + 1));
   return Math.max(0, Math.round(rolled * multiplier));
 }
+
+// Fase 9: " +10 Smeden-XP" (en "Smeden niveau 3!") achter een melding.
+function professionText(grant) {
+  if (!grant || grant.amount <= 0) return grant?.learned ? " Je leerde " + grant.displayName + "." : "";
+  return " +" + grant.amount + " " + grant.displayName + "-XP" + (grant.leveledUp ? ". " + grant.displayName + " niveau " + grant.level + "!" : ".");
+}
+export { professionText };
 
 function httpError(status, message, code = null) {
   const error = new Error(message);
@@ -1415,6 +1423,7 @@ export class Node03RuntimeService {
     if (action === "maker_level") return this.makerSetLevel(ctx, payload, operationId);
     if (action === "maker_xp") return this.makerGiveXp(ctx, payload, operationId);
     if (action === "loadout_set") return this.setLoadoutSlot(ctx, payload);
+    if (action === "profession_forget") return this.forgetProfession(ctx, payload);
     if (this.isPlayerDead(ctx)) {
       const error = new Error("Je speler is verslagen. Gebruik Respawn om verder te spelen.");
       error.status = 409;
@@ -2765,6 +2774,10 @@ export class Node03RuntimeService {
     const planned = runtime.planGather({ playerId: ctx.profile.id, targetId, x: safeNumber(ctx.position?.x, 0), z: safeNumber(ctx.position?.z, 0), nowMs: Date.now(), operationId });
     if (planned.result) return planned.result;
     const plan = planned.plan;
+    // Fase 9: een grondstof van een beroep vraagt een niveau (en past binnen Beroepen per character). Er verdwijnt niets.
+    const profession = plan.profession || null;
+    const professionIssue = profession ? this.professionIssue(ctx, profession.id, profession.level) : null;
+    if (professionIssue) throw httpError(403, professionIssue, "PROFESSION_LEVEL");
     // Gedeelde grondstof: wie het eerst verzamelt, krijgt het (claim per grondstof-leven).
     if (!this.claimActorReward(ctx, plan.claimKey, plan.instanceId, ctx.profile.id, operationId, plan.buildId)) {
       plan.claimed = false;
@@ -2784,12 +2797,17 @@ export class Node03RuntimeService {
     if (!plan.personal) this.saveActorSpawnState(ctx, plan.spawnKey, plan.occurrence, "depleted", plan.respawnAtMs, plan.buildId);
     this.recordGameplayEvent(ctx, "resource_gathered", "player", plan.instanceId, { grants });
     this.questEvents?.(ctx, [ctx.profile.id], { type: "gather", refId: plan.resourceId, eventKey: "gather:" + (plan.eventKey || plan.instanceId), operationId, at: { x: plan.x, z: plan.z } });
+    // Fase 9: beroeps-XP (de eerste keer leer je het beroep).
+    const professionGrant = profession ? this.grantProfessionXp(ctx, profession.id, profession.xp, plan.instanceId) : null;
+    const events = [{ type: "gathered", targetId: plan.instanceId, label: plan.label }];
+    if (professionGrant) events.push(Object.assign({ type: "profession_xp" }, professionGrant));
     return {
       action: "gather",
       targetId: plan.instanceId,
-      message: plan.label + " verzameld.",
-      events: [{ type: "gathered", targetId: plan.instanceId, label: plan.label }],
-      grants
+      message: plan.label + " verzameld." + professionText(professionGrant),
+      events,
+      grants,
+      profession: professionGrant
     };
   }
 
@@ -2984,6 +3002,96 @@ export class Node03RuntimeService {
     `).run(randomId("event"), ctx.worldId, ctx.zoneId, ctx.profile.id, eventType, sourceId || null, targetId || null, stableJson(payload || {}), now());
   }
 
+  // ---- Fase 9: beroepen -----------------------------------------------------------------------------------------
+
+  professionDefs(ctx) {
+    return catalogSection(ctx.catalogs, "professions");
+  }
+
+  professionXpOf(playerId) {
+    return new Map(this.db.prepare("SELECT profession_id, xp FROM player_professions WHERE player_id = ?").all(playerId)
+      .map((row) => [row.profession_id, Math.max(0, safeInteger(row.xp, 0))]));
+  }
+
+  professionLimit(ctx) {
+    return Math.max(0, safeInteger(economyValues(policiesOfType(ctx.project, "economy_rules")[0] || null).professionLimit, 0));
+  }
+
+  // Het niveau van een speler in een beroep (0 als het beroep niet bestaat).
+  professionLevelOf(ctx, professionId, xpMap = null) {
+    const def = this.professionDefs(ctx)[professionId];
+    if (!def) return 0;
+    const map = xpMap || this.professionXpOf(ctx.profile.id);
+    return professionProgress(def, map.get(professionId) || 0).level;
+  }
+
+  // Waarom het (nog) niet kan, of null. Leert het beroep niet; dat doet grantProfessionXp.
+  professionIssue(ctx, professionId, needLevel = 1, xpMap = null) {
+    const def = this.professionDefs(ctx)[professionId];
+    if (!professionId || !def) return null;
+    const map = xpMap || this.professionXpOf(ctx.profile.id);
+    if (!map.has(professionId)) {
+      const limit = this.professionLimit(ctx);
+      if (limit > 0 && map.size >= limit) {
+        return "Je hebt al " + map.size + " " + (map.size === 1 ? "beroep" : "beroepen") + " (hooguit " + limit + "). Vergeet er eerst één bij Uitrusting (C) onder Beroepen.";
+      }
+    }
+    const level = professionProgress(def, map.get(professionId) || 0).level;
+    const need = Math.max(1, safeInteger(needLevel, 1));
+    if (level < need) return "Je hebt " + (def.displayName || professionId) + " niveau " + need + " nodig (jij: " + level + ").";
+    return null;
+  }
+
+  // Beroeps-XP erbij (de eerste keer leer je het beroep). Nooit voorbij het hoogste niveau.
+  grantProfessionXp(ctx, professionId, amount, sourceRef = null) {
+    const def = this.professionDefs(ctx)[professionId];
+    if (!def) return null;
+    const row = this.db.prepare("SELECT xp FROM player_professions WHERE player_id = ? AND profession_id = ? LIMIT 1").get(ctx.profile.id, professionId);
+    const before = Math.max(0, safeInteger(row?.xp, 0));
+    const cap = (professionProgress(def, 0).maxLevel - 1) * Math.max(1, safeInteger(def.xpPerLevel, 100));
+    const after = Math.min(Math.max(before, cap), before + Math.max(0, safeInteger(amount, 0)));
+    const stamp = now();
+    if (row) this.db.prepare("UPDATE player_professions SET xp = ?, updated_at = ? WHERE player_id = ? AND profession_id = ?").run(after, stamp, ctx.profile.id, professionId);
+    else this.db.prepare("INSERT INTO player_professions (player_id, profession_id, xp, learned_at, updated_at) VALUES (?, ?, ?, ?, ?)").run(ctx.profile.id, professionId, after, stamp, stamp);
+    const was = professionProgress(def, before).level;
+    const progress = professionProgress(def, after);
+    return { kind: "profession_xp", professionId, displayName: def.displayName || professionId, amount: after - before,
+      level: progress.level, leveledUp: progress.level > was, learned: !row, sourceRef };
+  }
+
+  // Een beroep vergeten (alleen als er een grens is, anders hoeft het nooit). Je begint dan opnieuw op niveau 1.
+  forgetProfession(ctx, payload) {
+    const professionId = safeString(payload.professionId || payload.profession_id, "");
+    const def = this.professionDefs(ctx)[professionId];
+    const row = this.db.prepare("SELECT xp FROM player_professions WHERE player_id = ? AND profession_id = ? LIMIT 1").get(ctx.profile.id, professionId);
+    if (!def || !row) throw httpError(404, "Dat beroep heb je niet.");
+    this.db.prepare("DELETE FROM player_professions WHERE player_id = ? AND profession_id = ?").run(ctx.profile.id, professionId);
+    return { action: "profession_forget", professionId, message: "Je bent " + (def.displayName || professionId) + " vergeten. Je kunt nu een ander beroep leren." };
+  }
+
+  // Een recept leren (kopen bij de werkplek of als questbeloning). Al bekend = niets.
+  unlockRecipe(ctx, recipeId, source = "quest") {
+    const id = safeString(recipeId, "");
+    if (!id) return null;
+    const recipe = catalogSection(ctx.catalogs, "recipes")[id] || null;
+    const result = this.db.prepare("INSERT OR IGNORE INTO player_recipe_unlocks (player_id, recipe_id, unlock_source, unlocked_at) VALUES (?, ?, ?, ?)")
+      .run(ctx.profile.id, id, source, now());
+    return { kind: "recipe", recipeId: id, displayName: recipe?.displayName || id, learned: Number(result?.changes || 0) > 0 };
+  }
+
+  // Voor de HUD: alle beroepen met jouw niveau en XP (ook die je nog niet hebt), plus de grens.
+  professionsForHud(ctx) {
+    const defs = Object.values(this.professionDefs(ctx)).sort((a, b) => safeInteger(a.sortOrder, 0) - safeInteger(b.sortOrder, 0));
+    if (!defs.length) return null;
+    const map = this.professionXpOf(ctx.profile.id);
+    return {
+      limit: this.professionLimit(ctx),
+      learnedCount: map.size,
+      list: defs.map((def) => Object.assign({ professionId: def.id, displayName: def.displayName || def.id, iconAssetId: def.iconAssetId || null,
+        learned: map.has(def.id) }, professionProgress(def, map.get(def.id) || 0)))
+    };
+  }
+
   buildSnapshot(ctx) {
     const progression = this.loadProgression(ctx);
     const stats = this.loadPlayerStats(ctx.profile.id);
@@ -3020,6 +3128,8 @@ export class Node03RuntimeService {
       portals: this.portalSnapshot(ctx),
       // Fase 8 herstel 2: wat er klaarligt in het buitvenster.
       loot: this.lootForHud(ctx),
+      // Fase 9: je beroepen (niveau en XP).
+      professions: this.professionsForHud(ctx),
       entities,
       interactionTargets: this.buildInteractionTargets(ctx, entities),
       ui: {

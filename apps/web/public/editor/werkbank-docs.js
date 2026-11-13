@@ -20,7 +20,7 @@ const REASON_TEXT = {
   market_sale: "Verkocht op de markt", market_purchase: "Gekocht op de markt", market_tax: "Marktbelasting",
   market_listing_fee: "Kosten om op de markt te zetten", crafting_cost: "Craftkosten", crafting_input: "Grondstoffen (craften)",
   crafting_output: "Gemaakt met craften", portal_travel: "Reiskosten", trade: "Geruild met een speler", mail_claim: "Uit de post",
-  market_buy: "Gekocht op de markt", mail_send: "Met de post verstuurd",
+  market_buy: "Gekocht op de markt", mail_send: "Met de post verstuurd", recipe_learn: "Recept geleerd",
   starting_character: "Startgeld", hud_debug_add: "Maker: geld erbij", maker_xp: "Maker"
 };
 
@@ -29,7 +29,7 @@ const REASON_TEXT = {
 // Een placed_model is een losse wereldinstantie, geen herbruikbare Bibliotheek-kaart.
 // De bron blijft de asset (of bij een pickup: het item); zo groeit de Werkbank niet
 // uit tot een lijst met iedere boom/stoel/steen die ooit in de wereld is neergezet.
-const LIBRARY_KINDS = ["item_definition", "currency", "ability", "loot_table", "resource_definition", "actor_archetype", "npc", "portal", "quest", "recipe", "world_flag"];
+const LIBRARY_KINDS = ["item_definition", "currency", "ability", "loot_table", "resource_definition", "actor_archetype", "npc", "portal", "quest", "recipe", "profession", "world_flag"];
 // Kaarten met een plek in de wereld: klik in de 3D-view, G = verplaatsen (R = draaien, T = groter/kleiner waar het kan).
 // Een pickup draait per plek; zijn grootte komt van het item (Grootte op de grond).
 // tilt = kantelen (R en dan X of Y); NPC's en portals blijven rechtop staan.
@@ -983,7 +983,7 @@ export function createDocBench(options = {}) {
         if (key === "displayName" && isNew && spec.idField && !bench.draft.idTouched) {
           const prefix = { item_definition: "item", ability: "ability", loot_table: "loot", resource_definition: "resource", actor_archetype: "actor",
             currency: "currency", npc: "npc", portal: "portal", quest: "quest", recipe: "recipe", placed_model: "model", player_class: "class",
-            terrain_texture: "tex", terrain_stamp: "stamp", terrain_water: "water", world_flag: "flag" }[kind];
+            terrain_texture: "tex", terrain_stamp: "stamp", terrain_water: "water", world_flag: "flag", profession: "profession" }[kind];
           if (prefix && next) body[spec.idField] = prefix + "." + slug(next);
         }
         if (isNew && !spec.singleton) { rerender(); return; }
@@ -1214,6 +1214,45 @@ export function createDocBench(options = {}) {
         row.append(go);
       }
       box.append(row);
+    }
+
+    // Fase 9: beroepen, waar de grondstoffen voor recepten vandaan komen, en uitrusting per levelbereik.
+    const professions = report.professions || [];
+    box.append(el("div", { class: "wbdHead" }, [el("span", { class: "wbdHeadIcon", text: "🧰" }),
+      el("div", { class: "wbdHeadText" }, [el("div", { class: "wbdHeadKind", text: "Beroepen" }),
+        el("div", { class: "wbdHeadName", text: professions.length ? professions.length + " beroep(en)" : "Nog geen beroepen" })])]));
+    for (const prof of professions) {
+      const row = el("div", { class: "wbdFinding" }, [
+        el("div", { class: "wbdFindingText", text: "🧰 " + prof.name + " — tot niveau " + prof.maxLevel + (prof.reachable < prof.maxLevel ? " (te halen: " + prof.reachable + ")" : "") }),
+        el("div", { class: "wbdNote", text: prof.recipes + " recept(en), " + prof.resources + " grondstof(fen). Werkplek: " + (prof.stations.length ? prof.stations.join(", ") : "geen")
+          + ". XP uit: " + (prof.xpSources.length ? prof.xpSources.join(", ") : "niets") + "." })]);
+      if (openDoc) {
+        const go = el("button", { type: "button", class: "wbdGhost", text: "➡️ Open de kaart" });
+        go.addEventListener("click", () => openDoc(prof.docKey));
+        row.append(go);
+      }
+      box.append(row);
+    }
+    const sources = report.ingredientSources || [];
+    box.append(el("div", { class: "wbdHead" }, [el("span", { class: "wbdHeadIcon", text: "🪨" }),
+      el("div", { class: "wbdHeadText" }, [el("div", { class: "wbdHeadKind", text: "Grondstofbronnen" }),
+        el("div", { class: "wbdHeadName", text: sources.length ? sources.length + " grondstof(fen) in recepten" : "Nog geen recepten" })])]));
+    for (const entry of sources) {
+      box.append(el("div", { class: "wbdFinding" + (entry.sources.length ? "" : " red") }, [
+        el("div", { class: "wbdFindingText", text: (entry.sources.length ? "" : "🔴 ") + entry.name + " (voor " + entry.recipes.join(", ") + ")" }),
+        el("div", { class: "wbdNote", text: entry.sources.length ? entry.sources.join(" · ") : "Nergens te krijgen." })]));
+    }
+    const gear = report.gearByLevel || [];
+    if (gear.length) {
+      box.append(el("div", { class: "wbdHead" }, [el("span", { class: "wbdHeadIcon", text: "🗡️" }),
+        el("div", { class: "wbdHeadText" }, [el("div", { class: "wbdHeadKind", text: "Uitrusting per level" }),
+          el("div", { class: "wbdHeadName", text: "Te vinden of te maken" })])]));
+      for (const range of gear) {
+        const empty = !range.findCount && !range.makeCount;
+        box.append(el("div", { class: "wbdFinding" + (empty ? " orange" : "") }, [
+          el("div", { class: "wbdFindingText", text: (empty ? "🟠 " : "") + "Level " + range.from + "-" + range.to }),
+          el("div", { class: "wbdNote", text: "Te vinden: " + (range.findCount ? range.find.join(", ") : "niets") + " · Te maken: " + (range.makeCount ? range.make.join(", ") : "niets") })]));
+      }
     }
 
     // Wat nog aan de oude route (nodes) hangt.

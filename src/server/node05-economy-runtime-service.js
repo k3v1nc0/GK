@@ -4,6 +4,7 @@ import { runOperation } from "./persistence/operation-contract.js";
 import { partyRulesFromProject } from "./runtime/party-runtime.js";
 import { economyValues, shopBuyPrice, shopSellPrice } from "../shared/authoring/kinds/economy.js";
 import { tradeValues } from "../shared/authoring/kinds/trade.js";
+import { professionText } from "./node03-runtime-service.js";
 
 function now() {
   return new Date().toISOString();
@@ -307,6 +308,8 @@ export class Node05EconomyRuntimeService {
   performAction(ctx, action, payload, operationId) {
     if (action === "craft" || action === "crafting:start") return this.startCraft(ctx, payload, operationId);
     if (action === "crafting:claim" || action === "claim_craft_job") return this.claimCraftingJob(ctx, payload, operationId);
+    // Fase 9: een recept leren (kopen bij de werkplek).
+    if (action === "recipe_learn" || action === "recipe:learn") return this.learnRecipe(ctx, payload, operationId);
     if (action === "vendor_buy" || action === "vendor:buy") return this.vendorBuy(ctx, payload, operationId);
     if (action === "vendor_sell" || action === "vendor:sell") return this.vendorSell(ctx, payload, operationId);
     // Fase 8: terugkopen wat je net verkocht.
@@ -457,9 +460,12 @@ export class Node05EconomyRuntimeService {
   buildCraftingSnapshot(ctx) {
     const stations = this.craftingStations(ctx);
     const jobs = this.loadCraftingJobs(ctx.profile.id);
+    const known = this.knownRecipeIds(ctx.profile.id);
     const stationSnapshots = stations.map((station) => {
-      const recipes = this.recipesForStation(ctx, station).map((recipe) => this.recipeSummary(ctx, recipe, station));
-      return Object.assign({}, station, { recipes });
+      // Fase 9: alleen recepten die je kent, plus recepten die je hier kunt kopen (met de knop Leren).
+      const recipes = this.recipesForStation(ctx, station).map((recipe) => this.recipeSummary(ctx, recipe, station, known))
+        .filter((summary) => summary.known || summary.learnable);
+      return Object.assign({}, station, { recipes, profession: this.stationProfession(ctx, station) });
     });
     return {
       policy: firstPolicy(ctx.project, "crafting_policy", null),
@@ -477,17 +483,20 @@ export class Node05EconomyRuntimeService {
     });
   }
 
-  recipeSummary(ctx, recipe, station = null) {
+  recipeSummary(ctx, recipe, station = null, known = null) {
     const ingredients = (Array.isArray(recipe.ingredients) ? recipe.ingredients : []).map((ingredient) => {
       const owned = ingredient.kind === "currency"
         ? this.currencyAmount(ctx.profile.id, ingredient.currencyRef)
         : this.itemCount(ctx.profile.id, ingredient.itemRef);
       const required = normalizeQuantity(ingredient.amount, 1);
+      const enough = owned >= required;
       return Object.assign({}, ingredient, {
         displayName: ingredient.kind === "currency" ? displayForCurrency(ctx.catalogs, ingredient.currencyRef) : displayForItem(ctx.catalogs, ingredient.itemRef),
         owned,
         required,
-        enough: owned >= required
+        enough,
+        // Fase 9: waar je het vindt (alleen als je te weinig hebt).
+        where: enough || ingredient.kind === "currency" ? "" : this.itemWhere(ctx, ingredient.itemRef)
       });
     });
     const outputItems = Array.isArray(recipe.outputItems) ? recipe.outputItems : [];
@@ -500,6 +509,24 @@ export class Node05EconomyRuntimeService {
     // Fase 8: wat het maken in geld kost (bovenop de grondstoffen), zodat de speler het ziet staan.
     const cost = this.craftCost(ctx, { outputs });
     const money = cost ? Object.assign({}, cost, { owned: this.currencyAmount(ctx.profile.id, cost.currencyId) }) : null;
+    // Fase 9: ken je het recept, past je beroepsniveau, en anders: waarom niet (de eerste reden staat in de HUD).
+    const isKnown = this.recipeKnown(ctx, recipe, known);
+    const learnable = !isKnown && recipe.learn === "buy";
+    const professionId = recipe.professionId || null;
+    const professionDef = professionId ? catalogSection(ctx.catalogs, "professions")[professionId] || null : null;
+    const needLevel = Math.max(1, safeInteger(recipe.professionLevel, 1));
+    const professionIssue = professionId ? this.node03RuntimeService.professionIssue(ctx, professionId, needLevel) : null;
+    const price = learnable ? this.learnPrice(ctx, recipe) : null;
+    const reasons = [];
+    if (learnable) reasons.push(price ? "Nog niet geleerd: leer het hier voor " + price.amount + " " + price.displayName + "." : "Nog niet geleerd: leer het hier.");
+    else if (!isKnown) reasons.push("Dit recept ken je nog niet.");
+    if (professionIssue) reasons.push(professionIssue);
+    for (const entry of ingredients) {
+      if (entry.enough) continue;
+      reasons.push("Nog " + (entry.required - entry.owned) + "× " + entry.displayName + " nodig" + (entry.where ? ": " + entry.where : "") + ".");
+    }
+    if (money && money.owned < money.amount) reasons.push("Te weinig " + money.displayName + " om te maken (" + money.owned + "/" + money.amount + ").");
+    if (station && station.inRange === false) reasons.push("Te ver weg van de werkplek.");
     return {
       recipeId: recipe.id,
       displayName: recipe.displayName || recipe.id,
@@ -508,13 +535,88 @@ export class Node05EconomyRuntimeService {
       stationId: station?.stationId || null,
       stationType: recipe.stationType || null,
       craftDurationMs: safeInteger(recipe.craftDurationMs, 0),
-      unlocked: this.recipeUnlocked(ctx, recipe),
-      canCraft: ingredients.every(function (entry) { return entry.enough; }) && (!money || money.owned >= money.amount)
-        && this.recipeUnlocked(ctx, recipe) && (!station || station.inRange === true),
+      unlocked: isKnown,
+      known: isKnown,
+      learnable,
+      learnPrice: price,
+      profession: professionDef ? { professionId, displayName: professionDef.displayName || professionId, level: needLevel,
+        have: this.node03RuntimeService.professionLevelOf(ctx, professionId), xp: Math.max(0, safeInteger(recipe.professionXp, 0)) } : null,
+      reasons,
+      canCraft: reasons.length === 0,
       ingredients,
       moneyCost: money,
       outputs
     };
+  }
+
+  // Fase 9: welke recepten deze speler geleerd heeft (kopen of quest).
+  knownRecipeIds(playerId) {
+    return new Set(this.db.prepare("SELECT recipe_id FROM player_recipe_unlocks WHERE player_id = ?").all(playerId).map((row) => row.recipe_id));
+  }
+
+  // Meteen bekend, vanzelf op het niveau, of geleerd (kopen/quest). Oude recepten zonder "learn" zoals vroeger.
+  recipeKnown(ctx, recipe, known = null) {
+    const learn = recipe.learn || (recipe.unlockMode === "player_unlock_required" ? "quest" : "start");
+    if (learn === "start") return true;
+    if (learn === "level") {
+      if (!recipe.professionId) return true;
+      return this.node03RuntimeService.professionLevelOf(ctx, recipe.professionId) >= Math.max(1, safeInteger(recipe.professionLevel, 1));
+    }
+    return (known || this.knownRecipeIds(ctx.profile.id)).has(recipe.id);
+  }
+
+  // Wat leren kost (in de eerste valuta); null = gratis.
+  learnPrice(ctx, recipe) {
+    const amount = Math.max(0, safeInteger(recipe.learnPrice, 0));
+    const currencyId = Object.keys(catalogSection(ctx.catalogs, "currencies"))[0] || "";
+    if (!amount || !currencyId) return null;
+    return { currencyId, amount, displayName: displayForCurrency(ctx.catalogs, currencyId), owned: this.currencyAmount(ctx.profile.id, currencyId) };
+  }
+
+  // Fase 9: waar een item vandaan komt, kort (de dichtstbijzijnde grondstof met afstand, een vijand, een winkel...).
+  itemWhere(ctx, itemId) {
+    const sources = catalogSection(ctx.catalogs, "itemSources")[itemId];
+    if (!Array.isArray(sources) || !sources.length) return "nergens te krijgen";
+    const here = ctx.position || null;
+    const text = (source) => {
+      if (source.kind === "resource") {
+        const points = Array.isArray(source.points) ? source.points : [];
+        const nearest = here ? points.map((point) => positionDistance(here, point)).filter((value) => value !== null).sort((a, b) => a - b)[0] : null;
+        return "verzamel " + source.name + (Number.isFinite(nearest) ? " (" + Math.max(1, Math.round(nearest)) + " m hier vandaan)" : "");
+      }
+      if (source.kind === "enemy") return "valt van " + source.name;
+      if (source.kind === "shop") return "te koop bij " + source.name;
+      if (source.kind === "recipe") return "te maken (" + source.name + ")";
+      if (source.kind === "quest") return "beloning van " + source.name;
+      return source.name || "";
+    };
+    const order = { resource: 0, enemy: 1, shop: 2, recipe: 3, quest: 4 };
+    return sources.slice().sort((a, b) => (order[a.kind] ?? 9) - (order[b.kind] ?? 9)).slice(0, 2).map(text).filter(Boolean).join(" of ");
+  }
+
+  // Fase 9: het beroep van een werkplek met jouw niveau en XP (voor de balk bovenaan Maken).
+  stationProfession(ctx, station) {
+    const professionId = station?.professionId || null;
+    if (!professionId) return null;
+    const view = this.node03RuntimeService.professionsForHud(ctx)?.list?.find((entry) => entry.professionId === professionId);
+    return view || null;
+  }
+
+  // Fase 9: een recept leren bij de werkplek (kopen). Geld en leren in één keer; het geld verdwijnt uit het spel.
+  learnRecipe(ctx, payload, operationId) {
+    const recipe = this.findRecipe(ctx, payload.recipeId || payload.recipe_id);
+    if (!recipe) throw httpError(404, "Recept niet gevonden.");
+    const station = this.findStation(ctx, payload.stationId || payload.station_id, recipe);
+    if (!station) throw httpError(404, "Werkplek niet gevonden.");
+    this.assertInRange(station, "De werkplek");
+    if (!this.recipesForStation(ctx, station).some((candidate) => candidate.id === recipe.id)) throw httpError(400, "Dit recept leer je niet hier.");
+    if (this.recipeKnown(ctx, recipe)) throw httpError(409, "Dit recept ken je al.");
+    if (recipe.learn !== "buy") throw httpError(403, "Dit recept kun je niet kopen.");
+    const price = this.learnPrice(ctx, recipe);
+    if (price && price.owned < price.amount) throw httpError(400, "Te weinig " + price.displayName + " (" + price.owned + "/" + price.amount + ").");
+    if (price) this.spendCurrency(ctx, price.currencyId, price.amount, "recipe_learn", recipe.id, operationId);
+    this.node03RuntimeService.unlockRecipe(ctx, recipe.id, "buy");
+    return { action: "recipe_learn", recipeId: recipe.id, message: "Je kent nu " + (recipe.displayName || recipe.id) + "." };
   }
 
   recipeUnlocked(ctx, recipe) {
@@ -849,10 +951,14 @@ export class Node05EconomyRuntimeService {
     throw error;
   }
 
-  findStation(ctx, stationId) {
+  // Fase 9: met een werkplek-ID alleen precies die werkplek (geen andere als die niet bestaat). Zonder ID de dichtstbijzijnde
+  // werkplek in de buurt die dit recept maakt.
+  findStation(ctx, stationId, recipe = null) {
     const id = safeString(stationId, "");
     const stations = this.craftingStations(ctx);
-    return stations.find(function (station) { return station.stationId === id; }) || stations[0] || null;
+    if (id) return stations.find(function (station) { return station.stationId === id; }) || null;
+    const fits = recipe ? stations.filter((station) => this.recipesForStation(ctx, station).some((candidate) => candidate.id === recipe.id)) : stations;
+    return fits.slice().sort((a, b) => (a.inRange === b.inRange ? safeNumber(a.distance, 999999) - safeNumber(b.distance, 999999) : a.inRange ? -1 : 1))[0] || null;
   }
 
   findVendor(ctx, vendorId) {
@@ -874,37 +980,27 @@ export class Node05EconomyRuntimeService {
     return this.recipes(ctx).find(function (recipe) { return recipe.id === id; }) || null;
   }
 
+  // Fase 9: de server controleert alles in één keer (recept, werkplek, afstand, kennen, beroepsniveau, materiaal, geld)
+  // voordat er iets uit je tas gaat. Een weigering laat alles staan.
   startCraft(ctx, payload, operationId) {
     const recipe = this.findRecipe(ctx, payload.recipeId || payload.recipe_id);
-    if (!recipe) {
-      const error = new Error("Recipe niet gevonden.");
-      error.status = 404;
-      throw error;
-    }
-    const station = this.findStation(ctx, payload.stationId || payload.station_id);
-    if (!station) {
-      const error = new Error("Crafting station niet gevonden in deze zone.");
-      error.status = 404;
-      throw error;
-    }
-    this.assertInRange(station, "Crafting station");
+    if (!recipe) throw httpError(404, "Recept niet gevonden.");
+    const station = this.findStation(ctx, payload.stationId || payload.station_id, recipe);
+    if (!station) throw httpError(404, "Werkplek niet gevonden.");
+    this.assertInRange(station, "De werkplek");
     if (!this.recipesForStation(ctx, station).some(function (candidate) { return candidate.id === recipe.id; })) {
-      const error = new Error("Recipe hoort niet bij dit station.");
-      error.status = 400;
-      throw error;
+      const profession = recipe.professionId ? catalogSection(ctx.catalogs, "professions")[recipe.professionId] : null;
+      throw httpError(400, profession ? "Dit maak je niet hier: ga naar een werkplek voor " + (profession.displayName || recipe.professionId) + "." : "Dit maak je niet hier.");
     }
     const summary = this.recipeSummary(ctx, recipe, station);
-    if (!summary.unlocked) {
-      const error = new Error("Recipe is nog niet unlocked.");
-      error.status = 403;
-      throw error;
-    }
+    if (!summary.known) throw httpError(403, summary.learnable ? "Leer dit recept eerst." : "Dit recept ken je nog niet.");
+    const professionIssue = recipe.professionId ? this.node03RuntimeService.professionIssue(ctx, recipe.professionId, recipe.professionLevel) : null;
+    if (professionIssue) throw httpError(403, professionIssue);
     for (const ingredient of summary.ingredients) {
-      if (!ingredient.enough) {
-        const error = new Error("Niet genoeg " + ingredient.displayName + ".");
-        error.status = 400;
-        throw error;
-      }
+      if (!ingredient.enough) throw httpError(400, "Niet genoeg " + ingredient.displayName + " (" + ingredient.owned + "/" + ingredient.required + ").");
+    }
+    if (summary.moneyCost && summary.moneyCost.owned < summary.moneyCost.amount) {
+      throw httpError(400, "Te weinig " + summary.moneyCost.displayName + " om te maken (" + summary.moneyCost.owned + "/" + summary.moneyCost.amount + ").");
     }
     for (const ingredient of summary.ingredients) {
       if (ingredient.consume === false) continue;
@@ -930,7 +1026,8 @@ export class Node05EconomyRuntimeService {
       VALUES (?, ?, ?, ?, ?, ?, 1, 'completed', ?, ?, ?, ?, ?, '{}')
     `).run(jobId, operationId, ctx.profile.id, recipe.id, station.stationId, ctx.zoneId, stableJson(summary.ingredients), stableJson(summary.outputs), stamp, stamp, stamp);
     this.node03RuntimeService.recordGameplayEvent(ctx, "item_crafted", "player", recipe.id, { grants });
-    return { action: "craft", jobId, grants, message: summary.displayName + " crafted.", events: [{ type: "craft_completed", recipeId: recipe.id }] };
+    const profession = grants.find((grant) => grant?.kind === "profession_xp") || null;
+    return { action: "craft", jobId, grants, profession, message: summary.displayName + " gemaakt." + professionText(profession), events: [{ type: "craft_completed", recipeId: recipe.id }] };
   }
 
   // Wat het maken in geld kost: een deel van de Verkoopwaarde van wat eruit komt (0 % = gratis).
@@ -977,7 +1074,8 @@ export class Node05EconomyRuntimeService {
       SET state = 'completed', completed_at = ?, revision = revision + 1
       WHERE id = ?
     `).run(now(), row.id);
-    return { action: "crafting:claim", jobId: row.id, grants, message: "Crafting output claimed." };
+    const profession = grants.find((grant) => grant?.kind === "profession_xp") || null;
+    return { action: "crafting:claim", jobId: row.id, grants, profession, message: (recipe.displayName || recipe.id) + " opgehaald." + professionText(profession) };
   }
 
   applyRecipeOutputs(ctx, recipe, operationId) {
@@ -987,6 +1085,11 @@ export class Node05EconomyRuntimeService {
     }
     for (const entry of Array.isArray(recipe.outputCurrencies) ? recipe.outputCurrencies : []) {
       const grant = this.node03RuntimeService.grantCurrency(ctx, entry.currencyRef, safeInteger(entry.amountMinor, 0), "crafting_output", recipe.id, operationId);
+      if (grant) grants.push(grant);
+    }
+    // Fase 9: beroeps-XP voor wat je maakte (geen gewone XP: maken is geen XP-lus).
+    if (recipe.professionId) {
+      const grant = this.node03RuntimeService.grantProfessionXp(ctx, recipe.professionId, safeInteger(recipe.professionXp, 0), recipe.id);
       if (grant) grants.push(grant);
     }
     return grants;

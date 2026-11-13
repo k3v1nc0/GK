@@ -2542,7 +2542,7 @@ export function createGkHud(api) {
       ui.bagSelect, Array.from(ui.bagSelection).sort(), store.stackSplits];
     // Healing (2-11): levens/mana veranderen elke seconde (regeneratie); de tas hoeft daarvoor niet opnieuw getekend te worden.
     if (view === "bag" || view === "trade" || view === "craft" || view === "gear") parts.push(d.s03?.inventory, d.s03?.equipment, d.s03?.currencies, d.s03?.catalog, Object.keys(d.s03?.itemCooldowns || {}));
-    if (view === "gear") parts.push(d.s03?.stats);
+    if (view === "gear") parts.push(d.s03?.stats, d.s03?.professions);
     if (view === "trade") parts.push(api.vendor(ui.trade?.vendorId));
     if (view === "craft") parts.push(api.station(ui.craft?.stationId), d.s05?.crafting?.jobs);
     if (view === "quests") parts.push(d.s04?.quests, d.s04?.trackedQuest?.questId);
@@ -2971,7 +2971,9 @@ export function createGkHud(api) {
         statRow("broadsword", "Kracht", fmt(base("stat.attack_power") + bonus.attack), bonus.attack),
         statRow("checked-shield", "Pantser", fmt(base("stat.armor") + bonus.armor), bonus.armor),
         statRow("healing", "Heal-kracht", fmt(base("stat.heal_power")))
-      ])
+      ]),
+      // Fase 9: je beroepen onder je waarden.
+      professionBlock(d.s03?.professions)
     ]);
     const parts = [head("visored-helm", "Uitrusting"), body];
     const detail = store.item && store.item.startsWith("eq:") ? itemDetail(store.item) : null;
@@ -3683,6 +3685,12 @@ export function createGkHud(api) {
     const station = api.station(ui.craft?.stationId);
     if (!station) return [h("div", { class: "gkBody" }, [emptyNote("anvil-impact", "Hier kun je niets meer maken.")])];
     const recipes = station.recipes || [];
+    // Fase 9: het beroep van deze werkplek met jouw niveau en XP.
+    const profession = station.profession || null;
+    const profHead = profession ? h("div", { class: "gkCraftProf" }, [professionIcon(profession),
+      h("b", { text: profession.displayName + " · niveau " + fmt(profession.level) + (profession.learned ? "" : " (nieuw)") }),
+      h("div", { class: "gkProgress" }, [h("i", { style: "width:" + professionPct(profession) + "%" })]),
+      h("small", { text: profession.atMax ? "hoogste niveau" : fmt(profession.into) + "/" + fmt(profession.need) + " XP" })]) : null;
     const query = String(ui.craftSearch || "").trim().toLocaleLowerCase();
     const search = h("input", { type: "search", class: "gkCraftSearch", "data-craft-search": "1", value: ui.craftSearch,
       placeholder: "Recept zoeken…", "aria-label": "Recept zoeken", autocomplete: "off", spellcheck: "false" });
@@ -3690,12 +3698,20 @@ export function createGkHud(api) {
     for (const recipe of recipes) {
       const searchText = [recipe.displayName, ...(recipe.ingredients || []).map(function (entry) { return entry.displayName || entry.itemRef || entry.currencyRef; }),
         ...(recipe.outputs || []).map(function (entry) { return entry.displayName || entry.itemId || entry.currencyId; })].filter(Boolean).join(" ").toLocaleLowerCase();
-      const row = h("div", { class: "gkCraftRow", "data-craft-row": "1", "data-search": searchText, hidden: query && !searchText.includes(query) ? true : null });
+      // Fase 9: grijs = je kunt het (nog) niet maken; de regel eronder zegt waarom en waar de grondstof ligt.
+      const reasons = Array.isArray(recipe.reasons) ? recipe.reasons : [];
+      const row = h("div", { class: "gkCraftRow" + (recipe.canCraft === false ? " gkCraftGrey" : ""), "data-craft-row": "1", "data-search": searchText,
+        hidden: query && !searchText.includes(query) ? true : null });
       const strip = h("div", { class: "gkCraftStrip" });
-      strip.append(h("button", { type: "button", class: "gkCraftThumb gkCraftMake", "data-act": "craft", "data-id": recipe.recipeId,
-        title: (recipe.displayName || "Recept") + " maken", disabled: d.busy?.n05 || !recipe.canCraft ? true : null },
-      [ico("anvil-impact", "plain"), h("span", { text: "Maken" }), num(recipe.craftDurationMs) > 0
-        ? h("small", { text: Math.round(num(recipe.craftDurationMs) / 1000) + "s" }) : null]));
+      const price = recipe.learnPrice || null;
+      strip.append(recipe.learnable
+        ? h("button", { type: "button", class: "gkCraftThumb gkCraftMake gkCraftLearn", "data-act": "learn-recipe", "data-id": recipe.recipeId,
+          title: (recipe.displayName || "Recept") + " leren", disabled: d.busy?.n05 || (price && num(price.owned) < num(price.amount)) ? true : null },
+        [ico("spell-book", "plain"), h("span", { text: "Leren" }), price ? h("small", { text: fmt(price.amount) }) : null])
+        : h("button", { type: "button", class: "gkCraftThumb gkCraftMake", "data-act": "craft", "data-id": recipe.recipeId,
+          title: (recipe.displayName || "Recept") + " maken", disabled: d.busy?.n05 || !recipe.canCraft ? true : null },
+        [ico("anvil-impact", "plain"), h("span", { text: "Maken" }), num(recipe.craftDurationMs) > 0
+          ? h("small", { text: Math.round(num(recipe.craftDurationMs) / 1000) + "s" }) : null]));
       for (const output of recipe.outputs || []) {
         strip.append(h("div", { class: "gkCraftThumb gkCell gkCraftResult", title: output.displayName || recipe.displayName,
           "data-rarity": catalogItem(output.itemId)?.rarity || "common" }, [
@@ -3721,6 +3737,7 @@ export function createGkHud(api) {
         ]));
       }
       row.append(strip);
+      if (reasons.length) row.append(h("div", { class: "gkCraftWhy", text: reasons.slice(0, 2).join(" ") }));
       list.append(row);
     }
     const noRecipes = h("div", { class: "gkCraftEmpty", "data-craft-empty": "1", hidden: recipes.length && recipes.some(function (recipe) {
@@ -3739,7 +3756,38 @@ export function createGkHud(api) {
         h("div", { class: "gkProgress" }, [h("i", { style: "width:" + Math.round(pct * 100) + "%" })]),
         h("button", { type: "button", class: "gkBtn gkGo", "data-act": "claim", "data-id": job.jobId, disabled: d.busy?.n05 || !job.canClaim ? true : null }, ["Ophalen"])]));
     }
-    return [h("div", { class: "gkCraft" }, [h("div", { class: "gkCraftTools" }, [ico("anvil-impact"), search]), list, noRecipes, jobs])];
+    return [h("div", { class: "gkCraft" }, [h("div", { class: "gkCraftTools" }, [ico("anvil-impact"), search]), profHead, list, noRecipes, jobs])];
+  }
+
+  // Fase 9: beroepen (plaatje of een aambeeld, en hoe ver je bent naar het volgende niveau).
+  function professionIcon(profession) {
+    const img = assetImg(profession?.iconAssetId, true);
+    if (img) img.classList.add("gkProfImg");
+    return img || ico("anvil-impact");
+  }
+  function professionPct(profession) {
+    if (!profession || profession.atMax) return 100;
+    return Math.max(0, Math.min(100, Math.round(100 * num(profession.into) / Math.max(1, num(profession.need)))));
+  }
+  function professionBlock(state) {
+    const limit = num(state?.limit);
+    const list = Array.isArray(state?.list) ? state.list : [];
+    if (!list.length) return null;
+    const rows = list.map(function (p) {
+      const forget = limit > 0 && p.learned
+        ? h("button", { type: "button", class: "gkBtn" + (ui.sure === "prof:" + p.professionId ? " gkWarn" : ""), "data-act": "prof-forget", "data-id": p.professionId,
+          disabled: data().busy?.n03 ? true : null }, [ui.sure === "prof:" + p.professionId ? "Zeker? Tik nog eens" : "Vergeten"])
+        : null;
+      return h("div", { class: "gkProf" + (p.learned ? "" : " gkProfNew") }, [professionIcon(p),
+        h("div", { class: "gkProfMain" }, [
+          h("div", { class: "gkProfName" }, [h("b", { text: p.displayName }),
+            h("small", { text: p.learned ? "niveau " + fmt(p.level) + " van " + fmt(p.maxLevel) : "nog niet geleerd" })]),
+          h("div", { class: "gkProgress" }, [h("i", { style: "width:" + (p.learned ? professionPct(p) : 0) + "%" })]),
+          h("small", { text: p.atMax ? "hoogste niveau" : fmt(p.into) + "/" + fmt(p.need) + " XP" })]),
+        forget]);
+    });
+    return h("div", { class: "gkProfs" }, [h("h4", null, [ico("anvil-impact"), h("span", { text: "Beroepen" }),
+      limit > 0 ? h("small", { text: fmt(state.learnedCount) + " van " + fmt(limit) }) : null])].concat(rows));
   }
 
   function syncSettings() {
@@ -5046,6 +5094,9 @@ export function createGkHud(api) {
       }
       case "craft": if (ui.craft) api.run05("craft", { stationId: ui.craft.stationId, recipeId: id }); break;
       case "claim": api.run05("crafting:claim", { jobId: id }); break;
+      // Fase 9: een recept leren bij de werkplek, en een beroep vergeten (alleen met een grens).
+      case "learn-recipe": if (ui.craft) api.run05("recipe_learn", { stationId: ui.craft.stationId, recipeId: id }); break;
+      case "prof-forget": if (confirmTwice("prof:" + id)) api.run03("profession_forget", null, { professionId: id }); break;
       case "set":
         store[id] = id.startsWith("health") ? !healthSettingOn(id) : !store[id];
         if (id === "minimap") markMapOverride("minimap");

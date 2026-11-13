@@ -1071,7 +1071,10 @@ export class ActorRuntime {
       claimKey: personal ? resource.id + "|" + ctx.playerId + "|" + ctx.operationId : resource.id,
       items: rollLoot(section.lootTables, resource.def.lootTableId, lootSeed(this.buildId, personal ? resource.id + "|" + ctx.operationId : resource.id, ctx.playerId)),
       respawnAtMs: ctx.nowMs + scaledRespawnMs(resource.def.respawnMs, this.respawnRatePct), buildId: this.buildId, label, personal,
-      eventKey: personal ? resource.id + ":" + ctx.operationId : resource.id
+      eventKey: personal ? resource.id + ":" + ctx.operationId : resource.id,
+      // Fase 9: beroep, niveau en beroeps-XP (de server controleert het niveau voor er iets gebeurt).
+      profession: resource.def.professionId ? { id: resource.def.professionId, level: Math.max(1, Number(resource.def.professionLevel) || 1),
+        xp: Math.max(0, Number(resource.def.professionXp) || 0) } : null
     };
     this.pending.set(ctx.operationId, plan);
     return { plan, result: null };

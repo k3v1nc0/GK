@@ -21,6 +21,7 @@ import { BALANCE_KINDS } from "./kinds/balance.js";
 import { ECONOMY_KINDS } from "./kinds/economy.js";
 import { TRADE_KINDS } from "./kinds/trade.js";
 import { PORTAL_KINDS } from "./kinds/portal.js";
+import { PROFESSION_KINDS } from "./kinds/profession.js";
 import { effectFields } from "./kinds/effect-fields.js";
 import { AREA_SETTING_SPECS, AREA_SOORT_ORDER, AREA_SOORTEN, areaSettingsIssues, areaSoort } from "./kinds/area.js";
 import { questSpawnsShapeIssues, questStartShapeIssues, questStepsShapeIssues } from "../../../apps/web/public/shared/quest-graph.js";
@@ -338,6 +339,7 @@ export const CANONICAL_KINDS = {
   ...ACTOR_KINDS,
   ...WORLD_KINDS,
   ...GAME_KINDS,
+  ...PROFESSION_KINDS,
   ...PORTAL_KINDS,
   ...NETWORK_KINDS,
   ...WATER_WALK_KINDS,

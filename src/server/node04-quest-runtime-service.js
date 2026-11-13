@@ -1298,6 +1298,7 @@ export class Node04QuestRuntimeService {
       if (action?.actionKind === "currency") return "+" + safeInteger(action.amountMinor, 0) + " " + displayForCurrency(ctx.catalogs, action.currencyRef);
       if (action?.actionKind === "item") return "+" + safeInteger(action.amount, 1) + "× " + displayForItem(ctx.catalogs, action.itemRef);
       if (action?.actionKind === "ability") return "📖 " + this.abilityName(ctx, action.abilityRef);
+      if (action?.actionKind === "recipe") return "📜 Recept " + this.recipeName(ctx, action.recipeRef);
       return null;
     }).filter(Boolean).slice(0, 6);
     // Het einde alleen noemen als de quest er meer heeft (na een keuze).
@@ -2008,6 +2009,10 @@ export class Node04QuestRuntimeService {
     if (action.actionKind === "ability") {
       return [this.unlockAbility(ctx, action.abilityRef, operationId, sourceRef, action.reason || "quest_reward")].filter(Boolean);
     }
+    // Fase 9: een recept als questbeloning (dan ken je het).
+    if (action.actionKind === "recipe") {
+      return [this.node03RuntimeService.unlockRecipe(ctx, action.recipeRef, "quest")].filter(Boolean);
+    }
     if (action.actionKind === "start_quest") {
       const quest = questById(ctx.project, action.questRef);
       if (!quest) return [];
@@ -2100,6 +2105,11 @@ export class Node04QuestRuntimeService {
   }
 
   // Fase 5: de naam van een vaardigheid (uit de build; oude wereld: uit de catalogus).
+  // Fase 9: de naam van een recept (questbeloning).
+  recipeName(ctx, recipeId) {
+    return catalogSection(ctx.catalogs, "recipes")[recipeId]?.displayName || recipeId;
+  }
+
   abilityName(ctx, abilityId) {
     const fromBuild = typeof this.node03RuntimeService?.abilityDisplayName === "function" ? this.node03RuntimeService.abilityDisplayName(abilityId) : null;
     return fromBuild || displayForAbility(ctx.catalogs, abilityId);
@@ -2573,6 +2583,7 @@ export class Node04QuestRuntimeService {
       if (reward?.actionKind === "currency") return { kind: "currency", currencyId: reward.currencyRef, displayName: displayForCurrency(ctx.catalogs, reward.currencyRef), amount: safeInteger(reward.amountMinor, 0) };
       if (reward?.actionKind === "item") return { kind: "item", itemId: reward.itemRef, displayName: displayForItem(ctx.catalogs, reward.itemRef), amount: safeInteger(reward.amount, 1) };
       if (reward?.actionKind === "ability") return { kind: "ability", abilityId: reward.abilityRef, displayName: this.abilityName(ctx, reward.abilityRef), amount: 1 };
+      if (reward?.actionKind === "recipe") return { kind: "recipe", recipeId: reward.recipeRef, displayName: "Recept " + this.recipeName(ctx, reward.recipeRef), amount: 1 };
       return null;
     };
     // Stap 7: bij een einde met "Speler kiest 1": de beloningen om uit te kiezen (index = wat de knop terugstuurt).

@@ -484,6 +484,15 @@ In de game: een loottabel mag geld laten vallen (🪙 in de editor, met proef); 
 **CLI controleert:** de server weigert verkeerde NPC, te laag niveau en geen materiaal, zonder dat er iets verdwijnt.
 **Klaar als:** Kevin speelt het, heeft zelf het tweede beroep gemaakt en geeft GO.
 
+**Keuze Kevin 13-11:** beroepen per character = een schuifje (Instellingen > 💰 Geld > 🧰 Beroepen), standaard 0 = alle.
+**Gebouwd 13-11 (wacht op handtest):**
+- **Kaart 🧰 Beroep** in de Bibliotheek: naam, icoon, hoogste niveau, XP per niveau (elk niveau evenveel). De voortgang staat per character in `player_professions` (migratie 031). Een beroep leer je vanzelf de eerste keer dat je ervoor oogst of maakt.
+- **Grondstof en recept** krijgen het vak Beroep en het uitklapblok 🧰 Beroep (vanaf niveau, beroeps-XP). Een recept heeft ook **Hoe leer je het**: meteen bekend, kopen bij de werkplek (prijs, het geld verdwijnt), van een quest (Recept als questbeloning), of vanzelf op het niveau.
+- **Werkplek:** een NPC met "Kan dingen maken" én een model (uitklapblok 🔨 Werkplek, E of klikken) hoort bij één beroep ("Werkplek voor"). Daar staan alleen de recepten van dat beroep; een werkplek zonder beroep maakt alleen recepten zonder beroep.
+- **Maken:** je ziet alleen recepten die je kent (plus die je hier kunt kopen, met de knop Leren). Grijs = je kunt het nog niet; de regel eronder zegt waarom (niveau, wat er mist) en waar de grondstof ligt ("verzamel Ertsader (50 m hier vandaan)", "valt van Wolf", "te koop bij ..."). Bovenaan staat het beroep met je niveau en XP. Bij Uitrusting (C) staat het blok Beroepen; met een grens kun je daar een beroep vergeten (twee keer tikken).
+- **Server:** maken controleert recept, werkplek (geen andere werkplek als de gevraagde niet bestaat), afstand, kennen, beroepsniveau, beroepen-grens, materiaal en geld voordat er iets uit de tas gaat; oogsten controleert het niveau voor de grondstof weg is. Maken geeft alleen beroeps-XP, geen gewone XP.
+- **⚖️ Balans:** rood voor een recept boven het hoogste niveau, zonder werkplek, "van een quest" zonder quest, een grondstof die je nergens krijgt, een niveau zonder beroeps-XP-bron, en een geldlus via een recept (alles kopen + maken < verkopen). Nieuwe blokken 🧰 Beroepen, 🪨 Grondstofbronnen en 🗡️ Uitrusting per level (oranje als een levelbereik niets heeft).
+
 #### Fase 10 — Levende wereld en de hele route
 **Waarom:** NPC's staan stil, er is geen dag en nacht, lore zit alleen in quests, en niemand heeft de game nog van begin tot eind gespeeld. (Het verhaal zelf loopt al vanaf Fase 5 mee via de Quest Builder.)
 **Bouw:**
