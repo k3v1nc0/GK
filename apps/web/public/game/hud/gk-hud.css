@@ -349,21 +349,28 @@
 .gkPanelResize:hover i, .gkPanelResize.gkOn i { background: var(--gk-accent); }
 .gkHud[data-panel="dock"] .gkSheet, .gkHud[data-dockbig="1"] .gkSheet { display: none; }
 .gkDock { display: none; flex: 1 1 auto; min-height: 0; flex-direction: column; }
-.gkHud[data-dock="chat"] .gkDock, .gkHud[data-dock="talk"] .gkDock { display: flex; }
+.gkHud[data-dock="chat"] .gkDock, .gkHud[data-dock="talk"] .gkDock, .gkHud[data-dock="post"] .gkDock, .gkHud[data-dock="swap"] .gkDock { display: flex; }
 /* Kevin (3-11): precies half om half, met een schuifje ertussen (gk-hud.js zet --gk-split-top/--gk-split-low en onthoudt het). */
-.gkHud[data-panel="open"][data-dock="chat"] .gkSheet, .gkHud[data-panel="open"][data-dock="talk"] .gkSheet { flex: var(--gk-split-top, 0.5) 1 0px; min-height: 60px; }
-.gkHud[data-panel="open"][data-dock="chat"] .gkDock, .gkHud[data-panel="open"][data-dock="talk"] .gkDock { flex: var(--gk-split-low, 0.5) 1 0px; }
-.gkHud[data-panel="open"][data-dock="chat"] .gkDock { min-height: 150px; }
+.gkHud[data-panel="open"][data-dock="chat"] .gkSheet, .gkHud[data-panel="open"][data-dock="talk"] .gkSheet,
+.gkHud[data-panel="open"][data-dock="post"] .gkSheet, .gkHud[data-panel="open"][data-dock="swap"] .gkSheet { flex: var(--gk-split-top, 0.5) 1 0px; min-height: 60px; }
+.gkHud[data-panel="open"][data-dock="chat"] .gkDock, .gkHud[data-panel="open"][data-dock="talk"] .gkDock,
+.gkHud[data-panel="open"][data-dock="post"] .gkDock, .gkHud[data-panel="open"][data-dock="swap"] .gkDock { flex: var(--gk-split-low, 0.5) 1 0px; }
+.gkHud[data-panel="open"][data-dock="chat"] .gkDock, .gkHud[data-panel="open"][data-dock="post"] .gkDock, .gkHud[data-panel="open"][data-dock="swap"] .gkDock { min-height: 150px; }
 .gkHud[data-panel="open"][data-dockbig="1"] .gkDock { flex: 1 1 auto; }
 .gkSplitBar { display: none; }
 .gkHud[data-panel="open"][data-dock="chat"]:not([data-dockbig="1"]) .gkSplitBar,
-.gkHud[data-panel="open"][data-dock="talk"] .gkSplitBar { position: relative; z-index: 4; display: flex; flex: none; height: 14px; align-items: center; justify-content: center;
+.gkHud[data-panel="open"][data-dock="talk"] .gkSplitBar, .gkHud[data-panel="open"][data-dock="post"] .gkSplitBar, .gkHud[data-panel="open"][data-dock="swap"] .gkSplitBar { position: relative; z-index: 4; display: flex; flex: none; height: 14px; align-items: center; justify-content: center;
   cursor: row-resize; touch-action: none; border-top: 1px solid var(--gk-line2); border-bottom: 1px solid var(--gk-line); background: rgba(6, 10, 18, 0.55); }
 .gkSplitBar::before { content: ""; position: absolute; left: 0; right: 0; top: -8px; bottom: -8px; }
 .gkSplitBar i { width: 46px; height: 4px; border-radius: 2px; background: var(--gk-line2); pointer-events: none; }
 .gkSplitBar:hover i, .gkSplitBar.gkOn i { background: var(--gk-accent); }
 .gkHud[data-orient="port"][data-panel="open"][data-dock="chat"],
-.gkHud[data-orient="port"][data-panel="open"][data-dock="talk"] { --gk-panel-h: min(68vh, calc(600px * var(--gk-scale))); }
+.gkHud[data-orient="port"][data-panel="open"][data-dock="talk"],
+.gkHud[data-orient="port"][data-panel="open"][data-dock="post"],
+.gkHud[data-orient="port"][data-panel="open"][data-dock="swap"] { --gk-panel-h: min(68vh, calc(600px * var(--gk-scale))); }
+/* Fase 8 herstel 3 (Kevin 13-11): Post en Ruilen onderin het paneel; je tas staat erboven en daaruit sleep je. */
+.gkPane { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; animation: gkSlide 0.14s ease-out; }
+.gkPane[hidden] { display: none; }
 .gkHud[data-orient="port"][data-panel="dock"] .gkPanel { height: var(--gk-dock-h, auto); }
 .gkHud[data-orient="port"][data-panel="dock"][data-dock="chat"] .gkPanel { height: var(--gk-dock-h, min(46vh, calc(400px * var(--gk-scale)))); }
 .gkHud[data-orient="port"][data-panel="dock"][data-dock="talk"][data-service="trade"] .gkPanel,
@@ -815,6 +822,7 @@
 .gkLootName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
 .gkLootRow small { font-weight: 800; color: var(--gk-text); }
 .gkLootTake { min-height: 32px; padding: 0 10px; font-size: 12px; }
+.gkLootNote { font-size: 11px; color: var(--gk-muted); }
 .gkLootCard.gkLootSmall { top: calc(var(--gk-edge) + var(--gk-portrait) + 20px); width: max-content; padding: 0; background: none; border: 0; box-shadow: none; }
 .gkLootOpen { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px; border-radius: 18px; font-weight: 800; font-size: 13px;
   color: var(--gk-text); background: var(--gk-bg); border: 1px solid rgba(255, 200, 87, 0.7); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5); }
@@ -1037,5 +1045,12 @@
 .gkPostField .gkPostInput { flex: 1 1 auto; width: 100%; }
 .gkPostField textarea.gkPostInput { min-height: 64px; padding: 6px 8px; resize: vertical; }
 .gkPostQty { flex: 0 0 82px; width: 82px; }
+.gkPostItems { display: grid; gap: 6px; flex: 1 1 auto; min-width: 0; }
+.gkPostItem { display: grid; grid-template-columns: 36px minmax(0, 1fr) 82px 34px; align-items: center; gap: 8px; }
+.gkPostItem .gkCell { width: 36px; height: 36px; padding: 4px; border-radius: 8px; }
+.gkPostItemName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 700; color: var(--gk-text); }
+.gkPostItem .gkClose { width: 34px; height: 34px; padding: 6px; }
+.gkPostDropHint { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 8px 10px; border-radius: 10px; border: 1px dashed var(--gk-line2); color: var(--gk-muted); font-size: 12px; }
+.gkMoneySwap > .gkIco { width: 22px; height: 22px; flex: none; }
 .gkPostFoot { margin-top: 8px; font-size: 11px; color: var(--gk-muted); text-align: center; }
 .gkHud[data-orient="port"] .gkMktField > span:first-child { flex-basis: 76px; }

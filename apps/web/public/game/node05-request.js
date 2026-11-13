@@ -14,6 +14,9 @@ export const NODE05_TEXT_FIELDS = Object.freeze([
 // Getalvelden: 0 is een echte waarde (bijv. "haal dit uit de ruil"), dus alleen leeg wordt null.
 export const NODE05_NUMBER_FIELDS = Object.freeze(["quantity", "unitPriceMinor", "revision", "amountMinor"]);
 
+// Lijsten: meerdere items in één keer (Fase 8 herstel 3: een brief met meerdere items). Elk item: itemId + quantity.
+export const NODE05_LIST_FIELDS = Object.freeze(["items"]);
+
 export function node05ActionBody(action, payload, operationId) {
   const source = payload && typeof payload === "object" ? payload : {};
   const body = { action: String(action || "").replace(/^node05:/, "").toLowerCase() };
@@ -26,6 +29,10 @@ export function node05ActionBody(action, payload, operationId) {
     const number = value === null || value === undefined || value === "" ? null : Number(value);
     body[key] = number === null || !Number.isFinite(number) ? null : number;
   }
+  const list = Array.isArray(source.items) ? source.items : null;
+  body.items = list ? list.slice(0, 12).map(function (entry) {
+    return { itemId: String(entry?.itemId || ""), quantity: Math.max(1, Math.round(Number(entry?.quantity) || 1)) };
+  }).filter(function (entry) { return entry.itemId; }) : null;
   body.operationId = String(operationId || "");
   return body;
 }

@@ -7,6 +7,7 @@ import { help, ui } from "./ui.js";
 
 const SHOP_GROUP = "🛒 Winkel";
 const SINK_GROUP = "💸 Waar geld weer verdwijnt";
+const LOOT_GROUP = "🎁 Buit";
 
 const slider = (label, icon, def, min, max, step, unit, range, group, helpText) => ({ type: "integer", required: false, min, max, audience: "client", label,
   ui: ui(icon, "slider", "instellingen", Object.assign({ step, range, group }, unit ? { unit } : {})), default: def, help: helpText });
@@ -38,7 +39,12 @@ export const ECONOMY_KINDS = {
       craftCostPct: slider("Craftkosten", "🔨", 10, 0, 200, 5, "% van de waarde", [0, 50], SINK_GROUP,
         help("Wat het maken van iets kost in geld, bovenop de grondstoffen: zoveel procent van de Verkoopwaarde van wat je maakt.",
           "10 % is een kleine kraan. 0 = craften kost alleen grondstoffen.",
-          "Niemand craft meer → lager. Craften levert gratis geld op → hoger."))
+          "Niemand craft meer → lager. Craften levert gratis geld op → hoger.")),
+      // Fase 8 herstel 3 (Kevin 13-11): buit in het buitvenster hoort bij een plek.
+      lootRangeM: slider("Buit pakken binnen", "🎁", 15, 3, 100, 1, "m", [5, 40], LOOT_GROUP,
+        help("Hoe ver je van een verslagen vijand of geoogste grondstof weg mag lopen en zijn buit nog kunt pakken. Loop je verder weg of ga je dood, dan is de buit weg.",
+          "15 m: even verderop doorvechten mag, wegrennen niet.",
+          "Spelers verliezen buit midden in een gevecht → hoger. Buit van de andere kant van het veld staat nog in het venster → lager."))
     }
   }
 };

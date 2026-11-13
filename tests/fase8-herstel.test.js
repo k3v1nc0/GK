@@ -14,7 +14,7 @@ import { buildRuntimeWorld, WORLD_ZONE_ID } from "../src/server/authoring/world-
 import { Node03RuntimeService } from "../src/server/node03-runtime-service.js";
 import { Node05EconomyRuntimeService } from "../src/server/node05-economy-runtime-service.js";
 import { runOperation } from "../src/server/persistence/operation-contract.js";
-import { NODE05_NUMBER_FIELDS, NODE05_TEXT_FIELDS, node05ActionBody } from "../apps/web/public/game/node05-request.js";
+import { NODE05_LIST_FIELDS, NODE05_NUMBER_FIELDS, NODE05_TEXT_FIELDS, node05ActionBody } from "../apps/web/public/game/node05-request.js";
 
 // ---- E: wat de HUD meestuurt, moet ook echt bij de server aankomen ----
 
@@ -43,7 +43,7 @@ test("HUD-acties: elk veld dat de HUD meestuurt komt bij de server aan", () => {
   for (const key of ["tradeId", "revision", "entryId", "marketId", "orderId", "mailId", "toName", "amountMinor", "unitPriceMinor"]) {
     assert.ok(keys.has(key), "de HUD stuurt " + key);
   }
-  const known = new Set(NODE05_TEXT_FIELDS.concat(NODE05_NUMBER_FIELDS));
+  const known = new Set(NODE05_TEXT_FIELDS.concat(NODE05_NUMBER_FIELDS, NODE05_LIST_FIELDS));
   const missing = Array.from(keys).filter((key) => !known.has(key));
   assert.deepEqual(missing, [], "deze velden vallen onderweg weg: " + missing.join(", "));
   // De game gebruikt de gedeelde lijst (geen eigen lijstje meer dat kan achterlopen).

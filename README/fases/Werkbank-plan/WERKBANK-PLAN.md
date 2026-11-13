@@ -468,6 +468,10 @@ In de game: een loottabel mag geld laten vallen (🪙 in de editor, met proef); 
 - **F markt:** de marktbelasting betaalt nu de **koper** bovenop de prijs (afgerond naar boven, dus minstens 1); de verkoper krijgt zijn hele prijs. Bij 18 % en een prijs van 100 betaal je dus 118.
 - **Kevin 12-11 extra:** het schuifje aan de rand van het menu (breder/smaller) blijft ook als alleen het gesprek open staat; een valutaplaatje heeft overal een vaste maat (was in de markt en de post heel groot).
 
+**Handtest herstel 2 13-11: E, F en I GO. Herstel 3 13-11 (wacht op handtest):**
+- **B buit (Kevins wensen):** een los item in de wereld klik je aan, je loopt erheen en pakt het meteen (geen "Hier ligt"-kaartje meer). Het buitvenster is er alleen nog voor vijanden en grondstoffen, en zet alle buit in de buurt in één lijst: gelijke dingen opgeteld (al het goud bij elkaar, "van Wolf ×2, Boom"), één keer **Pakken** pakt die soort van alles. Buit hoort bij een plek (migratie 030, x/z): loop je verder weg dan **🎁 Buit pakken binnen** (Instellingen > 💰 Geld, standaard 15 m) of ga je dood, dan is hij weg; teruglopen helpt niet. Zo loopt de buit van de hele wereld niet meer op.
+- **E Post en Ruilen onderin:** geen tabbladen meer, maar knoppen onderin de menubalk bij Chat en Gesprek. Ze openen onderin het paneel met je tas erboven. Spullen sleep je uit je tas naar je brief (meer soorten in één brief, hooguit 6, het aantal pas je aan) of naar de ruil; tikken op een item en **In de brief** / **Aanbieden** kan ook. Op een telefoon houd je een item eerst even vast en sleep je dan (meteen vegen blijft scrollen). Geld leg je in de ruil met het vakje onder "Jij geeft". Een nieuwe ruil opent Ruilen vanzelf onderin.
+
 #### Fase 9 — Beroepen en uitrusting
 **Waarom:** nu kan elke crafting-NPC alle recepten, er zijn geen beroepen of recepten om te leren, en er is geen pad naar betere uitrusting.
 **Bouw:**

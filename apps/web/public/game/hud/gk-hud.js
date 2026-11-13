@@ -48,10 +48,7 @@ const TABS = [
   { id: "skills", icon: "spell-book", title: "Vaardigheden", module: "hotbar_hud", key: "KeyK" },
   { id: "quests", icon: "scroll-unfurled", title: "Quests", module: "quest_tracker_hud", key: "KeyL" },
   { id: "money", icon: "two-coins", title: "Geld", module: "wallet_hud", key: null },
-  // Fase 8 herstel: je postbus (post van spelers en van de markt) staat altijd in het menu.
-  { id: "post", icon: "envelope", title: "Post", module: null, key: null },
-  // Fase 8b: alleen zichtbaar zolang er een ruil met een speler loopt.
-  { id: "swap", icon: "swap-bag", title: "Ruilen", module: null, key: null, onlyTrade: true },
+  // Fase 8 herstel 3 (Kevin 13-11): Post en Ruilen staan onderin de menubalk bij Chat en Gesprek (paneel onder, tas erboven).
   { id: "chars", icon: "pointy-hat", title: "Characters", module: null, key: "KeyP" },
   { id: "settings", icon: "cog", title: "Instellingen", module: null, key: null },
   { id: "logout", icon: "exit-door", title: "Uitloggen", module: null, key: null }
@@ -412,7 +409,7 @@ export function createGkHud(api) {
     chatBig: false,         // Kevin (3-11): chat = het hele paneel (om terug te lezen)
     chatAloneAt: -1e9,
     // Kevin (3-11): chat en gesprek staan onderin het paneel; hiermee wissel je tussen de twee.
-    dockPick: "chat",       // chat | talk
+    dockPick: "chat",       // chat | talk | post | swap (Fase 8 herstel 3)
     lastMode: "explore",
     bubbles: new Map(),     // ballonnen boven het hoofd: anker -> { el, until }
     // Kevin 11-11: je moet kunnen zien wat je kreeg.
@@ -428,7 +425,7 @@ export function createGkHud(api) {
     swapSeen: "",
     // Fase 8 herstel: de markt bij een NPC en je postbus.
     market: null,           // { marketId, tab: "buy" | "sell" | "mine", orderId, itemId, qty, price } tijdens de markt
-    post: { open: "", compose: null }, // open bericht; compose = { to, subject, text, itemId, qty, money }
+    post: { open: "", compose: null }, // open bericht; compose = { to, subject, text, items: [{ itemId, quantity }], money }
     mailSeen: null          // hoeveel ongelezen post er was (voor de melding "Je hebt post")
   };
   let saveTimer = 0;
@@ -578,6 +575,11 @@ export function createGkHud(api) {
   const railUnread = h("em", { class: "gkChatUnread", hidden: true });
   const railChat = h("button", { type: "button", class: "gkTab gkTabDock", "data-act": "dock", "data-id": "chat", title: "Chat (Enter)" }, [ico("chat-bubble"), railUnread]);
   const railTalk = h("button", { type: "button", class: "gkTab gkTabDock", "data-act": "dock", "data-id": "talk", title: "Gesprek" }, [ico("talk")]);
+  // Fase 8 herstel 3 (Kevin 13-11): Post en Ruilen ook onderin; ze openen onderin het paneel, met je tas erboven (slepen).
+  const railPostDot = h("span", { class: "gkDot", hidden: true });
+  const railPost = h("button", { type: "button", class: "gkTab gkTabDock", "data-act": "dock", "data-id": "post", title: "Post" }, [ico("envelope"), railPostDot]);
+  const railSwapDot = h("span", { class: "gkDot", hidden: true });
+  const railSwap = h("button", { type: "button", class: "gkTab gkTabDock", "data-act": "dock", "data-id": "swap", title: "Ruilen" }, [ico("swap-bag"), railSwapDot]);
   game.append(labels, bubbleLayer, fxLayer, playerStatus, mapWrap, bagBtn, actions, death, lowLeft, feedStack, inviteCard, lootCard, menuShade, menuCard);
 
   // Grote kaart: noorden boven, begint ingezoomd op jou. Slepen = schuiven, scrollen/knijpen/+− = zoomen.
@@ -608,7 +610,8 @@ export function createGkHud(api) {
   });
   sheet.addEventListener("dragend", function () { root.classList.remove("gkDragSkill"); });
   // Paneel gesplitst: boven het tabblad (tas, quests…), onder de chat of het gesprek met een NPC.
-  const dock = h("div", { class: "gkDock" }, [talk, chatBox]);
+  const pane = h("section", { class: "gkPane", hidden: true, "aria-live": "polite" });
+  const dock = h("div", { class: "gkDock" }, [talk, chatBox, pane]);
   // Aan de vrije rand van het paneel: links in liggende stand, boven in staande stand.
   const panelResize = h("div", { class: "gkPanelResize", role: "separator", "aria-label": "Paneelgrootte", title: "Sleep om het paneel groter of kleiner te maken (dubbel tikken = standaard)" }, [h("i")]);
   // Kevin (3-11): schuifje tussen boven en onder (standaard 50/50, wordt onthouden; dubbel tikken = weer 50/50).
@@ -713,7 +716,6 @@ export function createGkHud(api) {
   }
   function visibleTabs() {
     return TABS.filter(function (tab) {
-      if (tab.onlyTrade) return Boolean(openTrade());
       return !tab.module || has(tab.module);
     });
   }
@@ -838,6 +840,8 @@ export function createGkHud(api) {
   // Wat er onderin het paneel staat: "chat", "talk" (gesprek met een NPC) of niets.
   // Een nieuw gesprek komt meteen in beeld; met de knoppen onderin de menubalk wissel je.
   function dockView(currentMode) {
+    if (ui.dockPick === "post") return "post";
+    if (ui.dockPick === "swap" && openTrade()) return "swap";
     const talkOn = currentMode === "talk";
     if (talkOn && ui.dockPick === "talk") return "talk";
     if (ui.chatOpen) return "chat";
@@ -848,6 +852,8 @@ export function createGkHud(api) {
     // Handelen en maken blijven in Gesprek, maar wel in de bestaande splitsing:
     // het normale tabblad boven en het gesprek onder.
     if ((ui.trade || ui.craft || ui.market) && dockNow === "talk") return "open";
+    // Post en Ruilen: boven je tas (om te slepen), onder de post of de ruil.
+    if (dockNow === "post" || dockNow === "swap") return "open";
     let panelState = store.panel || (currentOrient === "port" ? "closed" : "rail");
     if (panelState === "open" && store.combatFold && currentOrient !== "land" && combat()) panelState = "rail";
     if (dockNow && panelState !== "open") panelState = "dock";
@@ -906,6 +912,7 @@ export function createGkHud(api) {
     renderSlots();
     renderToasts();
     renderTalk();
+    renderPane();
     renderDeath();
     renderRail();
     renderSheet();
@@ -1116,82 +1123,43 @@ export function createGkHud(api) {
     });
   }
 
-  // ---- Fase 8 herstel 2 (Kevin 12-11): buitvenster ----
+  // ---- Fase 8 herstel 2/3 (Kevin 12-11, 13-11): buitvenster ----
   // Na een vijand of grondstof kies je zelf wat je meeneemt, tenzij "Automatisch buit pakken" aan staat (Instellingen).
-  // Een pickup in de wereld laat eerst zien wat het is (Pakken / Laten). De server bewaart buit een paar minuten.
+  // Alle buit in de buurt staat samen in één lijst; gelijke dingen opgeteld (al het goud bij elkaar).
+  // Loop je te ver weg of ga je dood, dan haalt de server hem weg. Een los item in de wereld pak je gewoon op.
   function autoLootOn() { return store.autoLoot === true; }
-  function pendingLoot() {
-    const list = Array.isArray(data().s03?.loot?.pending) ? data().s03.loot.pending : [];
-    const nowMs = serverNow();
-    return list.filter(function (loot) {
-      const until = Date.parse(loot?.expiresAt || "");
-      return loot && loot.lootId && Array.isArray(loot.entries) && loot.entries.length > 0 && (!Number.isFinite(until) || until > nowMs);
-    });
-  }
-  function pickupTarget() {
-    if (!ui.pickup) return null;
-    const live = (api.live().targets || []).find(function (target) { return target && String(target.instanceId) === ui.pickup.instanceId; });
-    // Al gepakt (door jou of een ander) of weg: het kaartje gaat dicht.
-    if (live && (live.available === false || ["claimed", "depleted"].includes(live.status))) return null;
-    return Object.assign({}, ui.pickup, live || {});
-  }
-  function openPickup(target) {
-    if (!target?.instanceId) return;
-    ui.pickup = Object.assign({}, target, { instanceId: String(target.instanceId) });
-    ui.sig.loot = null;
-    renderLoot();
+  function lootNow() {
+    const loot = data().s03?.loot || null;
+    return loot && Array.isArray(loot.rows) && loot.rows.length ? loot : null;
   }
   function lootCell(itemId, currencyId) {
     return h("div", { class: "gkCell", "data-rarity": (itemId ? catalogItem(itemId)?.rarity : "") || "common" }, [itemId ? itemVisual(itemId) : currencyVisual(currencyId)]);
   }
   function renderLoot() {
-    const pick = pickupTarget();
-    if (ui.pickup && !pick) ui.pickup = null;
-    const loots = pick ? [] : pendingLoot();
+    const loot = lootNow();
     if (!ui.lootWindowSeen) ui.lootWindowSeen = new Set();
-    // Nieuwe buit gaat vanzelf open; met Sluiten wordt het een knopje "Buit (n)".
-    for (const loot of loots) if (!ui.lootWindowSeen.has(loot.lootId)) { ui.lootWindowSeen.add(loot.lootId); ui.lootHidden = false; }
+    // Nieuwe buit (een nieuwe vijand of grondstof) gaat vanzelf open; met Sluiten wordt het een knopje "Buit (n)".
+    for (const id of loot?.ids || []) if (!ui.lootWindowSeen.has(id)) { ui.lootWindowSeen.add(id); ui.lootHidden = false; }
     const busy = Boolean(data().busy?.n03);
-    const signature = pick
-      ? "p|" + [pick.instanceId, pick.displayName, pick.amount, pick.minAmount, pick.maxAmount, pick.itemRef, pick.currencyRef, busy ? 1 : 0].join("|")
-      : loots.length ? "l|" + (ui.lootHidden ? 1 : 0) + "|" + (busy ? 1 : 0) + "|" + loots.map(function (loot) {
-        return loot.lootId + ":" + loot.entries.map(function (entry) { return entry.key + "x" + entry.quantity; }).join(",");
-      }).join(";") : "";
+    const signature = loot ? (ui.lootHidden ? 1 : 0) + "|" + (busy ? 1 : 0) + "|" + loot.from + "|" + loot.rows.map(function (row) { return row.key + "x" + row.quantity; }).join(",") : "";
     if (ui.sig.loot === signature) return;
     ui.sig.loot = signature;
     lootCard.hidden = !signature;
-    lootCard.classList.toggle("gkLootSmall", Boolean(!pick && loots.length && ui.lootHidden));
-    if (!signature) { lootCard.replaceChildren(); return; }
-    if (pick) {
-      const money = pick.pickupKind === "currency" || (!pick.itemRef && Boolean(pick.currencyRef));
-      const low = Math.max(1, Math.round(num(pick.minAmount || pick.amount, 1)));
-      const high = Math.max(low, Math.round(num(pick.maxAmount || pick.amount, low)));
-      lootCard.replaceChildren(
-        h("div", { class: "gkLootHead" }, [ico("grab"), h("b", { text: "Hier ligt" })]),
-        h("div", { class: "gkLootRow" }, [money ? lootCell(null, pick.currencyRef || pick.definitionId) : lootCell(pick.itemRef || pick.definitionId, null),
-          h("span", { class: "gkLootName", text: pick.displayName || "Iets" }), h("small", { text: "×" + (high > low ? fmt(low) + "–" + fmt(high) : fmt(low)) })]),
-        h("div", { class: "gkInviteBtns" }, [
-          h("button", { type: "button", class: "gkInviteYes", "data-act": "pickup-take", disabled: busy ? true : null }, [ico("check-mark"), h("span", { text: "Pakken" })]),
-          h("button", { type: "button", class: "gkInviteNo", "data-act": "pickup-no" }, [ico("cancel"), h("span", { text: "Laten" })])]));
-      return;
-    }
-    const count = loots.reduce(function (sum, loot) { return sum + loot.entries.length; }, 0);
+    lootCard.classList.toggle("gkLootSmall", Boolean(loot && ui.lootHidden));
+    if (!loot) { lootCard.replaceChildren(); return; }
     if (ui.lootHidden) {
-      lootCard.replaceChildren(h("button", { type: "button", class: "gkLootOpen", "data-act": "loot-open", title: "Buit bekijken" }, [ico("chest"), h("span", { text: "Buit (" + count + ")" })]));
+      lootCard.replaceChildren(h("button", { type: "button", class: "gkLootOpen", "data-act": "loot-open", title: "Buit bekijken" }, [ico("chest"), h("span", { text: "Buit (" + loot.rows.length + ")" })]));
       return;
     }
-    const minutes = Math.max(1, Math.round(num(data().s03?.loot?.keepSeconds, 300) / 60));
     lootCard.replaceChildren(
-      h("div", { class: "gkLootHead" }, [ico("chest"), h("b", { text: "Buit" }), h("small", { text: "blijft " + minutes + " min liggen" })]),
-      h("div", { class: "gkLootList" }, loots.map(function (loot) {
-        const from = loot.label || (loot.sourceKind === "resource" ? "grondstof" : "vijand");
-        return h("div", { class: "gkLootPart" }, [h("div", { class: "gkLootFrom", text: (loot.sourceKind === "resource" ? "Uit " : "Van ") + from })].concat(loot.entries.map(function (entry) {
-          return h("div", { class: "gkLootRow" }, [lootCell(entry.itemId || null, entry.currencyId || null),
-            h("span", { class: "gkLootName", text: entry.displayName || entry.itemId || entry.currencyId || "?" }),
-            h("small", { text: "×" + fmt(entry.quantity) }),
-            h("button", { type: "button", class: "gkBtn gkLootTake", "data-act": "loot-take", "data-id": loot.lootId, "data-key": entry.key, disabled: busy ? true : null }, ["Pakken"])]);
-        })));
+      h("div", { class: "gkLootHead" }, [ico("chest"), h("b", { text: "Buit" }), h("small", { text: loot.from ? "van " + loot.from : "" })]),
+      h("div", { class: "gkLootList" }, loot.rows.map(function (row) {
+        return h("div", { class: "gkLootRow" }, [lootCell(row.itemId || null, row.currencyId || null),
+          h("span", { class: "gkLootName", text: row.displayName || row.itemId || row.currencyId || "?" }),
+          h("small", { text: "×" + fmt(row.quantity) }),
+          h("button", { type: "button", class: "gkBtn gkLootTake", "data-act": "loot-take", "data-key": row.key, disabled: busy ? true : null }, ["Pakken"])]);
       })),
+      h("div", { class: "gkLootNote", text: "Loop je verder dan " + fmt(num(loot.rangeM, 15)) + " m weg, dan is de buit weg." }),
       h("div", { class: "gkInviteBtns" }, [
         h("button", { type: "button", class: "gkInviteYes", "data-act": "loot-all", disabled: busy ? true : null }, [ico("check-mark"), h("span", { text: "Alles pakken" })]),
         h("button", { type: "button", class: "gkInviteNo", "data-act": "loot-close" }, [ico("cancel"), h("span", { text: "Sluiten" })])]));
@@ -2463,7 +2431,8 @@ export function createGkHud(api) {
     // Fase 8 herstel: een stip op 📬 Post zolang er ongelezen post is.
     const postDot = num(data().s05?.mail?.unreadCount) > 0;
     const dockNow = root.dataset.dock || "";
-    const signature = JSON.stringify([p, m, dockNow, store.tab, tabs.map(function (tab) { return tab.id; }), questDot, postDot]);
+    const swapNow = openTrade();
+    const signature = JSON.stringify([p, m, dockNow, store.tab, tabs.map(function (tab) { return tab.id; }), questDot, postDot, swapNow?.tradeId || "", Boolean(swapNow?.waitingForMe)]);
     if (ui.sig.rail === signature) return;
     ui.sig.rail = signature;
     rail.hidden = m === "trade" || m === "craft";
@@ -2472,10 +2441,18 @@ export function createGkHud(api) {
     for (const tab of tabs) {
       const on = p === "open" && tab.id === store.tab;
       items.push(h("button", { type: "button", class: "gkTab" + (on ? " gkOn" : ""), "data-act": "tab", "data-id": tab.id, title: tab.title + (tab.key ? " (" + tab.key.slice(3) + ")" : ""), "aria-pressed": on ? "true" : "false" },
-        [ico(tab.icon), (tab.id === "quests" && questDot) || (tab.id === "post" && postDot) ? h("span", { class: "gkDot" }) : null]));
+        [ico(tab.icon), tab.id === "quests" && questDot ? h("span", { class: "gkDot" }) : null]));
     }
     // Kevin (3-11): onderin wat geen tabblad is: Chat en (tijdens een gesprek) Gesprek.
     items.push(h("span", { class: "gkRailGap" }));
+    railPost.classList.toggle("gkOn", dockNow === "post");
+    railPostDot.hidden = !postDot;
+    items.push(railPost);
+    if (swapNow) {
+      railSwap.classList.toggle("gkOn", dockNow === "swap");
+      railSwapDot.hidden = !swapNow.waitingForMe;
+      items.push(railSwap);
+    }
     railChat.classList.toggle("gkOn", dockNow === "chat");
     items.push(railChat);
     if (m === "talk") {
@@ -2507,10 +2484,10 @@ export function createGkHud(api) {
     if (view === "craft") parts.push(api.station(ui.craft?.stationId), d.s05?.crafting?.jobs);
     if (view === "quests") parts.push(d.s04?.quests, d.s04?.trackedQuest?.questId);
     if (view === "money") parts.push(d.s03?.currencies, d.s05?.trade);
-    if (view === "swap") parts.push(d.s05?.trade, d.s03?.catalog);
     // Fase 8 herstel: tijdens de winkel toont de tas wat de winkel ervoor betaalt; de post zijn berichten.
     if (view === "bag" && ui.trade) parts.push(api.vendor(ui.trade.vendorId)?.sells || null);
-    if (view === "post") parts.push(d.s05?.mail, ui.post.open, Boolean(ui.post.compose), ui.post.compose ? [d.s03?.inventory, d.s03?.currencies] : null);
+    // Fase 8 herstel 3: met Post of Ruilen onderin kun je uit de tas slepen (dan krijgen de vakjes een sleep-greep).
+    if (view === "bag") parts.push(root.dataset.dock || "", Boolean(ui.post.compose), openTrade()?.state || "");
     if (view === "skills") parts.push(d.s03?.skills?.slots, (d.s03?.skills?.list || []).map(function (e) { return e.abilityId + (e.unlocked ? "" : ":" + e.lock); }), d.s03?.skills?.auto, d.s03?.progression?.level, d.isAdmin);
     if (view === "chars") parts.push(ui.chars, ui.charsBusy);
     if (view === "settings") parts.push(d.isAdmin, d.defeated, store.floatNums, store.nameWorld, store.namePlayers, store.nameSelf,
@@ -2525,8 +2502,8 @@ export function createGkHud(api) {
     const scrollTop = viewChanged ? num(store.scroll[scrollKey]) : (oldBody ? oldBody.scrollTop : num(store.scroll[scrollKey]));
     const oldTop = sheet.querySelector(".gkSplitTop");
     const topScroll = !viewChanged && oldTop ? oldTop.scrollTop : 0;
-    const built = view === "bag" ? sheetBag() : view === "gear" ? sheetGear() : view === "skills" ? sheetSkills() : view === "quests" ? sheetQuests() : view === "money" ? sheetMoney() : view === "swap" ? sheetSwap()
-      : view === "post" ? sheetPost() : view === "chars" ? sheetChars() : view === "settings" ? sheetSettings() : view === "logout" ? sheetLogout() : view === "trade" ? sheetTrade() : sheetCraft();
+    const built = view === "bag" ? sheetBag() : view === "gear" ? sheetGear() : view === "skills" ? sheetSkills() : view === "quests" ? sheetQuests() : view === "money" ? sheetMoney()
+      : view === "chars" ? sheetChars() : view === "settings" ? sheetSettings() : view === "logout" ? sheetLogout() : view === "trade" ? sheetTrade() : sheetCraft();
     keepFocus(function () { replaceSheetChildren(built); });
     if (!viewChanged) sheet.style.animation = "none";
     else sheet.style.animation = "";
@@ -2541,6 +2518,75 @@ export function createGkHud(api) {
     const top = sheet.querySelector(".gkSplitTop");
     if (top) top.scrollTop = topScroll;
     padGrids();
+  }
+
+  // ---- Fase 8 herstel 3 (Kevin 13-11): Post en Ruilen onderin het paneel, net als chat en gesprek ----
+  // Je tas staat erboven; daaruit sleep je spullen naar je brief of naar de ruil.
+  function paneView() {
+    const dk = root.dataset.dock || "";
+    return dk === "post" || dk === "swap" ? dk : "";
+  }
+  function mailSendOn() {
+    return data().s05?.mail?.rules?.mailOn !== false;
+  }
+  // Waar slepen uit de tas heen gaat: "post" (brief), "swap" (ruil) of niets.
+  function giveTarget() {
+    const view = paneView();
+    if (view === "post" && mailSendOn()) return "post";
+    if (view === "swap" && openTrade()?.state === "open") return "swap";
+    return "";
+  }
+  function paneHead(icon, title) {
+    return h("div", { class: "gkSheetHead" }, [h("h2", null, [ico(icon), title]),
+      h("button", { type: "button", class: "gkClose", "data-act": "pane-close", title: "Dicht (Esc)" }, [ico("cancel")])]);
+  }
+  function renderPane() {
+    const view = paneView();
+    pane.hidden = !view;
+    if (!view) {
+      if (ui.sig.pane !== "") { ui.sig.pane = ""; ui.sig.paneView = ""; pane.replaceChildren(); }
+      return;
+    }
+    const d = data();
+    const parts = [view, Boolean(d.busy?.n05), ui.sure];
+    if (view === "swap") parts.push(d.s05?.trade, d.s03?.catalog, d.s03?.currencies);
+    else parts.push(d.s05?.mail, ui.post.open, Boolean(ui.post.compose), ui.post.compose ? [ui.post.compose.items, d.s03?.inventory, d.s03?.currencies] : null);
+    const signature = JSON.stringify(parts);
+    if (ui.sig.pane === signature) return;
+    const viewChanged = ui.sig.paneView !== view;
+    ui.sig.pane = signature;
+    ui.sig.paneView = view;
+    const oldBody = pane.querySelector(".gkBody");
+    const scrollTop = !viewChanged && oldBody ? oldBody.scrollTop : 0;
+    const built = view === "swap" ? sheetSwap() : sheetPost();
+    keepFocus(function () { pane.replaceChildren(...built); });
+    const body = pane.querySelector(".gkBody");
+    if (body) body.scrollTop = scrollTop;
+    padGrids();
+  }
+  function openPane(view, stay = false) {
+    if (view === "swap" && !openTrade()) { toast("Er loopt geen ruil. Houd een speler ingedrukt (of rechtsklik) en kies Ruilen.", { icon: "swap-bag" }); return; }
+    if (!stay && paneView() === view) { closePane(); return; }
+    // Een winkel, werkplaats of markt sluit; je tas komt erboven.
+    ui.trade = null;
+    ui.craft = null;
+    ui.market = null;
+    ui.dockPick = view;
+    store.tab = "bag";
+    store.item = null;
+    ui.combatAt = -1e9;
+    save();
+    ui.effective = "";
+    render();
+  }
+  function leavePane() {
+    ui.dockPick = ui.chatOpen ? "chat" : root.dataset.mode === "talk" ? "talk" : "";
+    ui.sure = "";
+  }
+  function closePane() {
+    leavePane();
+    ui.effective = "";
+    render();
   }
 
   // Houd een open itemkaart op zijn plek bij tasupdates. Zo herstarten het plaatje en de pop-animatie
@@ -2639,7 +2685,7 @@ export function createGkHud(api) {
   }
   // Na het tekenen: de laatste rij vol maken met lege vakjes, zoals een echte tas.
   function padGrids() {
-    for (const grid of root.querySelectorAll(".gkSheet .gkGrid, .gkTalkService .gkGrid")) {
+    for (const grid of root.querySelectorAll(".gkSheet .gkGrid, .gkTalkService .gkGrid, .gkPane .gkGrid")) {
       const columns = String(window.getComputedStyle(grid).gridTemplateColumns || "").split(" ").filter(Boolean).length;
       if (columns < 2) continue;
       for (const extra of grid.querySelectorAll(".gkPad")) extra.remove();
@@ -2693,11 +2739,16 @@ export function createGkHud(api) {
     const body = h("div", { class: "gkBody" });
     if (!all.length) body.append(emptyNote("knapsack", "Je tas is nog leeg. Pak iets op of verzamel iets in de wereld."));
     // Fase 8 herstel: in de winkel sleep je iets uit je tas naar de waren (verkopen) of een waar naar je tas (kopen).
-    else body.append(h("div", { class: "gkGrid", "data-drop": ui.trade ? "bag" : null }, shown.map(function (item) {
-      const questItem = item.def.questItem === true || item.category === "quest";
-      if (ui.bagSelect) return bagCell(item, { act: "bag-pick", on: ui.bagSelection.has(item.key), no: questItem, disabled: questItem });
-      return bagCell(item, { on: item.key === store.item, drag: ui.trade && item.def.tradable !== false && !questItem ? "sell:" + item.key : null });
-    }).concat(emptyCells(shown.length))));
+    // Fase 8 herstel 3 (Kevin 13-11): staat Post of Ruilen onderin open, dan sleep je uit je tas naar de brief of de ruil.
+    else {
+      const giveTo = ui.trade ? "" : giveTarget();
+      body.append(h("div", { class: "gkGrid", "data-drop": ui.trade ? "bag" : null }, shown.map(function (item) {
+        const questItem = item.def.questItem === true || item.category === "quest";
+        if (ui.bagSelect) return bagCell(item, { act: "bag-pick", on: ui.bagSelection.has(item.key), no: questItem, disabled: questItem });
+        const canGive = item.def.tradable !== false && !questItem;
+        return bagCell(item, { on: item.key === store.item, drag: !canGive ? null : ui.trade ? "sell:" + item.key : giveTo ? "give:" + item.key : null });
+      }).concat(emptyCells(shown.length))));
+    }
     const parts = [head("knapsack", "Tas", filters), body];
     if (ui.bagSelect) parts.push(bagSelectionBar(all));
     parts.push(bagFoot(all.length, all.reduce(function (sum, item) { return sum + bagEntryQuantity(item); }, 0)));
@@ -2781,6 +2832,10 @@ export function createGkHud(api) {
         const waiting = cooldownLeft(itemId) > 0;
         buttons.push(h("button", { type: "button", class: "gkBtn gkGo", "data-act": "use", "data-id": itemId, disabled: busy || waiting ? true : null },
           [ico(def.effect ? "sparkles" : "heart-plus", "plain"), "Gebruiken", h("em", { class: "gkCd gkCdBtn", "data-cd": itemId, hidden: true })]));
+      }
+      // Fase 8 herstel 3: staat Post onderin open, dan kun je dit item ook met een tik in je brief leggen (naast slepen).
+      if (giveTarget() === "post" && !ui.trade && def.tradable !== false && !def.questItem) {
+        buttons.push(h("button", { type: "button", class: "gkBtn gkGo", "data-act": "post-attach", "data-key": key, disabled: busy ? true : null }, [ico("envelope", "plain"), "In de brief"]));
       }
       // Fase 8b: staat er een ruil open, dan kun je dit item erin leggen.
       const swap = openTrade();
@@ -2992,20 +3047,23 @@ export function createGkHud(api) {
     return [head("two-coins", "Geld"), body];
   }
 
-  // Een nieuwe ruil opent zelf het tabblad Ruilen, zodat niemand een vraag mist.
+  // Een nieuwe ruil opent zelf Ruilen onderin het paneel (je tas erboven), zodat niemand een vraag mist.
+  // Fase 8 herstel 3 (Kevin 13-11): Ruilen is geen tabblad meer maar staat onderin, net als chat en gesprek.
   function watchTrade() {
     const trade = openTrade();
     const id = trade ? trade.tradeId : "";
     if (ui.swapSeen === id) return;
     ui.swapSeen = id;
     if (!trade) {
-      if (store.tab === "swap") { store.tab = "bag"; save(); }
+      if (ui.dockPick === "swap") ui.dockPick = ui.chatOpen ? "chat" : "talk";
       return;
     }
     if (trade.waitingForMe) toast(trade.partnerName + " wil met je ruilen.", { icon: "swap-bag" });
-    store.tab = "swap";
+    if (ui.trade || ui.craft || ui.market) { ui.trade = null; ui.craft = null; ui.market = null; store.item = null; }
+    ui.dockPick = "swap";
+    store.tab = "bag";
+    ui.combatAt = -1e9;
     save();
-    setPanel("open");
   }
 
   // ---- Fase 8b: ruilen met een speler ----
@@ -3025,10 +3083,11 @@ export function createGkHud(api) {
   }
   function sheetSwap() {
     const trade = openTrade();
-    if (!trade) return [head("swap-bag", "Ruilen"), h("div", { class: "gkBody" }, [emptyNote("swap-bag", "Er loopt geen ruil. Houd een speler ingedrukt (of rechtsklik) en kies Ruilen.")])];
+    if (!trade) return [paneHead("swap-bag", "Ruilen"), h("div", { class: "gkBody" }, [emptyNote("swap-bag", "Er loopt geen ruil. Houd een speler ingedrukt (of rechtsklik) en kies Ruilen.")])];
     const d = data();
     const busy = Boolean(d.busy?.n05);
-    const body = h("div", { class: "gkBody", "data-swap": trade.tradeId });
+    // Fase 8 herstel 3: sleep iets uit je tas (erboven) ergens op de ruil = aanbieden.
+    const body = h("div", { class: "gkBody", "data-swap": trade.tradeId, "data-drop": trade.state === "open" ? "swap" : null });
     if (trade.state === "invited") {
       body.append(h("div", { class: "gkSwapNote", text: trade.waitingForMe
         ? trade.partnerName + " wil met je ruilen."
@@ -3038,9 +3097,17 @@ export function createGkHud(api) {
           [ico("check-mark", "plain"), "Ruilen met " + trade.partnerName]) : null,
         h("button", { type: "button", class: "gkBtn gkWarn", "data-act": "swap-cancel", "data-id": trade.tradeId, disabled: busy ? true : null },
           [ico("cancel", "plain"), trade.waitingForMe ? "Nee" : "Afbreken"])]));
-      return [head("swap-bag", "Ruilen met " + trade.partnerName), body];
+      return [paneHead("swap-bag", "Ruilen met " + trade.partnerName), body];
     }
-    // Wat jij neerlegt: tik in je tas op een item en kies Aanbieden; hier haal je het er weer uit.
+    // Wat jij neerlegt: sleep het uit je tas (of tik een item en kies Aanbieden); hier haal je het er weer uit.
+    // Geld leg je erbij met het vakje onder "Jij geeft".
+    const moneyRows = currencies().map(function (c) {
+      const offered = num((trade.give || []).find(function (line) { return line.currencyId === c.currencyId; })?.quantity, 0);
+      return h("div", { class: "gkMoneySwap" }, [currencyVisual(c.currencyId),
+        h("input", { type: "number", class: "gkMoneyAmount", "data-swap-amount": c.currencyId, "data-focus-key": "swap-money-" + c.currencyId, min: "0", max: String(Math.max(0, c.amount)),
+          step: "1", value: String(offered), inputmode: "numeric", "aria-label": c.displayName + " in de ruil" }),
+        h("button", { type: "button", class: "gkBtn gkGo", "data-act": "swap-money", "data-id": c.currencyId, disabled: busy ? true : null }, [ico("swap-bag", "plain"), "In de ruil"])]);
+    });
     body.append(h("div", { class: "gkSwapSide" }, [h("div", { class: "gkSwapHead" }, [ico("knapsack", "plain"), h("span", { text: "Jij geeft" })]),
       trade.give.length
         ? h("div", { class: "gkGrid gkSwapGrid" }, trade.give.map(function (line) {
@@ -3049,7 +3116,7 @@ export function createGkHud(api) {
           [line.itemId ? itemVisual(line.itemId) : currencyVisual(line.currencyId),
             line.quantity > 1 ? h("span", { class: "gkQty", text: "×" + fmt(line.quantity) }) : null]);
         }))
-        : h("div", { class: "gkSwapNote", text: "Nog niets. Open je tas, tik een item en kies Aanbieden." })]));
+        : h("div", { class: "gkSwapNote", text: "Nog niets. Sleep iets uit je tas hierheen, of tik een item en kies Aanbieden." })].concat(moneyRows)));
     body.append(h("div", { class: "gkSwapSide" }, [h("div", { class: "gkSwapHead" }, [ico("three-friends", "plain"), h("span", { text: trade.partnerName + " geeft" })]),
       trade.get.length ? h("div", { class: "gkGrid gkSwapGrid" }, trade.get.map(tradeLineRow))
         : h("div", { class: "gkSwapNote", text: trade.partnerName + " heeft nog niets neergelegd." })]));
@@ -3063,7 +3130,7 @@ export function createGkHud(api) {
         disabled: busy || trade.iConfirmed ? true : null }, [ico("check-mark", "plain"), trade.iConfirmed ? "Ja gezegd" : "Ja, ruilen"]),
       h("button", { type: "button", class: "gkBtn gkWarn", "data-act": "swap-cancel", "data-id": trade.tradeId, disabled: busy ? true : null },
         [ico("cancel", "plain"), "Afbreken"])]));
-    return [head("swap-bag", "Ruilen met " + trade.partnerName), body];
+    return [paneHead("swap-bag", "Ruilen met " + trade.partnerName), body];
   }
 
   // ---- Fase 8 herstel: hulpjes voor winkel, markt en post ----
@@ -3218,28 +3285,81 @@ export function createGkHud(api) {
   }
 
   // ---- Fase 8 herstel: 📬 Post (je postbus; hoort bij je account, dus al je characters zien hem) ----
+  // Fase 8 herstel 3 (Kevin 13-11): spullen sleep je uit je tas in de brief (geen keuzelijst meer); hooguit 6 soorten per brief.
+  const POST_ITEM_KINDS = 6;
+  function newLetter(to) {
+    return { to: String(to || ""), subject: "", text: "", items: [], money: 0 };
+  }
+  // Hoeveel je van elk item in je tas hebt (wat je draagt telt niet, net als op de server).
+  function bagCounts() {
+    const counts = new Map();
+    for (const row of inventoryEntries()) {
+      const known = counts.get(row.entry.itemId);
+      counts.set(row.entry.itemId, { name: row.name, qty: (known ? known.qty : 0) + bagEntryQuantity(row) });
+    }
+    return counts;
+  }
+  function postItems(c, counts = bagCounts()) {
+    return (Array.isArray(c?.items) ? c.items : []).map(function (entry) {
+      const have = counts.get(entry.itemId);
+      const max = Math.max(1, num(have?.qty, 1));
+      return { itemId: entry.itemId, name: have?.name || catalogItem(entry.itemId)?.displayName || entry.itemId, have: num(have?.qty, 0),
+        quantity: Math.max(1, Math.min(max, Math.round(num(entry.quantity, 1)))) };
+    });
+  }
+  function listNl(parts) {
+    return parts.length < 2 ? parts.join("") : parts.slice(0, -1).join(", ") + " en " + parts[parts.length - 1];
+  }
   function postConfirmText(c) {
     const to = String(c?.to || "").trim();
     const money = currencies()[0] || null;
     const amount = Math.max(0, Math.round(num(c?.money, 0)));
-    const entry = c?.itemId ? inventoryEntries().find(function (row) { return row.entry.itemId === c.itemId; }) : null;
-    const parts = [];
-    if (c?.itemId) parts.push(Math.max(1, Math.round(num(c.qty, 1))) + "× " + (entry?.name || c.itemId));
+    const parts = postItems(c).map(function (entry) { return entry.quantity + "× " + entry.name; });
     if (amount > 0 && money) parts.push(fmt(amount) + " " + money.displayName);
     if (!to) return "Vul in aan wie je het stuurt.";
-    return parts.length ? "Je stuurt " + parts.join(" en ") + " naar " + to + ". Dat gaat meteen uit je tas." : "Je stuurt een bericht naar " + to + " (zonder spullen).";
+    return parts.length ? "Je stuurt " + listNl(parts) + " naar " + to + ". Dat gaat meteen uit je tas." : "Je stuurt een bericht naar " + to + " (zonder spullen).";
+  }
+  // Een item uit je tas in de brief (slepen of "In de brief"): een stapel gaat er helemaal in; het getal kun je daarna lager zetten.
+  function attachToPost(key) {
+    const item = inventoryEntries().find(function (row) { return row.key === key; });
+    if (!item) return;
+    if (item.def.tradable === false || item.def.questItem || item.category === "quest") { toast(item.name + " kun je niet versturen.", { tone: "error" }); return; }
+    if (!ui.post.compose) ui.post.compose = newLetter("");
+    const c = ui.post.compose;
+    if (!Array.isArray(c.items)) c.items = [];
+    const have = num(bagCounts().get(item.entry.itemId)?.qty, 1);
+    const known = c.items.find(function (entry) { return entry.itemId === item.entry.itemId; });
+    if (known) known.quantity = Math.min(have, Math.round(num(known.quantity, 1)) + bagEntryQuantity(item));
+    else if (c.items.length >= POST_ITEM_KINDS) { toast("Hooguit " + POST_ITEM_KINDS + " soorten items in één brief.", { tone: "error" }); return; }
+    else c.items.push({ itemId: item.entry.itemId, quantity: Math.min(have, bagEntryQuantity(item)) });
+    store.item = null;
+    ui.sure = "";
+    save();
+    renderSheet();
+    renderPane();
+  }
+  // Een item uit je tas in de ruil (slepen): er komt de hele stapel bij wat er al lag (nooit meer dan je hebt).
+  function offerToSwap(key) {
+    const swap = openTrade();
+    const item = inventoryEntries().find(function (row) { return row.key === key; });
+    if (!swap || swap.state !== "open" || !item) return;
+    const itemId = item.entry.itemId;
+    const already = num((swap.give || []).find(function (line) { return line.itemId === itemId; })?.quantity, 0);
+    const have = num(bagCounts().get(itemId)?.qty, 1);
+    const qty = Math.max(1, Math.min(have, already + bagEntryQuantity(item)));
+    if (qty === already) { toast("Alles van " + item.name + " ligt al in de ruil.", { icon: "swap-bag", ms: 2000 }); return; }
+    api.run05("trade_offer", { tradeId: swap.tradeId, itemId, quantity: qty });
   }
   function postCompose(c, busy) {
-    const options = new Map();
-    for (const row of inventoryEntries()) {
-      if (row.def.tradable === false || row.def.questItem) continue;
-      const qty = bagEntryQuantity(row);
-      const known = options.get(row.entry.itemId);
-      options.set(row.entry.itemId, { name: row.name, qty: (known ? known.qty : 0) + qty });
-    }
     const money = currencies()[0] || null;
-    const maxQty = options.get(c.itemId)?.qty || 1;
+    const items = postItems(c);
     const field = function (label, children) { return h("label", { class: "gkMktField gkPostField" }, [h("span", { text: label })].concat(children)); };
+    const itemList = h("div", { class: "gkPostItems" }, items.length ? items.map(function (entry) {
+      return h("div", { class: "gkPostItem" }, [smallCell(entry.itemId), h("span", { class: "gkPostItemName", text: entry.name }),
+        h("input", { type: "number", class: "gkPostQty", min: "1", max: String(Math.max(1, entry.have)), step: "1", value: String(entry.quantity), inputmode: "numeric",
+          "data-post-item-qty": entry.itemId, "data-focus-key": "post-qty-" + entry.itemId, "aria-label": "Hoeveel " + entry.name }),
+        h("button", { type: "button", class: "gkClose gkPostDetach", "data-act": "post-detach", "data-id": entry.itemId, title: "Uit de brief halen" }, [ico("cancel")])]);
+    }) : [h("div", { class: "gkPostDropHint" }, [ico("knapsack", "plain"), h("span", { text: "Sleep spullen uit je tas (erboven) hierheen. Of tik in je tas op een item en kies In de brief." })])]);
     const textArea = h("textarea", { class: "gkPostInput", rows: "3", maxlength: "500", "data-post-field": "text", "data-focus-key": "post-text", placeholder: "Je bericht" });
     textArea.value = c.text || "";
     const sure = ui.sure === "post-send";
@@ -3249,12 +3369,7 @@ export function createGkHud(api) {
       field("Onderwerp", [h("input", { type: "text", class: "gkPostInput", maxlength: "60", value: c.subject || "", placeholder: "(mag leeg)", autocomplete: "off",
         "data-post-field": "subject", "data-focus-key": "post-subject" })]),
       field("Bericht", [textArea]),
-      field("Item erbij", [h("select", { class: "gkPostInput", "data-post-field": "itemId", "data-focus-key": "post-item" },
-        [h("option", { value: "", text: "Geen item" })].concat(Array.from(options, function (entry) {
-          return h("option", { value: entry[0], text: entry[1].name + " (" + entry[1].qty + ")", selected: c.itemId === entry[0] ? true : null });
-        }))),
-      c.itemId ? h("input", { type: "number", class: "gkPostQty", min: "1", max: String(maxQty), step: "1", value: String(Math.max(1, Math.min(maxQty, Math.round(num(c.qty, 1))))),
-        inputmode: "numeric", "data-post-field": "qty", "data-focus-key": "post-qty", "aria-label": "Hoeveel" }) : null]),
+      h("div", { class: "gkMktField gkPostField" }, [h("span", { text: "Spullen" }), itemList]),
       money ? field("Geld erbij", [h("input", { type: "number", class: "gkPostQty", min: "0", max: String(Math.max(0, money.amount)), step: "1", value: String(Math.max(0, Math.round(num(c.money, 0)))),
         inputmode: "numeric", "data-post-field": "money", "data-focus-key": "post-money", "aria-label": money.displayName }), currencyVisual(money.currencyId)]) : null,
       h("div", { class: "gkSwapConfirm" }, [ico("scroll-unfurled", "plain"), h("strong", { "data-post-confirm": "1", text: postConfirmText(c) })]),
@@ -3293,7 +3408,8 @@ export function createGkHud(api) {
     const list = mail.messages || [];
     const sendOff = mail.rules?.mailOn === false;
     const compose = ui.post.compose;
-    const body = h("div", { class: "gkBody" });
+    // Fase 8 herstel 3: sleep iets uit je tas (erboven) op de post = in je brief (zonder brief begint er een nieuwe).
+    const body = h("div", { class: "gkBody", "data-drop": sendOff ? null : "post" });
     body.append(h("div", { class: "gkBtns gkPostTools" }, [
       compose ? null : h("button", { type: "button", class: "gkBtn gkGo", "data-act": "post-new", disabled: sendOff ? true : null,
         title: sendOff ? "Post sturen staat uit in deze wereld" : null }, [ico("paper-plane", "plain"), "Nieuw bericht"]),
@@ -3303,7 +3419,7 @@ export function createGkHud(api) {
     if (!list.length && !compose) body.append(emptyNote("envelope", "Je postbus is leeg. Hier komt post van andere spelers en het geld van wat je op de markt verkocht."));
     for (const msg of list) body.append(postCard(msg, busy));
     body.append(h("div", { class: "gkPostFoot", text: fmt(mail.total) + " van " + fmt(mail.max) + " berichten · al je characters zien deze postbus" }));
-    return [head("envelope", "Post" + (num(mail.unreadCount) ? " (" + num(mail.unreadCount) + " nieuw)" : "")), body];
+    return [paneHead("envelope", "Post" + (num(mail.unreadCount) ? " (" + num(mail.unreadCount) + " nieuw)" : "")), body];
   }
 
   // Fase 5: 📖 vaardigheden. Vak 1 = vaste auto-aanval; de rest sleep je naar vak 2 of 3 (of tik op 2/3).
@@ -3440,7 +3556,7 @@ export function createGkHud(api) {
     const list = h("div", { class: "gkList" }, [
       h("div", { class: "gkRow" }, [ico("magic-portal"), h("span", null, ["Vastgelopen?", h("small", { text: "Terug naar je laatste portal of respawnplek." })]),
         h("button", { type: "button", class: "gkBtn", "data-act": "unstuck", disabled: d.busy?.n03 || d.defeated }, ["Unstuck"])]),
-      toggle("autoLoot", "chest", "Automatisch buit pakken", "Aan = alles gaat meteen in je tas. Uit = je kiest zelf wat je meeneemt (ook bij spullen op de grond).", store.autoLoot === true),
+      toggle("autoLoot", "chest", "Automatisch buit pakken", "Aan = buit van vijanden en grondstoffen gaat meteen in je tas. Uit = je kiest zelf wat je meeneemt (buitvenster).", store.autoLoot === true),
       sectionGroup("settings-server", "Serverstatus onderin", serverRows, true),
       sectionGroup("settings-view", "Spelbeeld", viewRows, true),
       h("p", { class: "gkCredits" }, ["Iconen: ", h("a", { href: "https://game-icons.net", target: "_blank", rel: "noopener", text: "game-icons.net" }), " (Lorc, Delapouite en anderen), CC BY 3.0"])
@@ -4371,6 +4487,7 @@ export function createGkHud(api) {
     renderRail();
     renderSheet();
     renderTalk();
+    renderPane();
     renderChat();
   }
   function openTab(id) {
@@ -4382,6 +4499,7 @@ export function createGkHud(api) {
     }
     const panelNow = root.dataset.panel;
     if (panelNow === "open" && store.tab === id && root.dataset.mode !== "trade" && root.dataset.mode !== "craft") {
+      if (paneView()) leavePane();
       setPanel("rail");
       return;
     }
@@ -4394,6 +4512,8 @@ export function createGkHud(api) {
   }
   function shrinkPanel() {
     const panelNow = root.dataset.panel;
+    // Post of Ruilen onderin: het pijltje doet die dicht.
+    if (paneView()) { closePane(); return; }
     // Bij een gesprek sluit het pijltje alles in één keer. Zo blijft na een
     // winkel of werkplaats niet eerst alleen het gesprek achter.
     if (root.dataset.dock === "talk" || ui.trade || ui.craft || ui.market) {
@@ -4432,6 +4552,7 @@ export function createGkHud(api) {
   function renderSheetOrService() {
     renderSheet();
     if (ui.trade || ui.craft || ui.market) renderTalk();
+    renderPane();
   }
   function confirmTwice(key) {
     if (ui.sure === key) {
@@ -4533,8 +4654,7 @@ export function createGkHud(api) {
     doBtn.classList.add("gkFlash");
     if (!ui.doTarget) { toast("Er is niets in de buurt om te doen.", { icon: "hand", ms: 2000 }); return; }
     if (doKindOf(ui.doTarget) === "talk") talkTo(ui.doTarget);
-    else if (doKindOf(ui.doTarget) === "pickup" && !autoLootOn() && ui.pickup?.instanceId !== String(ui.doTarget.instanceId)) openPickup(ui.doTarget);
-    else { if (ui.pickup) { ui.pickup = null; ui.sig.loot = null; } api.activate(ui.doTarget); }
+    else api.activate(ui.doTarget);
   }
 
   function onClick(event) {
@@ -4551,7 +4671,10 @@ export function createGkHud(api) {
       case "handle": shrinkPanel(); break;
       case "grow": setPanel("rail"); break;
       case "bag": openTab("bag"); break;
-      case "close": if (ui.trade || ui.craft || ui.market) endService(); else setPanel("closed"); break;
+      case "close":
+        if (ui.trade || ui.craft || ui.market) endService();
+        else { if (paneView()) leavePane(); setPanel("closed"); }
+        break;
       case "filter": store.filter = id; store.item = null; save(); renderSheet(); break;
       case "bag-select":
         ui.bagSelect = !ui.bagSelect;
@@ -4777,7 +4900,8 @@ export function createGkHud(api) {
       }
       case "swap-money": {
         const swap = openTrade();
-        const field = root.querySelector('[data-swap-amount="' + String(id).replace(/"/g, "") + '"]');
+        // Het vakje naast deze knop (Ruilen onderin en het tabblad Geld hebben er allebei een).
+        const field = el.closest(".gkMoneySwap")?.querySelector("[data-swap-amount]") || root.querySelector('[data-swap-amount="' + String(id).replace(/"/g, "") + '"]');
         if (swap && id) api.run05("trade_offer", { tradeId: swap.tradeId, currencyId: id, quantity: Math.max(0, Math.round(num(field?.value, 0))) });
         break;
       }
@@ -4811,29 +4935,35 @@ export function createGkHud(api) {
         const msg = (data().s05?.mail?.messages || []).find(function (entry) { return entry.mailId === id; });
         ui.post.open = ui.post.open === id ? "" : id;
         if (msg && msg.state === "unread" && ui.post.open === id) api.run05("mail_read", { mailId: id });
-        renderSheet();
+        renderPane();
         break;
       }
       case "post-claim": api.run05("mail_claim", { mailId: id }); break;
       case "post-claim-all": api.run05("mail_claim_all", {}); break;
       case "post-delete": if (confirmTwice("post-delete:" + id)) api.run05("mail_delete", { mailId: id }); break;
-      case "post-new": ui.post.compose = { to: "", subject: "", text: "", itemId: "", qty: 1, money: 0 }; renderSheet(); break;
+      case "post-new": ui.post.compose = newLetter(""); renderPane(); renderSheet(); break;
       case "post-reply": {
         const msg = (data().s05?.mail?.messages || []).find(function (entry) { return entry.mailId === id; });
-        ui.post.compose = { to: msg?.fromName || "", subject: msg?.subject ? ("Re: " + msg.subject).slice(0, 60) : "", text: "", itemId: "", qty: 1, money: 0 };
+        ui.post.compose = Object.assign(newLetter(msg?.fromName || ""), { subject: msg?.subject ? ("Re: " + msg.subject).slice(0, 60) : "" });
+        renderPane();
         renderSheet();
         break;
       }
-      case "post-cancel": ui.post.compose = null; ui.sure = ""; renderSheet(); break;
+      case "post-cancel": ui.post.compose = null; ui.sure = ""; renderPane(); renderSheet(); break;
+      // Fase 8 herstel 3: spullen in de brief leggen (tik in de tas) of eruit halen (kruisje).
+      case "post-attach": attachToPost(key); break;
+      case "post-detach":
+        if (ui.post.compose) {
+          ui.post.compose.items = (ui.post.compose.items || []).filter(function (entry) { return entry.itemId !== id; });
+          ui.sure = "";
+          renderPane();
+        }
+        break;
       case "post-to": {
         const name = ui.menu?.name || "";
         closeMenu();
-        if (ui.trade || ui.craft || ui.market) endService();
-        ui.post.compose = { to: name, subject: "", text: "", itemId: "", qty: 1, money: 0 };
-        store.tab = "post";
-        store.item = null;
-        ui.combatAt = -1e9;
-        setPanel("open");
+        ui.post.compose = newLetter(name);
+        openPane("post", true);
         break;
       }
       case "post-send": {
@@ -4841,12 +4971,13 @@ export function createGkHud(api) {
         if (!c) break;
         const money = currencies()[0] || null;
         const amount = Math.max(0, Math.round(num(c.money, 0)));
-        const hasStuff = Boolean(c.itemId) || amount > 0;
+        const items = postItems(c).map(function (entry) { return { itemId: entry.itemId, quantity: entry.quantity }; });
+        const hasStuff = items.length > 0 || amount > 0;
         // Met spullen of geld erbij: twee keer tikken (je geeft het echt weg).
         if (hasStuff && !confirmTwice("post-send")) break;
-        Promise.resolve(api.run05("mail_send", { toName: c.to, subject: c.subject, text: c.text, itemId: c.itemId || null,
-          quantity: c.itemId ? Math.max(1, Math.round(num(c.qty, 1))) : null, currencyId: amount > 0 && money ? money.currencyId : null, amountMinor: amount > 0 ? amount : null }))
-          .then(function (result) { if (result && result.ok) { ui.post.compose = null; renderSheet(); } });
+        Promise.resolve(api.run05("mail_send", { toName: c.to, subject: c.subject, text: c.text, items,
+          currencyId: amount > 0 && money ? money.currencyId : null, amountMinor: amount > 0 ? amount : null }))
+          .then(function (result) { if (result && result.ok) { ui.post.compose = null; renderPane(); renderSheet(); } });
         break;
       }
       case "craft": if (ui.craft) api.run05("craft", { stationId: ui.craft.stationId, recipeId: id }); break;
@@ -4895,17 +5026,10 @@ export function createGkHud(api) {
           renderMenu();
         }
         break;
-      case "loot-take": api.run03("loot_take", null, { lootId: id, entryKey: key }); break;
+      case "loot-take": api.run03("loot_take", null, { entryKey: key }); break;
       case "loot-all": api.run03("loot_take_all", null, {}); break;
       case "loot-close": ui.lootHidden = true; ui.sig.loot = null; renderLoot(); break;
       case "loot-open": ui.lootHidden = false; ui.sig.loot = null; renderLoot(); break;
-      case "pickup-take": {
-        const target = pickupTarget();
-        ui.pickup = null; ui.sig.loot = null; renderLoot();
-        if (target) api.activate(target);
-        break;
-      }
-      case "pickup-no": ui.pickup = null; ui.sig.loot = null; renderLoot(); break;
       case "invite-yes": partyAct("accept", { inviteId: id }); break;
       case "invite-no": partyAct("decline", { inviteId: id }); break;
       case "portal-go":
@@ -4924,10 +5048,12 @@ export function createGkHud(api) {
       // MMO stap 2 (3-11): chat.
       case "chat-open": if (chatShown()) closeChat(); else openChat({}); break;
       case "dock":
-        if (id === "talk") { ui.dockPick = "talk"; render(); }
+        if (id === "post" || id === "swap") openPane(id);
+        else if (id === "talk") { ui.dockPick = "talk"; render(); }
         else if (chatShown()) closeChat();
         else openChat({});
         break;
+      case "pane-close": closePane(); break;
       case "chat-close": closeChat(); break;
       case "chat-tab": chatTab(id); break;
       case "chat-send": submitChat(); break;
@@ -4987,8 +5113,8 @@ export function createGkHud(api) {
   // De selectie voert zelf geen actie uit: weggooien blijft achter de bevestigingsknop zitten.
   function startBagTouchSelection(event, cell) {
     if (!cell || cell.disabled || event.pointerType === "mouse" || event.button > 0) return false;
-    // Fase 8 herstel: in de winkel betekent slepen uit je tas "verkopen", ook op een telefoon.
-    if (ui.trade && cell.dataset.drag) return false;
+    // Fase 8 herstel: in de winkel betekent slepen uit je tas "verkopen"; herstel 3: bij Post/Ruilen "erin leggen". Ook op een telefoon.
+    if (cell.dataset.drag) return false;
     const start = { x: event.clientX, y: event.clientY };
     let active = false;
     let cancelled = false;
@@ -5046,6 +5172,14 @@ export function createGkHud(api) {
   }
 
   // Slepen in de winkel: een waar naar je tas = kopen, iets uit je tas naar de waren = verkopen.
+  // Fase 8 herstel 3: met Post of Ruilen onderin = iets uit je tas naar de brief of de ruil.
+  function dropZoneFor(drag) {
+    const kind = String(drag || "").split(":")[0];
+    if (kind === "buy") return "bag";
+    if (kind === "sell") return "wares";
+    if (kind === "give") return giveTarget();
+    return "";
+  }
   function onPointerDown(event) {
     // MMO (3-11): naast het menu tikken = menu dicht; lang drukken op een teamlid = menu.
     if (event.target === menuShade) { event.preventDefault(); closeMenu(); return; }
@@ -5058,8 +5192,18 @@ export function createGkHud(api) {
     const start = { x: event.clientX, y: event.clientY };
     let ghost = null;
     let over = null;
+    // Op een telefoon eerst even vasthouden (dan trilt hij kort); meteen vegen blijft gewoon scrollen.
+    const finger = Boolean(event.pointerType) && event.pointerType !== "mouse";
+    let armed = !finger;
+    const holdTimer = finger ? window.setTimeout(function () {
+      armed = true;
+      ui.touchDrag = true;
+      if (typeof navigator.vibrate === "function") navigator.vibrate(12);
+    }, 220) : 0;
     const move = function (moveEvent) {
-      if (!ghost && Math.hypot(moveEvent.clientX - start.x, moveEvent.clientY - start.y) < 10) return;
+      const far = Math.hypot(moveEvent.clientX - start.x, moveEvent.clientY - start.y) >= 10;
+      if (!armed) { if (far) up(); return; }
+      if (!ghost && !far) return;
       if (!ghost) {
         ghost = source.cloneNode(true);
         ghost.classList.add("gkDrag");
@@ -5072,12 +5216,14 @@ export function createGkHud(api) {
       if (zone !== over) {
         if (over) over.classList.remove("gkDropOk");
         over = zone;
-        const wanted = String(source.dataset.drag).startsWith("buy:") ? "bag" : "wares";
-        if (over && over.dataset.drop === wanted) over.classList.add("gkDropOk");
+        const wanted = dropZoneFor(source.dataset.drag);
+        if (over && wanted && over.dataset.drop === wanted) over.classList.add("gkDropOk");
         else over = null;
       }
     };
     const up = function () {
+      window.clearTimeout(holdTimer);
+      ui.touchDrag = false;
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", up);
@@ -5091,7 +5237,10 @@ export function createGkHud(api) {
         // "buy:<waar>" = kopen; "sell:<tasvak>" = verkopen (Fase 8 herstel: per item uit je tas, niet alleen wat de winkel zelf verkoopt).
         const parts = String(source.dataset.drag).split(":");
         const ref = parts.slice(1).join(":");
-        if (ui.trade && ref) {
+        if (parts[0] === "give" && ref) {
+          if (over.dataset.drop === "post") attachToPost(ref);
+          else if (over.dataset.drop === "swap") offerToSwap(ref);
+        } else if (ui.trade && ref) {
           if (parts[0] === "buy") api.run05("vendor_buy", { vendorId: ui.trade.vendorId, offerId: ref, quantity: 1 });
           else { const itemId = itemPayload(ref).itemId; if (itemId) api.run05("vendor_sell", { vendorId: ui.trade.vendorId, itemId, quantity: 1 }); }
         }
@@ -5111,6 +5260,7 @@ export function createGkHud(api) {
       if (chatShown()) { closeChat(); return true; }
       if (ui.bigMap) { ui.bigMap = false; syncBigMap(); return true; }
       if (store.item) { store.item = null; save(); renderSheetOrService(); return true; }
+      if (paneView()) { closePane(); return true; }
       if (ui.trade || ui.craft || ui.market) { endService(); return true; }
       if (ui.serviceTalk) { endServiceTalk(); return true; }
       if (data().dialogue) { api.closeDialogue(); return true; }
@@ -5180,10 +5330,17 @@ export function createGkHud(api) {
       if (line && pickNow) line.textContent = marketSellText(pickNow, ui.market.qty, ui.market.price, num(m.taxPct), m);
       return;
     }
+    // Fase 8 herstel 3: hoeveel van een item in de brief gaat.
+    if (el.dataset.postItemQty && ui.post.compose) {
+      const entry = (ui.post.compose.items || []).find(function (row) { return row.itemId === el.dataset.postItemQty; });
+      if (entry) entry.quantity = Math.max(1, Math.round(num(el.value, 1)));
+      const line = root.querySelector("[data-post-confirm]");
+      if (line) line.textContent = postConfirmText(ui.post.compose);
+      return;
+    }
     if (el.dataset.postField && ui.post.compose) {
       const field = el.dataset.postField;
-      ui.post.compose[field] = field === "qty" || field === "money" ? num(el.value, 0) : String(el.value || "");
-      if (field === "itemId" && event.type === "change") { ui.post.compose.qty = 1; ui.sig.sheet = ""; renderSheet(); return; }
+      ui.post.compose[field] = field === "money" ? num(el.value, 0) : String(el.value || "");
       const line = root.querySelector("[data-post-confirm]");
       if (line) line.textContent = postConfirmText(ui.post.compose);
     }
@@ -5191,6 +5348,7 @@ export function createGkHud(api) {
   root.addEventListener("input", onFieldInput);
   root.addEventListener("change", onFieldInput);
   root.addEventListener("pointerdown", onPointerDown);
+  for (const area of [sheet, talk]) area.addEventListener("touchmove", function (event) { if (ui.touchDrag && event.cancelable) event.preventDefault(); }, { passive: false });
   // MMO (3-11): rechtsklik op een teamlid = spelermenu; nooit het browsermenu over het spelermenu heen.
   root.addEventListener("contextmenu", function (event) {
     const target = event.target && typeof event.target.closest === "function" ? event.target : null;
@@ -5231,9 +5389,8 @@ export function createGkHud(api) {
         : "Tik op een portal op de kaart om te reizen.", { icon: "magic-portal", ms: 3000 });
     },
     openCharacters() { openTab("chars"); },
-    // Fase 8 herstel 2: game.js vraagt dit bij elke spelactie (de server onthoudt het) en bij een klik op een pickup.
+    // Fase 8 herstel 2: game.js stuurt dit bij elke spelactie mee (de server onthoudt het).
     autoLoot() { return autoLootOn(); },
-    openPickup(target) { openPickup(target); },
     // kind: "connected" | "connecting" | "reconnecting" | "disconnected" (uit game.js).
     // detail = extra uitleg in de tooltip; de compacte meetwaarden krijgen ieder hun eigen gezondheidskleur.
     setConnection(kind, detail = "", pingMs = null, health = null) {

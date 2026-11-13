@@ -62,6 +62,9 @@ function catalogSection(catalogs, key) {
   return catalogs && typeof catalogs[key] === "object" && catalogs[key] ? catalogs[key] : {};
 }
 
+// Fase 8 herstel 3: zoveel soorten items mogen in één brief.
+const MAIL_ITEM_KINDS = 6;
+
 function policiesOfType(project, type) {
   return Array.isArray(project?.playerRules?.byType?.[type]) ? project.playerRules.byType[type] : [];
 }
@@ -1928,11 +1931,19 @@ export class Node05EconomyRuntimeService {
     `).get(...owners, now())?.total, 0);
     const max = Math.max(1, safeInteger(rules.mailMax, 100));
     if (full >= max) throw httpError(409, "De postbus van " + name + " is vol (" + max + " berichten).");
-    const itemId = safeString(payload.itemId || payload.item_id, "");
-    const itemQty = itemId ? normalizeQuantity(payload.quantity, 1) : 0;
+    // Fase 8 herstel 3 (Kevin 13-11): meerdere items in één brief (slepen uit je tas). itemId/quantity werkt ook nog.
+    const wanted = new Map();
+    const list = Array.isArray(payload.items) ? payload.items : [];
+    for (const entry of list) {
+      const id = safeString(entry?.itemId || entry?.item_id, "");
+      if (id) wanted.set(id, (wanted.get(id) || 0) + normalizeQuantity(entry?.quantity, 1));
+    }
+    const single = safeString(payload.itemId || payload.item_id, "");
+    if (single) wanted.set(single, (wanted.get(single) || 0) + normalizeQuantity(payload.quantity, 1));
+    if (wanted.size > MAIL_ITEM_KINDS) throw httpError(400, "Hooguit " + MAIL_ITEM_KINDS + " soorten items in één brief.");
     const currencyId = safeString(payload.currencyId || payload.currency_id, "");
     const amount = currencyId ? Math.max(0, safeInteger(payload.amountMinor || payload.amount_minor, 0)) : 0;
-    if (itemId) {
+    for (const [itemId, itemQty] of wanted) {
       const item = catalogSection(ctx.catalogs, "items")[itemId] || null;
       if (!item) throw httpError(400, "Dat item bestaat niet (meer).");
       if (!itemIsTradable(item)) throw httpError(403, displayForItem(ctx.catalogs, itemId) + " kun je niet versturen.");
@@ -1940,19 +1951,22 @@ export class Node05EconomyRuntimeService {
     }
     if (amount > 0 && !catalogSection(ctx.catalogs, "currencies")[currencyId]) throw httpError(400, "Die valuta bestaat niet.");
     const text = playerText(payload.text, 500);
-    if (!text && !itemId && amount <= 0) throw httpError(400, "Schrijf iets, of stuur een item of geld mee.");
+    if (!text && !wanted.size && amount <= 0) throw httpError(400, "Schrijf iets, of stuur een item of geld mee.");
     const me = this.playerName(ctx.profile.id);
     const subject = playerText(payload.subject, 60) || "Post van " + me;
     const attachments = [];
-    if (itemId) attachments.push({ kind: "item_stack", assetId: itemId, quantityMinor: itemQty });
+    for (const [itemId, itemQty] of wanted) attachments.push({ kind: "item_stack", assetId: itemId, quantityMinor: itemQty });
     if (amount > 0) attachments.push({ kind: "currency", assetId: currencyId, quantityMinor: amount });
     const mailId = this.createSystemMail(target.id, "system_delivery", subject, text, attachments, "player:" + ctx.profile.id,
       Math.max(1, safeInteger(rules.mailKeepDays, 30)));
-    if (itemId) this.removeItem(ctx, itemId, itemQty, "mail_send", mailId, operationId);
+    for (const [itemId, itemQty] of wanted) this.removeItem(ctx, itemId, itemQty, "mail_send", mailId, operationId);
     if (amount > 0) this.spendCurrency(ctx, currencyId, amount, "mail_send", mailId, operationId);
-    this.node03RuntimeService.recordGameplayEvent(ctx, "mail_send", "player", target.id, { mailId, itemId: itemId || null, quantity: itemQty, currencyId: amount > 0 ? currencyId : null, amount });
-    const parts = [itemId ? itemQty + "× " + displayForItem(ctx.catalogs, itemId) : "", amount > 0 ? amount + " " + displayForCurrency(ctx.catalogs, currencyId) : ""].filter(Boolean);
-    return { action: "mail_send", mailId, notify: [target.id], message: "Post verstuurd naar " + name + (parts.length ? " met " + parts.join(" en ") : "") + "." };
+    const items = Array.from(wanted, ([itemId, quantity]) => ({ itemId, quantity }));
+    this.node03RuntimeService.recordGameplayEvent(ctx, "mail_send", "player", target.id, { mailId, items, currencyId: amount > 0 ? currencyId : null, amount });
+    const parts = items.map((entry) => entry.quantity + "× " + displayForItem(ctx.catalogs, entry.itemId))
+      .concat(amount > 0 ? [amount + " " + displayForCurrency(ctx.catalogs, currencyId)] : []);
+    const listText = parts.length > 1 ? parts.slice(0, -1).join(", ") + " en " + parts[parts.length - 1] : parts.join("");
+    return { action: "mail_send", mailId, notify: [target.id], message: "Post verstuurd naar " + name + (parts.length ? " met " + listText : "") + "." };
   }
 
   // Fase 8 herstel: wat te lang op de markt stond, gaat met de post terug naar de verkoper.
