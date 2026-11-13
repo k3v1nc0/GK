@@ -1,6 +1,7 @@
 // Werkbank Fase 8, herstel 2 en 3 na Kevins handtests (12-11 en 13-11).
 // B: buitvenster (zelf kiezen wat je meeneemt) en "Automatisch buit pakken" in het game-menu.
-//    Herstel 3: alle buit in de buurt samen (gelijke dingen opgeteld); weglopen of doodgaan = weg; los item meteen pakken.
+//    Herstel 3: alle buit in de buurt samen (gelijke dingen opgeteld); los item meteen pakken.
+//    Herstel 4 (zoals ESO): één soort meteen in de tas; weglopen sluit alleen het venster (pakken kan dan niet); doodgaan = weg.
 // E: een oude of verlopen ruil blijft niet meer hangen. Herstel 3: Post en Ruilen onderin, spullen slepen (meer items per brief).
 // F: de marktbelasting betaalt de koper erbovenop; de verkoper krijgt zijn hele prijs.
 import test from "node:test";
@@ -55,13 +56,13 @@ function setup(options = {}) {
   };
   let counter = 0;
   // Net als de echte route: alles in één transactie (een fout rolt alles terug).
-  const run = (id, perform) => {
+  const run = (id, perform, position = null) => {
     const opId = "op_" + (counter += 1);
-    const where = ctx(id);
+    const where = position ? Object.assign(ctx(id), { position }) : ctx(id);
     return runOperation(db, { operationId: opId, playerId: id, operationType: "test", requestHash: opId,
       perform: () => perform(where, opId), buildResponse: (result) => Object.assign({ ok: true, operationId: opId }, result) });
   };
-  const act03 = (id, action, payload = {}) => run(id, (where, opId) => node03.performAction(where, action, payload, opId));
+  const act03 = (id, action, payload = {}, position = null) => run(id, (where, opId) => node03.performAction(where, action, payload, opId), position);
   const act05 = (id, action, payload = {}) => run(id, (where, opId) => svc.performAction(where, action, payload, opId));
   const hold = (id, rows, label = "Wolf", kind = "enemy", at = null) => node03.holdLoot(ctx(id), id, kind, "actor:wolf", label, rows, kind === "enemy" ? "actor_defeated" : "resource_gathered", "op_hold_" + (counter += 1), at);
   const at = (id, x, z) => Object.assign(ctx(id), { position: { x, y: 0, z } });
@@ -95,25 +96,27 @@ test("buit: klaarleggen, één soort pakken, daarna alles pakken", () => {
   assert.ok(lootId);
   assert.equal(world.items("p1", "item.pelt"), 0, "nog niet in je tas");
   const view = world.node03.lootForHud(world.ctx("p1"));
-  assert.deepEqual(view.ids, [lootId]);
   assert.equal(view.keepSeconds, 300);
-  assert.equal(view.rangeM, 15, "standaard 15 m");
-  assert.equal(view.from, "Wolf");
-  assert.deepEqual(view.rows.map((row) => [row.key, row.kind, row.displayName, row.quantity]),
-    [["currency:currency.gold", "currency", "Goud", 7], ["item:item.pelt", "item", "Vacht", 2]], "geld bovenaan");
-  assert.equal(world.node03.lootForHud(world.ctx("p2")).rows.length, 0, "Bob ziet Anna's buit niet");
+  assert.equal(view.rangeM, 3, "standaard 3 m");
+  assert.equal(view.spots.length, 1);
+  assert.equal(view.spots[0].id, lootId);
+  assert.equal(view.spots[0].label, "Wolf");
+  assert.deepEqual([view.spots[0].x, view.spots[0].z], [0, 0], "de plek waar de speler stond");
+  assert.deepEqual(view.spots[0].entries.map((entry) => [entry.key, entry.kind, entry.displayName, entry.quantity]),
+    [["item:item.pelt", "item", "Vacht", 2], ["currency:currency.gold", "currency", "Goud", 7]]);
+  assert.equal(world.node03.lootForHud(world.ctx("p2")).spots.length, 0, "Bob ziet Anna's buit niet");
   // Eén soort: alleen de vacht.
   world.act03("p1", "loot_take", { entryKey: "item:item.pelt" });
   assert.equal(world.items("p1", "item.pelt"), 2);
   assert.equal(world.money("p1"), 0);
-  assert.deepEqual(world.node03.lootForHud(world.ctx("p1")).rows.map((row) => row.key), ["currency:currency.gold"]);
+  assert.deepEqual(world.node03.lootForHud(world.ctx("p1")).spots[0].entries.map((entry) => entry.key), ["currency:currency.gold"]);
   assert.throws(() => world.act03("p1", "loot_take", { entryKey: "item:item.pelt" }), /ligt er niet meer/);
   // Alles pakken (ook van een tweede buit).
   world.hold("p1", [{ itemId: "item.pelt", quantity: 1 }], "Boom", "resource");
   world.act03("p1", "loot_take_all", {});
   assert.equal(world.items("p1", "item.pelt"), 3);
   assert.equal(world.money("p1"), 7);
-  assert.equal(world.node03.lootForHud(world.ctx("p1")).rows.length, 0, "alles is gepakt");
+  assert.equal(world.node03.lootForHud(world.ctx("p1")).spots.length, 0, "alles is gepakt");
   assert.throws(() => world.act03("p1", "loot_take_all", {}), /geen buit/);
   assert.throws(() => world.act03("p1", "loot_take", {}), /Kies wat je wilt pakken/);
 });
@@ -125,7 +128,7 @@ test("buit: niet van een ander pakken, en te lang laten liggen = weg", () => {
   assert.equal(world.items("p2", "item.pelt"), 0);
   world.db.prepare("UPDATE player_pending_loot SET expires_at = ? WHERE id = ?").run(new Date(Date.now() - 1000).toISOString(), lootId);
   assert.throws(() => world.act03("p1", "loot_take", { entryKey: "item:item.pelt" }), /geen buit/);
-  assert.equal(world.node03.lootForHud(world.ctx("p1")).rows.length, 0);
+  assert.equal(world.node03.lootForHud(world.ctx("p1")).spots.length, 0);
   assert.equal(world.db.prepare("SELECT state FROM player_pending_loot WHERE id = ?").get(lootId).state, "expired");
   assert.equal(world.items("p1", "item.pelt"), 0);
 });
@@ -139,50 +142,81 @@ test("buit: een uniek item dat je al hebt blijft liggen; de rest pak je wel", ()
   assert.match(all.message, /Bleef liggen \(heb je al\): Ring/);
   assert.equal(world.items("p1", "item.ring"), 1);
   assert.equal(world.items("p1", "item.pelt"), 1);
-  assert.deepEqual(world.node03.lootForHud(world.ctx("p1")).rows.map((row) => row.itemId), ["item.ring"]);
+  assert.deepEqual(world.node03.lootForHud(world.ctx("p1")).spots[0].entries.map((entry) => entry.itemId), ["item.ring"]);
   // Niets geldigs om klaar te leggen: geen lege buit.
   assert.equal(world.hold("p1", [{ quantity: 3 }]), null);
 });
 
 // ---- Herstel 3 (Kevin 13-11) ----
 
-test("buit herstel 3: alle buit in de buurt samen, gelijke dingen opgeteld (al het goud bij elkaar)", () => {
+test("buit herstel 3: één keer Pakken pakt die soort van alle buit dichtbij (al het goud bij elkaar)", () => {
   const world = setup();
   world.hold("p1", [{ currencyId: "currency.gold", quantity: 5 }, { itemId: "item.pelt", quantity: 1 }]);
   world.hold("p1", [{ currencyId: "currency.gold", quantity: 3 }, { itemId: "item.pelt", quantity: 2 }]);
   world.hold("p1", [{ itemId: "item.ring", quantity: 1 }], "Boom", "resource");
   const view = world.node03.lootForHud(world.ctx("p1"));
-  assert.equal(view.ids.length, 3);
-  assert.equal(view.from, "Wolf ×2, Boom");
-  assert.deepEqual(view.rows.map((row) => [row.key, row.quantity]), [["currency:currency.gold", 8], ["item:item.ring", 1], ["item:item.pelt", 3]]);
-  // Eén keer Pakken op het goud = het goud van beide wolven.
+  assert.deepEqual(view.spots.map((spot) => spot.label), ["Wolf", "Wolf", "Boom"]);
   world.act03("p1", "loot_take", { entryKey: "currency:currency.gold" });
-  assert.equal(world.money("p1"), 8);
-  assert.deepEqual(world.node03.lootForHud(world.ctx("p1")).rows.map((row) => row.key), ["item:item.ring", "item:item.pelt"]);
+  assert.equal(world.money("p1"), 8, "het goud van beide wolven");
+  const left = world.node03.lootForHud(world.ctx("p1")).spots.flatMap((spot) => spot.entries.map((entry) => entry.key + "x" + entry.quantity));
+  assert.deepEqual(left.sort(), ["item:item.peltx1", "item:item.peltx2", "item:item.ringx1"]);
 });
 
-test("buit herstel 3: weglopen (verder dan Buit pakken binnen) of doodgaan = buit weg", () => {
+test("buit herstel 4: één soort (bijv. 3× Hout of alleen goud) gaat meteen in je tas; alleen een mix in het buitvenster", () => {
   const world = setup();
-  const wolf = world.hold("p1", [{ itemId: "item.pelt", quantity: 1 }], "Wolf", "enemy", { x: 10, z: 0 });
-  assert.equal(world.node03.lootForHud(world.ctx("p1")).rows.length, 1, "10 m van de wolf: nog binnen 15 m");
-  assert.equal(world.node03.lootForHud(world.at("p1", 30, 0)).rows.length, 0, "20 m van de wolf: weg");
-  assert.equal(world.db.prepare("SELECT state FROM player_pending_loot WHERE id = ?").get(wolf).state, "expired");
-  assert.equal(world.node03.lootForHud(world.ctx("p1")).rows.length, 0, "teruglopen helpt niet meer");
-  assert.throws(() => world.act03("p1", "loot_take_all", {}), /in de buurt/);
-  // Het schuifje in Instellingen > 💰 Geld telt.
-  assert.equal(economyValues(null).lootRangeM, 15);
-  const wide = setup({ economy: { lootRangeM: 40 } });
-  wide.hold("p1", [{ itemId: "item.pelt", quantity: 1 }], "Wolf", "enemy", { x: 10, z: 0 });
-  assert.equal(wide.node03.lootForHud(wide.at("p1", 30, 0)).rows.length, 1, "met 40 m mag het nog");
+  world.node03.rememberAutoLoot("p1", false);
+  const mix = [{ itemId: "item.pelt", quantity: 1 }, { currencyId: "currency.gold", quantity: 2 }];
+  assert.equal(world.node03.shouldHoldLoot("p1", [{ itemId: "item.pelt", quantity: 3 }]), false, "3× hetzelfde = meteen in de tas");
+  assert.equal(world.node03.shouldHoldLoot("p1", [{ itemId: "item.pelt", quantity: 1 }, { itemId: "item.pelt", quantity: 2 }]), false, "hetzelfde item in twee regels = één soort");
+  assert.equal(world.node03.shouldHoldLoot("p1", [{ currencyId: "currency.gold", quantity: 9 }]), false, "alleen goud = meteen");
+  assert.equal(world.node03.shouldHoldLoot("p1", mix), true, "een mix = buitvenster");
+  world.node03.rememberAutoLoot("p1", true);
+  assert.equal(world.node03.shouldHoldLoot("p1", mix), false, "Automatisch buit pakken aan = alles meteen");
+  // Vijand en grondstof gebruiken die regel; de plek is waar de speler stond.
+  const src = fs.readFileSync("src/server/node03-runtime-service.js", "utf8");
+  assert.match(src, /this\.shouldHoldLoot\(reward\.playerId, reward\.items\)/);
+  assert.match(src, /this\.shouldHoldLoot\(ctx\.profile\.id, plan\.items\)/);
+  assert.deepEqual(world.node03.lootSpotFor(world.at("p1", 4, 5), "p1", { x: 9, z: 9 }), { x: 4, z: 5 });
+  // Wat meteen in je tas ging, laat de HUD even zien ("Eén soort even tonen", standaard 3 s).
+  assert.equal(economyValues(null).lootShowS, 3);
+  world.node03.noteDirectLoot("p1", "Boom", [{ itemId: "item.pelt", quantity: 3 }]);
+  const view = world.node03.lootForHud(world.ctx("p1"));
+  assert.equal(view.showSeconds, 3);
+  assert.equal(view.recent.length, 1);
+  assert.deepEqual(view.recent[0].entries.map((entry) => [entry.key, entry.displayName, entry.quantity]), [["item:item.pelt", "Vacht", 3]]);
+  assert.equal(world.node03.lootForHud(world.ctx("p2")).recent.length, 0, "alleen voor jezelf");
+  const quiet = setup({ economy: { lootShowS: 0 } });
+  assert.equal(quiet.node03.lootForHud(quiet.ctx("p1")).showSeconds, 0, "0 = geen kaartje");
+  assert.match(src, /this\.noteDirectLoot\(ctx\.profile\.id, pickup\.displayName/, "ook een los item");
+  assert.match(fs.readFileSync("apps/web/public/game/hud/gk-hud.js", "utf8"), /function lootFlashNow\(\)/);
+});
+
+test("buit herstel 4: weglopen sluit alleen het venster (pakken kan dan niet), terugkomen kan; doodgaan = weg", () => {
+  const world = setup();
+  const mix = () => [{ itemId: "item.pelt", quantity: 1 }, { currencyId: "currency.gold", quantity: 2 }];
+  const wolf = world.hold("p1", mix(), "Wolf", "enemy", { x: 2, z: 0 });
+  assert.equal(economyValues(null).lootRangeM, 3, "Buitvenster dicht na: standaard 3 m");
+  assert.equal(world.node03.lootForHud(world.at("p1", 30, 0)).spots.length, 1, "ver weg: de buit blijft liggen (de HUD sluit het venster)");
+  assert.throws(() => world.act03("p1", "loot_take_all", {}, { x: 30, y: 0, z: 0 }), /Te ver weg/);
+  assert.equal(world.db.prepare("SELECT state FROM player_pending_loot WHERE id = ?").get(wolf).state, "open", "niet weg door weglopen");
+  // Terug bij de plek: pakken kan weer.
+  world.act03("p1", "loot_take_all", {});
+  assert.equal(world.items("p1", "item.pelt"), 1);
+  assert.equal(world.money("p1"), 2);
+  // Het schuifje (Instellingen > 💰 Geld) telt, met wat speling voor de server.
+  const wide = setup({ economy: { lootRangeM: 20 } });
+  wide.hold("p1", mix(), "Wolf", "enemy", { x: 10, z: 0 });
+  wide.act03("p1", "loot_take", { entryKey: "item:item.pelt" }, { x: 30, y: 0, z: 0 });
+  assert.equal(wide.items("p1", "item.pelt"), 1, "20 m mag bij 20 m");
   // Oude buit zonder plek (van voor herstel 3) blijft niet hangen.
-  const old = world.hold("p1", [{ itemId: "item.pelt", quantity: 1 }]);
+  const old = world.hold("p1", mix());
   world.db.prepare("UPDATE player_pending_loot SET x = NULL, z = NULL WHERE id = ?").run(old);
-  assert.equal(world.node03.lootForHud(world.ctx("p1")).rows.length, 0, "zonder plek: weg");
+  assert.equal(world.node03.lootForHud(world.ctx("p1")).spots.length, 0, "zonder plek: weg");
   // Doodgaan = alles weg.
-  world.hold("p1", [{ itemId: "item.pelt", quantity: 1 }]);
+  world.hold("p1", mix());
   world.db.prepare("INSERT INTO player_stats (player_id, stat_id, base_value, current_value, updated_at) VALUES ('p1', 'stat.health', 100, 0, ?)").run(new Date().toISOString());
-  assert.equal(world.node03.lootForHud(world.ctx("p1")).rows.length, 0, "dood = weg");
-  assert.equal(world.items("p1", "item.pelt"), 0, "niets per ongeluk in de tas");
+  assert.equal(world.node03.lootForHud(world.ctx("p1")).spots.length, 0, "dood = weg");
+  assert.equal(world.items("p1", "item.pelt"), 1, "niets extra in de tas");
 });
 
 test("post herstel 3: meer spullen in één brief (slepen uit je tas), en wat niet mag", () => {
@@ -225,6 +259,8 @@ test("HUD herstel 3: Post en Ruilen onderin bij Chat en Gesprek, slepen uit de t
   assert.match(hud, /toggle\("autoLoot", "chest", "Automatisch buit pakken"/);
   for (const act of ["post-attach", "post-detach", "pane-close", "loot-take", "loot-all", "loot-close", "loot-open"]) assert.ok(hud.includes('case "' + act + '"'), "HUD-knop " + act);
   assert.doesNotMatch(hud, /openPickup|pickup-take/, "geen 'Hier ligt'-kaartje meer: een los item pak je meteen");
+  assert.match(hud, /Array\.isArray\(loot\?\.spots\)/, "de HUD kijkt zelf welke buit dichtbij ligt (herstel 4)");
+  assert.match(hud, /renderInvite\(now\);\n      renderLoot\(\);/, "4x per seconde: weggelopen = venster dicht");
   const game = fs.readFileSync("apps/web/public/game/game.js", "utf8");
   for (const key of ["entryKey: extra.entryKey", "autoLoot: gkHud"]) assert.ok(game.includes(key), "game.js stuurt " + key);
   assert.doesNotMatch(game, /openPickup|lootId: extra\.lootId/);

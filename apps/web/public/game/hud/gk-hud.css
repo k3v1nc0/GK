@@ -823,6 +823,8 @@
 .gkLootRow small { font-weight: 800; color: var(--gk-text); }
 .gkLootTake { min-height: 32px; padding: 0 10px; font-size: 12px; }
 .gkLootNote { font-size: 11px; color: var(--gk-muted); }
+/* Herstel 4: kaartje "In je tas" (één soort, los item): even zien wat het was; klikken gaat erdoorheen naar de wereld. */
+.gkLootCard.gkLootFlash { width: min(260px, calc(100% - 2 * var(--gk-edge))); pointer-events: none; animation: gkPop 0.14s ease-out; }
 .gkLootCard.gkLootSmall { top: calc(var(--gk-edge) + var(--gk-portrait) + 20px); width: max-content; padding: 0; background: none; border: 0; box-shadow: none; }
 .gkLootOpen { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px; border-radius: 18px; font-weight: 800; font-size: 13px;
   color: var(--gk-text); background: var(--gk-bg); border: 1px solid rgba(255, 200, 87, 0.7); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5); }

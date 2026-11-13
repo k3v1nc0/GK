@@ -24,6 +24,10 @@ const DEFAULT_CHARACTER_ID = "player.desert_guardian";
 const DEFAULT_BIND_STATE = "unbound";
 // Fase 8 herstel 2: zo lang blijft buit klaarliggen in het buitvenster als je hem (nog) niet pakt.
 const LOOT_KEEP_MS = 5 * 60 * 1000;
+// Fase 8 herstel 4: de server weet je plek iets later dan je scherm; zoveel meter speling bij Pakken.
+const LOOT_REACH_SLACK_M = 3;
+// Fase 8 herstel 4: zo lang onthoudt de server wat er meteen in je tas ging (voor het kaartje in de HUD).
+const DIRECT_LOOT_KEEP_MS = 15 * 1000;
 // Fase 5: indeling van vak 2 en 3 per character (player_ability_loadouts).
 const HOTBAR_LOADOUT_ID = "hotbar";
 // Fase 6: balken (houden hun stand); de andere stats (kracht, pantser, heal-kracht) staan altijd op hun maximum.
@@ -1761,6 +1765,8 @@ export class Node03RuntimeService {
     const grants = pickup.pickupKind === "currency"
       ? [this.grantCurrency(ctx, pickup.currencyRef, amount, "pickup_claimed", pickup.instanceId, operationId)]
       : this.grantItem(ctx, pickup.itemRef, amount, "pickup_claimed", pickup.instanceId, operationId);
+    // Fase 8 herstel 4: het kaartje "In je tas" laat even zien wat het was.
+    this.noteDirectLoot(ctx.profile.id, pickup.displayName, [pickup.pickupKind === "currency" ? { currencyId: pickup.currencyRef, quantity: amount } : { itemId: pickup.itemRef, quantity: amount }]);
     if (personal) {
       const respawnAt = pickup.claimMode === "once" ? null : addMs(this.respawnDelay(ctx, pickup.respawnPolicyRef));
       this.db.prepare(`
@@ -2283,14 +2289,48 @@ export class Node03RuntimeService {
     return id;
   }
 
-  // Fase 8 herstel 3 (Kevin 13-11): buit pakken kan binnen "Buit pakken binnen" (💰 Geld) van de plek.
+  // Fase 8 herstel 3/4 (Kevin 13-11): "Buitvenster dicht na" (💰 Geld): verder weg van de plek = venster dicht, en pakken kan alleen dichtbij.
   lootRangeM(ctx) {
-    return Math.max(1, safeInteger(economyValues(policiesOfType(ctx.project, "economy_rules")[0] || null).lootRangeM, 15));
+    return Math.max(1, safeInteger(economyValues(policiesOfType(ctx.project, "economy_rules")[0] || null).lootRangeM, 3));
   }
 
-  // Je open buit in de buurt. Wat te lang lag, waar je te ver vandaan bent, of alles als je dood bent: dicht.
-  // (Weet de server even niet waar je staat, dan blijft het liggen.)
-  nearLoot(ctx) {
+  // Fase 8 herstel 4 (Kevin 13-11, zoals ESO): buit van één soort (bijv. 3× Hout of alleen goud) gaat altijd meteen in je tas.
+  // Het buitvenster is er alleen voor een mix (een schatkist, een vijand met goud én een vacht), en alleen zonder Automatisch buit pakken.
+  lootKinds(rows) {
+    return new Set((Array.isArray(rows) ? rows : []).filter((row) => row && (row.itemId || row.currencyId)).map((row) => this.lootKey(row))).size;
+  }
+
+  shouldHoldLoot(playerId, rows) {
+    return !this.autoLootFor(playerId) && this.lootKinds(rows) > 1;
+  }
+
+  // Fase 8 herstel 4 (Kevin 13-11): wat meteen in je tas ging (één soort, een los item of Automatisch buit pakken).
+  // Alleen in het geheugen en maar kort: de HUD laat het "Eén soort even tonen" seconden zien op een kaartje.
+  noteDirectLoot(playerId, label, rows) {
+    const entries = (Array.isArray(rows) ? rows : []).filter((row) => row && (row.itemId || row.currencyId))
+      .map((row) => ({ itemId: row.itemId || null, currencyId: row.currencyId || null, quantity: Math.max(1, safeInteger(row.quantity, 1)) }));
+    if (!playerId || !entries.length) return;
+    if (!this.directLoot) this.directLoot = new Map();
+    this.directLootSeq = (this.directLootSeq || 0) + 1;
+    const nowMs = Date.now();
+    const list = (this.directLoot.get(playerId) || []).filter((entry) => nowMs - entry.at < DIRECT_LOOT_KEEP_MS);
+    list.push({ id: "direct_" + this.directLootSeq, at: nowMs, label: label || "", entries });
+    this.directLoot.set(playerId, list.slice(-6));
+  }
+
+  // De plek van de buit = waar de speler stond toen hij hem kreeg (daar ga je weg van; daar kom je terug).
+  lootSpotFor(ctx, playerId, plan) {
+    if (playerId === ctx.profile.id && Number.isFinite(Number(ctx.position?.x)) && Number.isFinite(Number(ctx.position?.z))) {
+      return { x: Number(ctx.position.x), z: Number(ctx.position.z) };
+    }
+    const state = typeof this.mmoService?.getWorldPlayerStates === "function" ? (this.mmoService.getWorldPlayerStates(ctx.worldId, [playerId]) || [])[0] : null;
+    if (state && Number.isFinite(Number(state.x)) && Number.isFinite(Number(state.z))) return { x: Number(state.x), z: Number(state.z) };
+    return { x: plan?.x, z: plan?.z };
+  }
+
+  // Je open buit. Wat te lang lag (5 min) of alles als je dood bent: dicht. Weglopen sluit alleen het venster;
+  // de buit blijft liggen tot de tijd om is. Oude buit zonder plek (van voor herstel 3) gaat dicht.
+  openLoot(ctx) {
     const stamp = now();
     const playerId = ctx.profile.id;
     this.db.prepare("UPDATE player_pending_loot SET state = 'expired', updated_at = ?, revision = revision + 1 WHERE player_id = ? AND state = 'open' AND expires_at <= ?")
@@ -2298,67 +2338,83 @@ export class Node03RuntimeService {
     const rows = this.db.prepare("SELECT * FROM player_pending_loot WHERE player_id = ? AND state = 'open' ORDER BY created_at ASC LIMIT 80").all(playerId);
     if (!rows.length) return [];
     const dead = this.isPlayerDead(ctx);
-    const range = this.lootRangeM(ctx);
-    const px = Number(ctx.position?.x);
-    const pz = Number(ctx.position?.z);
-    const known = Number.isFinite(px) && Number.isFinite(pz);
-    const near = [];
+    const open = [];
     const close = this.db.prepare("UPDATE player_pending_loot SET state = 'expired', updated_at = ?, revision = revision + 1 WHERE id = ? AND state = 'open'");
     for (const row of rows) {
       const placed = row.x !== null && row.x !== undefined && row.z !== null && row.z !== undefined;
-      const far = dead || !placed || (known && Math.hypot(Number(row.x) - px, Number(row.z) - pz) > range);
-      if (far) close.run(stamp, row.id);
-      else near.push(row);
+      if (dead || !placed) close.run(stamp, row.id);
+      else open.push(row);
     }
-    return near;
+    return open;
+  }
+
+  // Pakken mag alleen dichtbij de plek (het schuifje, plus wat speling). Weet de server even niet waar je staat, dan mag het.
+  lootInReach(ctx, row) {
+    const px = Number(ctx.position?.x);
+    const pz = Number(ctx.position?.z);
+    if (!Number.isFinite(px) || !Number.isFinite(pz)) return true;
+    return Math.hypot(Number(row.x) - px, Number(row.z) - pz) <= this.lootRangeM(ctx) + LOOT_REACH_SLACK_M;
   }
 
   lootKey(entry) {
     return entry?.currencyId ? "currency:" + entry.currencyId : "item:" + entry?.itemId;
   }
 
-  // Wat de HUD toont: alle buit in de buurt samen, gelijke dingen opgeteld (al het goud bij elkaar).
+  // Wat de HUD krijgt: je open buit per plek. De HUD laat zien wat binnen "Buitvenster dicht na" van je ligt (met je eigen,
+  // vloeiende plek) en telt gelijke dingen op (al het goud bij elkaar).
   lootForHud(ctx) {
-    const near = this.nearLoot(ctx);
+    const open = this.openLoot(ctx);
     // Opgeruimde buit (gepakt of verlopen) na een dag weg, zodat de tabel klein blijft op een oude laptop.
     this.db.prepare("DELETE FROM player_pending_loot WHERE player_id = ? AND state <> 'open' AND updated_at < ?")
       .run(ctx.profile.id, new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
-    const merged = new Map();
-    const from = new Map();
-    for (const row of near) {
-      const label = row.label || (row.source_kind === "resource" ? "Grondstof" : "Vijand");
-      from.set(label, (from.get(label) || 0) + 1);
-      for (const entry of safeJsonParse(row.entries_json, [])) {
-        const key = this.lootKey(entry);
-        const have = merged.get(key) || { key, kind: entry.currencyId ? "currency" : "item", itemId: entry.itemId || null, currencyId: entry.currencyId || null, quantity: 0,
-          displayName: entry.currencyId ? displayForCurrency(ctx.catalogs, entry.currencyId) : displayForItem(ctx.catalogs, entry.itemId) };
-        have.quantity += Math.max(1, safeInteger(entry.quantity, 1));
-        merged.set(key, have);
-      }
-    }
-    // Geld bovenaan, daarna de items op naam.
-    const rows = Array.from(merged.values()).sort(function (a, b) {
-      if (a.kind !== b.kind) return a.kind === "currency" ? -1 : 1;
-      return String(a.displayName).localeCompare(String(b.displayName), "nl");
-    });
+    const spots = open.slice(-40).map((row) => ({
+      id: row.id,
+      x: Number(row.x),
+      z: Number(row.z),
+      label: row.label || (row.source_kind === "resource" ? "Grondstof" : "Vijand"),
+      sourceKind: row.source_kind,
+      entries: safeJsonParse(row.entries_json, []).map((entry) => ({
+        key: this.lootKey(entry),
+        kind: entry.currencyId ? "currency" : "item",
+        itemId: entry.itemId || null,
+        currencyId: entry.currencyId || null,
+        quantity: Math.max(1, safeInteger(entry.quantity, 1)),
+        displayName: entry.currencyId ? displayForCurrency(ctx.catalogs, entry.currencyId) : displayForItem(ctx.catalogs, entry.itemId)
+      }))
+    }));
     const pref = this.autoLootPrefs ? this.autoLootPrefs.get(ctx.profile.id) : undefined;
+    const nowMs = Date.now();
+    const recent = ((this.directLoot && this.directLoot.get(ctx.profile.id)) || []).filter((entry) => nowMs - entry.at < DIRECT_LOOT_KEEP_MS).map((entry) => ({
+      id: entry.id,
+      ageMs: nowMs - entry.at,
+      label: entry.label,
+      entries: entry.entries.map((row) => ({
+        key: this.lootKey(row),
+        kind: row.currencyId ? "currency" : "item",
+        itemId: row.itemId,
+        currencyId: row.currencyId,
+        quantity: row.quantity,
+        displayName: row.currencyId ? displayForCurrency(ctx.catalogs, row.currencyId) : displayForItem(ctx.catalogs, row.itemId)
+      }))
+    }));
     return {
       autoLoot: pref === undefined ? null : pref,
       keepSeconds: Math.round(LOOT_KEEP_MS / 1000),
       rangeM: this.lootRangeM(ctx),
-      ids: near.map((row) => row.id),
-      from: Array.from(from, ([label, count]) => (count > 1 ? label + " ×" + count : label)).join(", "),
-      rows
+      showSeconds: Math.max(0, safeInteger(economyValues(policiesOfType(ctx.project, "economy_rules")[0] || null).lootShowS, 3)),
+      spots,
+      recent
     };
   }
 
-  // Pakken: één soort (entryKey, bijv. "item:item.vacht" of "currency:currency.goud") uit alle buit in de buurt, of alles.
+  // Pakken: één soort (entryKey, bijv. "item:item.vacht" of "currency:currency.goud") uit alle buit dichtbij, of alles.
   // Alles in dezelfde transactie: het gaat in je tas en verdwijnt hier tegelijk.
   takeLoot(ctx, payload, operationId, all) {
     const entryKey = safeString(payload.entryKey || payload.entry_key, "");
     if (!all && !entryKey) throw httpError(400, "Kies wat je wilt pakken.");
-    const live = this.nearLoot(ctx);
-    if (!live.length) throw httpError(404, "Er ligt hier geen buit (meer). Buit blijft alleen liggen zolang je in de buurt blijft.");
+    const open = this.openLoot(ctx);
+    const live = open.filter((row) => this.lootInReach(ctx, row));
+    if (!live.length) throw httpError(404, open.length ? "Te ver weg: loop terug naar de plek van de buit." : "Er ligt hier geen buit (meer).");
     const stamp = now();
     const grants = [];
     const kept = [];
@@ -2674,11 +2730,13 @@ export class Node03RuntimeService {
       const rewardCtx = reward.playerId === ctx.profile.id ? ctx : Object.assign({}, ctx, { profile: { id: reward.playerId } });
       if (!this.claimActorReward(ctx, reward.claimKey, plan.instanceId, reward.playerId, operationId, plan.buildId)) continue;
       const given = [];
-      // Fase 8 herstel 2: zonder Automatisch buit pakken ligt de buit eerst klaar in het buitvenster (XP krijg je meteen).
-      if (this.autoLootFor(reward.playerId)) {
-        for (const item of reward.items) given.push(...this.grantLootRow(rewardCtx, item, "actor_defeated", plan.instanceId, operationId));
+      // Fase 8 herstel 2/4: een mix ligt eerst klaar in het buitvenster (zonder Automatisch buit pakken); één soort gaat meteen
+      // in je tas. XP krijg je altijd meteen.
+      if (this.shouldHoldLoot(reward.playerId, reward.items)) {
+        this.holdLoot(ctx, reward.playerId, "enemy", plan.instanceId, plan.label, reward.items, "actor_defeated", operationId, this.lootSpotFor(ctx, reward.playerId, plan));
       } else {
-        this.holdLoot(ctx, reward.playerId, "enemy", plan.instanceId, plan.label, reward.items, "actor_defeated", operationId, { x: plan.x, z: plan.z });
+        for (const item of reward.items) given.push(...this.grantLootRow(rewardCtx, item, "actor_defeated", plan.instanceId, operationId));
+        this.noteDirectLoot(reward.playerId, plan.label, reward.items);
       }
       const xp = reward.xp > 0 ? this.grantXpAmount(rewardCtx, reward.xp, "actor_defeated", plan.instanceId, operationId) : null;
       if (xp) given.push(xp);
@@ -2713,9 +2771,14 @@ export class Node03RuntimeService {
       return { action: "gather", targetId: plan.instanceId, message: plan.label + " is al verzameld.", events: [] };
     }
     const grants = [];
-    // Fase 8 herstel 2: zonder Automatisch buit pakken ligt de opbrengst eerst klaar in het buitvenster.
-    const held = this.autoLootFor(ctx.profile.id) ? null : this.holdLoot(ctx, ctx.profile.id, "resource", plan.instanceId, plan.label, plan.items, "resource_gathered", operationId, { x: plan.x, z: plan.z });
-    if (!held) for (const item of plan.items) grants.push(...this.grantLootRow(ctx, item, "resource_gathered", plan.instanceId, operationId));
+    // Fase 8 herstel 2/4: alleen een mix ligt eerst klaar in het buitvenster; één soort (bijv. 3× Hout) gaat meteen in je tas.
+    const held = this.shouldHoldLoot(ctx.profile.id, plan.items)
+      ? this.holdLoot(ctx, ctx.profile.id, "resource", plan.instanceId, plan.label, plan.items, "resource_gathered", operationId, this.lootSpotFor(ctx, ctx.profile.id, plan))
+      : null;
+    if (!held) {
+      for (const item of plan.items) grants.push(...this.grantLootRow(ctx, item, "resource_gathered", plan.instanceId, operationId));
+      this.noteDirectLoot(ctx.profile.id, plan.label, plan.items);
+    }
     this.db.prepare("UPDATE actor_loot_claims SET grants_json = ? WHERE claim_key = ?").run(stableJson(grants), plan.claimKey);
     // Stap 5: Ieder zijn eigen = alleen voor jou weg (in het geheugen), niet voor iedereen.
     if (!plan.personal) this.saveActorSpawnState(ctx, plan.spawnKey, plan.occurrence, "depleted", plan.respawnAtMs, plan.buildId);

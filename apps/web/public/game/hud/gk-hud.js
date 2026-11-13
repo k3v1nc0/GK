@@ -1126,27 +1126,87 @@ export function createGkHud(api) {
   // ---- Fase 8 herstel 2/3 (Kevin 12-11, 13-11): buitvenster ----
   // Na een vijand of grondstof kies je zelf wat je meeneemt, tenzij "Automatisch buit pakken" aan staat (Instellingen).
   // Alle buit in de buurt staat samen in één lijst; gelijke dingen opgeteld (al het goud bij elkaar).
-  // Loop je te ver weg of ga je dood, dan haalt de server hem weg. Een los item in de wereld pak je gewoon op.
+  // Herstel 4 (Kevin 13-11, zoals ESO): één soort gaat meteen in je tas (dat doet de server); het venster is er voor een mix.
+  // Loop je verder dan "Buitvenster dicht na" weg, dan gaat het venster dicht; de buit blijft nog even liggen (kom terug = weer zien).
+  // Doodgaan = weg. Een los item in de wereld pak je gewoon op.
   function autoLootOn() { return store.autoLoot === true; }
   function lootNow() {
     const loot = data().s03?.loot || null;
-    return loot && Array.isArray(loot.rows) && loot.rows.length ? loot : null;
+    const spots = Array.isArray(loot?.spots) ? loot.spots : [];
+    if (!spots.length) return null;
+    // Met je eigen plek op het scherm (vloeiend), niet die van de server: een stap opzij en het venster is meteen dicht.
+    const position = api.live().position;
+    const range = Math.max(1, num(loot.rangeM, 3));
+    const near = position ? spots.filter(function (spot) { return Math.hypot(num(spot.x) - num(position.x), num(spot.z) - num(position.z)) <= range; }) : spots;
+    if (!near.length) return null;
+    const merged = new Map();
+    const from = new Map();
+    for (const spot of near) {
+      from.set(spot.label, (from.get(spot.label) || 0) + 1);
+      for (const entry of spot.entries || []) {
+        const have = merged.get(entry.key) || Object.assign({}, entry, { quantity: 0 });
+        have.quantity += Math.max(1, num(entry.quantity, 1));
+        merged.set(entry.key, have);
+      }
+    }
+    // Geld bovenaan, daarna de items op naam.
+    const rows = Array.from(merged.values()).sort(function (a, b) {
+      if (a.kind !== b.kind) return a.kind === "currency" ? -1 : 1;
+      return String(a.displayName || "").localeCompare(String(b.displayName || ""), "nl");
+    });
+    return { ids: near.map(function (spot) { return spot.id; }), rows, rangeM: range,
+      from: Array.from(from, function (entry) { return entry[1] > 1 ? entry[0] + " ×" + entry[1] : entry[0]; }).join(", ") };
+  }
+  // Herstel 4 (Kevin 13-11): wat met één klik of E meteen in je tas ging (één soort, een los item), even laten zien:
+  // "Eén soort even tonen" seconden (Instellingen > 💰 Geld; 0 = niet). Snel na elkaar telt het op (farmen).
+  function lootFlashNow() {
+    const loot = data().s03?.loot || null;
+    const seconds = Math.max(0, num(loot?.showSeconds, 3));
+    if (!ui.lootFlashSeen || ui.lootFlashSeen.size > 200) ui.lootFlashSeen = new Set();
+    const nowMs = performance.now();
+    for (const entry of Array.isArray(loot?.recent) ? loot.recent : []) {
+      if (ui.lootFlashSeen.has(entry.id)) continue;
+      ui.lootFlashSeen.add(entry.id);
+      const left = seconds * 1000 - num(entry.ageMs, 0);
+      if (left <= 300) continue;
+      if (!ui.lootFlash || nowMs > ui.lootFlash.until) ui.lootFlash = { rows: new Map(), until: 0, seq: 0 };
+      for (const row of entry.entries || []) {
+        const have = ui.lootFlash.rows.get(row.key) || Object.assign({}, row, { quantity: 0 });
+        have.quantity += Math.max(1, num(row.quantity, 1));
+        ui.lootFlash.rows.set(row.key, have);
+      }
+      ui.lootFlash.until = Math.max(ui.lootFlash.until, nowMs + left);
+      ui.lootFlash.seq += 1;
+    }
+    if (!ui.lootFlash || nowMs > ui.lootFlash.until) { ui.lootFlash = null; return null; }
+    return ui.lootFlash;
   }
   function lootCell(itemId, currencyId) {
     return h("div", { class: "gkCell", "data-rarity": (itemId ? catalogItem(itemId)?.rarity : "") || "common" }, [itemId ? itemVisual(itemId) : currencyVisual(currencyId)]);
   }
   function renderLoot() {
     const loot = lootNow();
+    const flash = loot ? null : lootFlashNow();
     if (!ui.lootWindowSeen) ui.lootWindowSeen = new Set();
     // Nieuwe buit (een nieuwe vijand of grondstof) gaat vanzelf open; met Sluiten wordt het een knopje "Buit (n)".
     for (const id of loot?.ids || []) if (!ui.lootWindowSeen.has(id)) { ui.lootWindowSeen.add(id); ui.lootHidden = false; }
     const busy = Boolean(data().busy?.n03);
-    const signature = loot ? (ui.lootHidden ? 1 : 0) + "|" + (busy ? 1 : 0) + "|" + loot.from + "|" + loot.rows.map(function (row) { return row.key + "x" + row.quantity; }).join(",") : "";
+    const signature = loot ? (ui.lootHidden ? 1 : 0) + "|" + (busy ? 1 : 0) + "|" + loot.from + "|" + loot.rows.map(function (row) { return row.key + "x" + row.quantity; }).join(",")
+      : flash ? "flash|" + flash.seq : "";
     if (ui.sig.loot === signature) return;
     ui.sig.loot = signature;
     lootCard.hidden = !signature;
     lootCard.classList.toggle("gkLootSmall", Boolean(loot && ui.lootHidden));
-    if (!loot) { lootCard.replaceChildren(); return; }
+    lootCard.classList.toggle("gkLootFlash", Boolean(!loot && flash));
+    if (!loot && !flash) { lootCard.replaceChildren(); return; }
+    if (!loot) {
+      lootCard.replaceChildren(h("div", { class: "gkLootHead" }, [ico("knapsack"), h("b", { text: "In je tas" })]),
+        h("div", { class: "gkLootList" }, Array.from(flash.rows.values()).map(function (row) {
+          return h("div", { class: "gkLootRow" }, [lootCell(row.itemId || null, row.currencyId || null),
+            h("span", { class: "gkLootName", text: row.displayName || row.itemId || row.currencyId || "?" }), h("small", { text: "×" + fmt(row.quantity) })]);
+        })));
+      return;
+    }
     if (ui.lootHidden) {
       lootCard.replaceChildren(h("button", { type: "button", class: "gkLootOpen", "data-act": "loot-open", title: "Buit bekijken" }, [ico("chest"), h("span", { text: "Buit (" + loot.rows.length + ")" })]));
       return;
@@ -1159,7 +1219,7 @@ export function createGkHud(api) {
           h("small", { text: "×" + fmt(row.quantity) }),
           h("button", { type: "button", class: "gkBtn gkLootTake", "data-act": "loot-take", "data-key": row.key, disabled: busy ? true : null }, ["Pakken"])]);
       })),
-      h("div", { class: "gkLootNote", text: "Loop je verder dan " + fmt(num(loot.rangeM, 15)) + " m weg, dan is de buit weg." }),
+      h("div", { class: "gkLootNote", text: "Loop je verder dan " + fmt(loot.rangeM) + " m weg, dan gaat dit venster dicht. De buit blijft nog even liggen." }),
       h("div", { class: "gkInviteBtns" }, [
         h("button", { type: "button", class: "gkInviteYes", "data-act": "loot-all", disabled: busy ? true : null }, [ico("check-mark"), h("span", { text: "Alles pakken" })]),
         h("button", { type: "button", class: "gkInviteNo", "data-act": "loot-close" }, [ico("cancel"), h("span", { text: "Sluiten" })])]));
@@ -1922,7 +1982,10 @@ export function createGkHud(api) {
     }
     for (const key of Array.from(ui.newKeys)) if (!now.has(key)) ui.newKeys.delete(key);
     ui.lootSeen = now;
-    if (gained.length) {
+    // Herstel 4: laat het kaartje "In je tas" het al zien, dan geen extra melding linksonder.
+    const loot = d.s03?.loot || null;
+    const flashing = num(loot?.showSeconds, 3) > 0 && (Array.isArray(loot?.recent) ? loot.recent : []).some(function (entry) { return !ui.lootFlashSeen || !ui.lootFlashSeen.has(entry.id); });
+    if (gained.length && !flashing) {
       const names = gained.slice(0, 3).map(function (row) {
         return (catalogItem(row.itemId)?.displayName || row.itemId) + (row.qty > 1 ? " ×" + row.qty : "");
       });
@@ -3556,7 +3619,7 @@ export function createGkHud(api) {
     const list = h("div", { class: "gkList" }, [
       h("div", { class: "gkRow" }, [ico("magic-portal"), h("span", null, ["Vastgelopen?", h("small", { text: "Terug naar je laatste portal of respawnplek." })]),
         h("button", { type: "button", class: "gkBtn", "data-act": "unstuck", disabled: d.busy?.n03 || d.defeated }, ["Unstuck"])]),
-      toggle("autoLoot", "chest", "Automatisch buit pakken", "Aan = buit van vijanden en grondstoffen gaat meteen in je tas. Uit = je kiest zelf wat je meeneemt (buitvenster).", store.autoLoot === true),
+      toggle("autoLoot", "chest", "Automatisch buit pakken", "Aan = alle buit gaat meteen in je tas. Uit = bij een mix (bijv. goud én een vacht) kies je zelf wat je meeneemt; één soort gaat altijd meteen in je tas.", store.autoLoot === true),
       sectionGroup("settings-server", "Serverstatus onderin", serverRows, true),
       sectionGroup("settings-view", "Spelbeeld", viewRows, true),
       h("p", { class: "gkCredits" }, ["Iconen: ", h("a", { href: "https://game-icons.net", target: "_blank", rel: "noopener", text: "game-icons.net" }), " (Lorc, Delapouite en anderen), CC BY 3.0"])
@@ -3709,6 +3772,7 @@ export function createGkHud(api) {
       renderSlots(now);
       tickCooldowns(now);
       renderInvite(now);
+      renderLoot();
     }
     // MMO (3-11): teamleden ver weg worden grijs (2x per seconde bekijken is genoeg).
     if (!partyBox.hidden && now - ui.farAt >= 500) {

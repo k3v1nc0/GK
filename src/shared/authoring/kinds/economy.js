@@ -40,11 +40,16 @@ export const ECONOMY_KINDS = {
         help("Wat het maken van iets kost in geld, bovenop de grondstoffen: zoveel procent van de Verkoopwaarde van wat je maakt.",
           "10 % is een kleine kraan. 0 = craften kost alleen grondstoffen.",
           "Niemand craft meer → lager. Craften levert gratis geld op → hoger.")),
-      // Fase 8 herstel 3 (Kevin 13-11): buit in het buitvenster hoort bij een plek.
-      lootRangeM: slider("Buit pakken binnen", "🎁", 15, 3, 100, 1, "m", [5, 40], LOOT_GROUP,
-        help("Hoe ver je van een verslagen vijand of geoogste grondstof weg mag lopen en zijn buit nog kunt pakken. Loop je verder weg of ga je dood, dan is de buit weg.",
-          "15 m: even verderop doorvechten mag, wegrennen niet.",
-          "Spelers verliezen buit midden in een gevecht → hoger. Buit van de andere kant van het veld staat nog in het venster → lager."))
+      // Fase 8 herstel 3/4 (Kevin 13-11, zoals ESO): buit hoort bij de plek waar je hem kreeg; weglopen = venster dicht.
+      lootRangeM: slider("Buitvenster dicht na", "🎁", 3, 1, 20, 1, "m", [2, 8], LOOT_GROUP,
+        help("Loop je verder dan dit weg van de plek waar je de buit kreeg, dan gaat het buitvenster dicht. De buit blijft nog even liggen: kom je terug, dan zie je hem weer. Pakken kan alleen zo dichtbij. Buit van één soort (bijv. 3× Hout) gaat altijd meteen in je tas; het venster is er voor een mix.",
+          "3 m: een paar stappen opzij en het venster is weg, zoals in ESO. 1 m = één stap.",
+          "Het venster gaat dicht terwijl je nog vecht → hoger. Je ziet buit van verderop → lager.")),
+      // Fase 8 herstel 4 (Kevin 13-11): één soort gaat meteen in je tas; zo lang zie je een kaartje met wat het was.
+      lootShowS: slider("Eén soort even tonen", "🎁", 3, 0, 10, 1, "s", [2, 5], LOOT_GROUP,
+        help("Buit van één soort (bijv. 3× Hout) en een los item gaan met één klik of E meteen in je tas. Zo lang zie je daarna een kaartje met wat het was: plaatje, naam en aantal. 0 = geen kaartje.",
+          "3 s: even zien wat je kreeg, zonder nog eens te klikken.",
+          "Het kaartje zit in de weg tijdens farmen → lager. Spelers missen wat ze kregen → hoger."))
     }
   }
 };
