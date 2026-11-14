@@ -151,7 +151,9 @@ export function compileGameSection(documents, options = {}) {
       crafting: doc.body.crafting === true, market: doc.body.market === true, talkRange: Number(doc.body.talkRange) > 0 ? Number(doc.body.talkRange) : 2.5,
       craftProfessionId: doc.body.crafting === true ? professionIdOf(doc, doc.body.craftProfessionRef, label + " (werkplek voor)") : null,
       shopCurrencyId: doc.body.shopCurrencyRef ? idFromRef(doc.body.shopCurrencyRef) : null,
-      shopOffers: offers.map((row) => ({ itemId: idFromRef(row.ref), price: row.price, buyBack: row.buyBack }))
+      // Fase 9 herstel: een recept in de winkel (kopen = leren).
+      shopOffers: offers.map((row) => (kindOfRef(row.ref) === "recipe" ? { recipeId: idFromRef(row.ref), price: row.price, buyBack: 0 }
+        : { itemId: idFromRef(row.ref), price: row.price, buyBack: row.buyBack }))
     }, flagGateOf(doc.body));
   });
 
@@ -288,7 +290,7 @@ export function compileGameSection(documents, options = {}) {
       // Fase 9: beroep, niveau, beroeps-XP en hoe je het leert.
       professionId, professionLevel: professionId && Number.isInteger(doc.body.professionLevel) ? doc.body.professionLevel : 1,
       professionXp: professionId ? (Number.isInteger(doc.body.professionXp) ? doc.body.professionXp : 10) : 0,
-      learn, learnPrice: learn === "buy" ? (Number.isInteger(doc.body.learnPrice) ? doc.body.learnPrice : 50) : 0
+      learn, learnPrice: Number.isInteger(doc.body.learnPrice) ? doc.body.learnPrice : 50
     };
   });
   const placedModels = of("placed_model").map((doc) => {

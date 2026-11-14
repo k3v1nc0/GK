@@ -703,10 +703,12 @@ function withGame(world, source, options) {
   catalogs.itemSources = itemSourcesFor(source.actors || null, npcs, recipes, quests, itemName);
   catalogs.vendorCatalogs = Object.fromEntries(npcs.filter((npc) => npc.shopOffers.length).map((npc) => ["vendor_catalog." + npc.npcId, {
     id: "vendor_catalog." + npc.npcId, displayName: npc.displayName, currencyRef: npc.shopCurrencyId || null,
-    offers: npc.shopOffers.map((offer) => ({
-      offerId: "offer." + npc.npcId + "." + offer.itemId, itemRef: offer.itemId, mode: offer.buyBack > 0 ? "both" : "sell_to_player",
-      sellCurrencyRef: npc.shopCurrencyId, sellPriceMinor: offer.price, buyCurrencyRef: npc.shopCurrencyId, buyPriceMinor: offer.buyBack, stockMode: "infinite"
-    }))
+    offers: npc.shopOffers.map((offer) => (offer.recipeId
+      // Fase 9 herstel: een recept in de winkel. Kopen = leren; het plaatje is wat het recept maakt. Prijs 0 = de prijs om te leren.
+      ? { offerId: "offer." + npc.npcId + ".recipe." + offer.recipeId, recipeRef: offer.recipeId, visualItemRef: recipes.find((recipe) => recipe.recipeId === offer.recipeId)?.outputItemId || null,
+        mode: "sell_to_player", sellCurrencyRef: npc.shopCurrencyId, sellPriceMinor: offer.price, buyCurrencyRef: npc.shopCurrencyId, buyPriceMinor: 0, stockMode: "infinite" }
+      : { offerId: "offer." + npc.npcId + "." + offer.itemId, itemRef: offer.itemId, mode: offer.buyBack > 0 ? "both" : "sell_to_player",
+        sellCurrencyRef: npc.shopCurrencyId, sellPriceMinor: offer.price, buyCurrencyRef: npc.shopCurrencyId, buyPriceMinor: offer.buyBack, stockMode: "infinite" }))
   }]));
 
   // NPC's: een model in de wereld, met praten, winkel en/of crafting.

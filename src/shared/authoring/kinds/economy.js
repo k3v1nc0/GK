@@ -55,7 +55,12 @@ export const ECONOMY_KINDS = {
       professionLimit: slider("Beroepen per character", "🧰", 0, 0, 20, 1, "", [0, 6], PROFESSION_GROUP,
         help("Hoeveel verschillende beroepen één character mag leren. Een beroep leer je vanzelf de eerste keer dat je iets oogst of maakt voor dat beroep. 0 = alle beroepen.",
           "0 (alle), zoals in ESO: iedereen kan alles. 2 zoals in WoW: dan moet je kiezen en handel je met anderen.",
-          "Iedereen kan alles en niemand handelt → zet een grens. Spelers zitten vast aan een verkeerde keuze → ze kunnen een beroep vergeten bij Uitrusting (C) onder Beroepen."))
+          "Iedereen kan alles en niemand handelt → zet een grens. Spelers zitten vast aan een verkeerde keuze → ze kunnen een beroep vergeten bij Uitrusting (C) onder Beroepen.")),
+      // Fase 9 herstel 1 (keuze van Kevin 14-11): vergeten bewaart je voortgang; opnieuw wisselen pas na een wachttijd.
+      professionSwitchWaitH: slider("Wachttijd na vergeten", "⏳", 24, 0, 720, 1, "uur", [0, 72], PROFESSION_GROUP,
+        help("Alleen bij een grens (Beroepen per character). Vergeet je een beroep, dan blijven je niveau en XP bewaard: leer je het later weer, dan ga je verder waar je was. Na het vergeten kun je meteen een ander beroep leren, maar opnieuw vergeten kan pas na deze wachttijd.",
+          "24 uur: een beginner kan rustig proberen, maar niet elk uur wisselen. 0 = geen wachttijd.",
+          "Spelers wisselen steeds tussen beroepen → langer. Spelers durven niets te proberen → korter."))
     }
   }
 };

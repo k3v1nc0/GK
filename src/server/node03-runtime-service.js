@@ -79,9 +79,26 @@ function rollLootAmount(minValue, maxValue, multiplier = 1) {
 }
 
 // Fase 9: " +10 Smeden-XP" (en "Smeden niveau 3!") achter een melding.
+// "3 uur", "45 min" of "1 dag en 2 uur" (voor de wachttijd na vergeten).
+function waitText(ms) {
+  const minutes = Math.max(1, Math.ceil(Number(ms) / 60000));
+  if (minutes < 60) return minutes + " min";
+  const hours = Math.ceil(minutes / 60);
+  if (hours < 48) return hours + " uur";
+  const days = Math.floor(hours / 24);
+  return days + " dagen" + (hours % 24 ? " en " + (hours % 24) + " uur" : "");
+}
+
 function professionText(grant) {
-  if (!grant || grant.amount <= 0) return grant?.learned ? " Je leerde " + grant.displayName + "." : "";
-  return " +" + grant.amount + " " + grant.displayName + "-XP" + (grant.leveledUp ? ". " + grant.displayName + " niveau " + grant.level + "!" : ".");
+  if (!grant) return "";
+  // Fase 9 herstel 1: een vergeten beroep dat je weer oppakt, gaat verder waar je was.
+  const back = grant.resumed ? " Je gaat verder met " + grant.displayName + " (niveau " + grant.level + ")." : "";
+  if (grant.amount <= 0) return back || (grant.learned ? " Je leerde " + grant.displayName + "." : "");
+  return back + " +" + grant.amount + " " + grant.displayName + "-XP" + (grant.leveledUp ? ". " + grant.displayName + " niveau " + grant.level + "!" : ".");
+}
+// Alle beroeps-XP uit een lijst grants (buit) als één stukje tekst.
+function professionTexts(grants) {
+  return (Array.isArray(grants) ? grants : []).filter((grant) => grant?.kind === "profession_xp").map(professionText).join("");
 }
 export { professionText };
 
@@ -1767,6 +1784,9 @@ export class Node03RuntimeService {
         ? "Je hebt al " + pickup.displayName + ". Daar kun je er maar 1 van hebben."
         : this.questPickupBlocked?.(ctx, pickup.itemRef) || "";
       if (blocked) return { action: "pickup", targetId: pickup.instanceId, message: blocked, events: [] };
+      // Fase 9 herstel 1: een item van een beroep vraagt een niveau (zoals een grondstof). Er verdwijnt niets.
+      const issue = item.professionId ? this.professionIssue(ctx, item.professionId, item.professionLevel) : null;
+      if (issue) throw httpError(403, issue, "PROFESSION_LEVEL");
     }
     const amount = pickup.pickupKind === "currency"
       ? Math.max(1, Math.round((safeInteger(pickup.minAmount, pickup.amount) + safeInteger(pickup.maxAmount, pickup.amount)) / 2))
@@ -1791,6 +1811,7 @@ export class Node03RuntimeService {
       this.saveEntityState(ctx, pickup);
     }
     this.recordGameplayEvent(ctx, "pickup_claimed", "player", pickup.instanceId, { grants });
+    const professionGrant = pickup.pickupKind !== "currency" ? this.itemProfessionGrant(ctx, pickup.itemRef, pickup.instanceId) : null;
     if (pickup.pickupKind !== "currency") {
       this.questEvents?.(ctx, [ctx.profile.id], { type: "pickup", refId: pickup.itemRef, eventKey: "pickup:" + pickup.instanceId + ":" + operationId, operationId,
         at: { x: Number.isFinite(Number(pickup.x)) ? Number(pickup.x) : ctx.position?.x, z: Number.isFinite(Number(pickup.z)) ? Number(pickup.z) : ctx.position?.z } });
@@ -1798,9 +1819,10 @@ export class Node03RuntimeService {
     return {
       action: "pickup",
       targetId: pickup.instanceId,
-      message: pickup.displayName + " picked up.",
-      events: [{ type: "picked_up", targetId: pickup.instanceId, label: pickup.displayName }],
-      grants
+      message: pickup.displayName + " picked up." + professionText(professionGrant),
+      events: [{ type: "picked_up", targetId: pickup.instanceId, label: pickup.displayName }].concat(professionGrant ? [Object.assign({ type: "profession_xp" }, professionGrant)] : []),
+      grants,
+      profession: professionGrant
     };
   }
 
@@ -2455,7 +2477,7 @@ export class Node03RuntimeService {
       action: all ? "loot_take_all" : "loot_take",
       grants,
       events: [{ type: "looted", amount: grants.length }],
-      message: keptNames.length ? "Bleef liggen (heb je al): " + keptNames.join(", ") + "." : ""
+      message: ((keptNames.length ? "Bleef liggen (heb je al): " + keptNames.join(", ") + "." : "") + professionTexts(grants)).trim()
     };
   }
 
@@ -2465,7 +2487,19 @@ export class Node03RuntimeService {
       const grant = this.grantCurrency(ctx, row.currencyId, row.quantity, reason, sourceRef, operationId);
       return grant ? [grant] : [];
     }
-    return this.grantItem(ctx, row.itemId, row.quantity, reason, sourceRef, operationId);
+    const grants = this.grantItem(ctx, row.itemId, row.quantity, reason, sourceRef, operationId);
+    // Fase 9 herstel 1: buit van een vijand met een beroep geeft beroeps-XP (uit een grondstof telt de grondstof zelf).
+    const profession = reason !== "resource_gathered" && grants.length ? this.itemProfessionGrant(ctx, row.itemId, sourceRef, { quiet: true }) : null;
+    return profession ? grants.concat([profession]) : grants;
+  }
+
+  // Fase 9 herstel 1 (keuze van Kevin 14-11): beroeps-XP voor een item met een beroep, of null. quiet = te laag of grens
+  // vol geeft gewoon geen XP (buit krijg je toch); de pickup weigert dat al eerder.
+  itemProfessionGrant(ctx, itemId, sourceRef, { quiet = false } = {}) {
+    const item = catalogSection(ctx.catalogs, "items")[itemId] || null;
+    if (!item?.professionId || safeInteger(item.professionXp, 0) <= 0) return null;
+    if (quiet && this.professionIssue(ctx, item.professionId, item.professionLevel)) return null;
+    return this.grantProfessionXp(ctx, item.professionId, safeInteger(item.professionXp, 0), sourceRef);
   }
 
   grantCurrency(ctx, currencyId, amountMinor, reason, sourceRef, operationId = randomId("node03_grant")) {
@@ -2717,7 +2751,7 @@ export class Node03RuntimeService {
       stop: plan.killed,
       message: what + (plan.killed ? plan.label + " verslagen." : plan.label + " geraakt voor " + plan.damage + "."
         + (plan.shieldBreak ? " Schild gebroken!" : plan.shieldUp ? " (schild)" : ""))
-        + (hits.length > 1 ? " +" + (hits.length - 1) + " in de buurt geraakt." : ""),
+        + (hits.length > 1 ? " +" + (hits.length - 1) + " in de buurt geraakt." : "") + professionTexts(grants),
       hitCount: hits.length,
       events,
       grants
@@ -3008,7 +3042,14 @@ export class Node03RuntimeService {
     return catalogSection(ctx.catalogs, "professions");
   }
 
+  // De beroepen die je nu hebt (geleerd en niet vergeten), met hun XP.
   professionXpOf(playerId) {
+    return new Map(this.db.prepare("SELECT profession_id, xp FROM player_professions WHERE player_id = ? AND active = 1").all(playerId)
+      .map((row) => [row.profession_id, Math.max(0, safeInteger(row.xp, 0))]));
+  }
+
+  // Fase 9 herstel 1 (keuze van Kevin 14-11): ook vergeten beroepen houden hun XP (je gaat verder waar je was).
+  professionKeptXpOf(playerId) {
     return new Map(this.db.prepare("SELECT profession_id, xp FROM player_professions WHERE player_id = ?").all(playerId)
       .map((row) => [row.profession_id, Math.max(0, safeInteger(row.xp, 0))]));
   }
@@ -3017,11 +3058,25 @@ export class Node03RuntimeService {
     return Math.max(0, safeInteger(economyValues(policiesOfType(ctx.project, "economy_rules")[0] || null).professionLimit, 0));
   }
 
-  // Het niveau van een speler in een beroep (0 als het beroep niet bestaat).
+  // Hoe lang je na vergeten moet wachten voor je weer mag vergeten (ms).
+  professionSwitchWaitMs(ctx) {
+    return Math.max(0, safeInteger(economyValues(policiesOfType(ctx.project, "economy_rules")[0] || null).professionSwitchWaitH, 24)) * 3600000;
+  }
+
+  // Wanneer je weer mag wisselen (ms sinds 1970), of 0 als dat nu al kan.
+  professionSwitchReadyAt(ctx) {
+    const wait = this.professionSwitchWaitMs(ctx);
+    if (!wait) return 0;
+    const last = this.db.prepare("SELECT MAX(forgotten_at) AS at FROM player_professions WHERE player_id = ?").get(ctx.profile.id)?.at;
+    const ready = last ? Date.parse(last) + wait : 0;
+    return ready > Date.now() ? ready : 0;
+  }
+
+  // Het niveau van een speler in een beroep (0 als het beroep niet bestaat). Een vergeten beroep houdt zijn niveau.
   professionLevelOf(ctx, professionId, xpMap = null) {
     const def = this.professionDefs(ctx)[professionId];
     if (!def) return 0;
-    const map = xpMap || this.professionXpOf(ctx.profile.id);
+    const map = xpMap || this.professionKeptXpOf(ctx.profile.id);
     return professionProgress(def, map.get(professionId) || 0).level;
   }
 
@@ -3036,7 +3091,8 @@ export class Node03RuntimeService {
         return "Je hebt al " + map.size + " " + (map.size === 1 ? "beroep" : "beroepen") + " (hooguit " + limit + "). Vergeet er eerst één bij Uitrusting (C) onder Beroepen.";
       }
     }
-    const level = professionProgress(def, map.get(professionId) || 0).level;
+    // Een vergeten beroep dat je weer oppakt, gaat verder met zijn oude XP.
+    const level = professionProgress(def, map.has(professionId) ? map.get(professionId) : this.professionKeptXpOf(ctx.profile.id).get(professionId) || 0).level;
     const need = Math.max(1, safeInteger(needLevel, 1));
     if (level < need) return "Je hebt " + (def.displayName || professionId) + " niveau " + need + " nodig (jij: " + level + ").";
     return null;
@@ -3046,27 +3102,37 @@ export class Node03RuntimeService {
   grantProfessionXp(ctx, professionId, amount, sourceRef = null) {
     const def = this.professionDefs(ctx)[professionId];
     if (!def) return null;
-    const row = this.db.prepare("SELECT xp FROM player_professions WHERE player_id = ? AND profession_id = ? LIMIT 1").get(ctx.profile.id, professionId);
+    const row = this.db.prepare("SELECT xp, active FROM player_professions WHERE player_id = ? AND profession_id = ? LIMIT 1").get(ctx.profile.id, professionId);
     const before = Math.max(0, safeInteger(row?.xp, 0));
     const cap = (professionProgress(def, 0).maxLevel - 1) * Math.max(1, safeInteger(def.xpPerLevel, 100));
     const after = Math.min(Math.max(before, cap), before + Math.max(0, safeInteger(amount, 0)));
     const stamp = now();
-    if (row) this.db.prepare("UPDATE player_professions SET xp = ?, updated_at = ? WHERE player_id = ? AND profession_id = ?").run(after, stamp, ctx.profile.id, professionId);
+    // Een vergeten beroep wordt weer actief, met zijn oude XP.
+    const resumed = Boolean(row) && safeInteger(row.active, 1) !== 1;
+    if (row) this.db.prepare("UPDATE player_professions SET xp = ?, active = 1, updated_at = ? WHERE player_id = ? AND profession_id = ?").run(after, stamp, ctx.profile.id, professionId);
     else this.db.prepare("INSERT INTO player_professions (player_id, profession_id, xp, learned_at, updated_at) VALUES (?, ?, ?, ?, ?)").run(ctx.profile.id, professionId, after, stamp, stamp);
     const was = professionProgress(def, before).level;
     const progress = professionProgress(def, after);
     return { kind: "profession_xp", professionId, displayName: def.displayName || professionId, amount: after - before,
-      level: progress.level, leveledUp: progress.level > was, learned: !row, sourceRef };
+      level: progress.level, leveledUp: progress.level > was, learned: !row || resumed, resumed, sourceRef };
   }
 
-  // Een beroep vergeten (alleen als er een grens is, anders hoeft het nooit). Je begint dan opnieuw op niveau 1.
+  // Een beroep vergeten (alleen als er een grens is, anders hoeft het nooit).
+  // Fase 9 herstel 1 (keuze van Kevin 14-11): je niveau en XP blijven bewaard; opnieuw vergeten kan pas na de wachttijd.
   forgetProfession(ctx, payload) {
     const professionId = safeString(payload.professionId || payload.profession_id, "");
     const def = this.professionDefs(ctx)[professionId];
-    const row = this.db.prepare("SELECT xp FROM player_professions WHERE player_id = ? AND profession_id = ? LIMIT 1").get(ctx.profile.id, professionId);
-    if (!def || !row) throw httpError(404, "Dat beroep heb je niet.");
-    this.db.prepare("DELETE FROM player_professions WHERE player_id = ? AND profession_id = ?").run(ctx.profile.id, professionId);
-    return { action: "profession_forget", professionId, message: "Je bent " + (def.displayName || professionId) + " vergeten. Je kunt nu een ander beroep leren." };
+    const row = this.db.prepare("SELECT xp, active FROM player_professions WHERE player_id = ? AND profession_id = ? LIMIT 1").get(ctx.profile.id, professionId);
+    if (!def || !row || safeInteger(row.active, 1) !== 1) throw httpError(404, "Dat beroep heb je niet.");
+    const readyAt = this.professionSwitchReadyAt(ctx);
+    if (readyAt) throw httpError(409, "Je hebt net al gewisseld. Opnieuw vergeten kan over " + waitText(readyAt - Date.now()) + ".");
+    const stamp = now();
+    this.db.prepare("UPDATE player_professions SET active = 0, forgotten_at = ?, updated_at = ? WHERE player_id = ? AND profession_id = ?").run(stamp, stamp, ctx.profile.id, professionId);
+    const level = professionProgress(def, row.xp).level;
+    const wait = this.professionSwitchWaitMs(ctx);
+    return { action: "profession_forget", professionId,
+      message: "Je bent " + (def.displayName || professionId) + " vergeten. Niveau " + level + " blijft bewaard: leer je het later weer, dan ga je verder waar je was."
+        + (wait ? " Opnieuw vergeten kan over " + waitText(wait) + "." : "") };
   }
 
   // Een recept leren (kopen bij de werkplek of als questbeloning). Al bekend = niets.
@@ -3084,11 +3150,15 @@ export class Node03RuntimeService {
     const defs = Object.values(this.professionDefs(ctx)).sort((a, b) => safeInteger(a.sortOrder, 0) - safeInteger(b.sortOrder, 0));
     if (!defs.length) return null;
     const map = this.professionXpOf(ctx.profile.id);
+    const kept = this.professionKeptXpOf(ctx.profile.id);
+    const readyAt = this.professionSwitchReadyAt(ctx);
     return {
       limit: this.professionLimit(ctx),
       learnedCount: map.size,
+      // Fase 9 herstel 1: tot wanneer je niet opnieuw kunt vergeten (0 = nu al).
+      switchReadyAt: readyAt ? new Date(readyAt).toISOString() : null,
       list: defs.map((def) => Object.assign({ professionId: def.id, displayName: def.displayName || def.id, iconAssetId: def.iconAssetId || null,
-        learned: map.has(def.id) }, professionProgress(def, map.get(def.id) || 0)))
+        learned: map.has(def.id), kept: !map.has(def.id) && kept.has(def.id) }, professionProgress(def, kept.get(def.id) || 0)))
     };
   }
 

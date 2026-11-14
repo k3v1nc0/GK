@@ -143,10 +143,11 @@ export const GAME_KINDS = {
         ui: ui("💬", "text", "werkbank"), default: null,
         help: help("Wat de NPC zegt als je met hem praat.", "Eén of twee korte zinnen, bijv. \"Hallo reiziger! Kan ik je helpen?\"", "Spelers lezen het niet → maak het korter.") },
       // Fase 8: prijs 0 = automatisch (Verkoopwaarde × opslag uit Instellingen > Geld). Een eigen prijs gaat voor.
-      shopOffers: refList("Winkel: verkoopt", "🛒", ["item_definition"], [
+      // Fase 9 herstel (Kevin 14-11): een winkel kan ook een recept verkopen (kopen = leren).
+      shopOffers: refList("Winkel: verkoopt", "🛒", ["item_definition", "recipe"], [
         { key: "price", label: "Eigen prijs", icon: "🪙", min: 0, max: 1000000000, default: 0 },
         { key: "buyBack", label: "Eigen terugkoopprijs", icon: "↩️", min: 0, max: 1000000000, default: 0 }
-      ], "werkbank", help("Wat je bij deze NPC kunt kopen (en aan hem kunt verkopen).", "Sleep items uit de Bibliotheek. Laat de prijzen op 0: dan rekent de winkel met de Verkoopwaarde van het item en de opslag uit Instellingen > 💰 Geld. Vul je er wel iets in, dan geldt dat bedrag voor dit item.", "Alles te duur of te goedkoop → pas de opslag aan in Instellingen > 💰 Geld (dan veranderen alle prijzen mee).")),
+      ], "werkbank", help("Wat je bij deze NPC kunt kopen (en aan hem kunt verkopen). Een recept kun je ook verkopen: kopen = het recept leren.", "Sleep items of recepten uit de Bibliotheek. Laat de prijzen op 0: dan rekent de winkel met de Verkoopwaarde van het item en de opslag uit Instellingen > 💰 Geld. Vul je er wel iets in, dan geldt dat bedrag voor dit item.", "Alles te duur of te goedkoop → pas de opslag aan in Instellingen > 💰 Geld (dan veranderen alle prijzen mee).")),
       shopCurrencyRef: refField("Betalen met", "🪙", "currency", false,
         help("Met welke valuta je bij deze NPC betaalt.", "Sleep een valuta (bijv. Goud) uit de Bibliotheek op dit vak.", "Melding 'winkel zonder valuta' → sleep hier een valuta op.")),
       crafting: toggle("Kan dingen maken", "🔨", false, "werkbank",

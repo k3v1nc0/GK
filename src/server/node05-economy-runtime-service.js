@@ -558,11 +558,13 @@ export class Node05EconomyRuntimeService {
   recipeKnown(ctx, recipe, known = null) {
     const learn = recipe.learn || (recipe.unlockMode === "player_unlock_required" ? "quest" : "start");
     if (learn === "start") return true;
+    // Geleerd (kopen bij de werkplek of in een winkel, of van een quest) telt altijd.
+    if ((known || this.knownRecipeIds(ctx.profile.id)).has(recipe.id)) return true;
     if (learn === "level") {
       if (!recipe.professionId) return true;
       return this.node03RuntimeService.professionLevelOf(ctx, recipe.professionId) >= Math.max(1, safeInteger(recipe.professionLevel, 1));
     }
-    return (known || this.knownRecipeIds(ctx.profile.id)).has(recipe.id);
+    return false;
   }
 
   // Wat leren kost (in de eerste valuta); null = gratis.
@@ -673,6 +675,7 @@ export class Node05EconomyRuntimeService {
   }
 
   vendorOfferSummary(ctx, vendor, offer) {
+    if (offer.recipeRef) return this.recipeOfferSummary(ctx, vendor, offer);
     const item = catalogSection(ctx.catalogs, "items")[offer.itemRef] || {};
     const sellCurrencyId = offer.sellCurrencyRef || item.vendorCurrencyRef || "currency.gold";
     const buyCurrencyId = offer.buyCurrencyRef || item.vendorCurrencyRef || sellCurrencyId;
@@ -699,6 +702,33 @@ export class Node05EconomyRuntimeService {
       stock,
       canBuy: vendor.inRange === true && ["sell_to_player", "both"].includes(offer.mode) && sellPrice > 0 && funds >= sellPrice && (stock === null || stock > 0),
       canSell: vendor.inRange === true && buyPrice > 0 && owned > 0 && itemIsTradable(item)
+    });
+  }
+
+  // Fase 9 herstel (Kevin 14-11): een recept in de winkel. Kopen = leren (één keer); prijs 0 = de prijs om te leren.
+  recipeOfferSummary(ctx, vendor, offer) {
+    const recipe = catalogSection(ctx.catalogs, "recipes")[offer.recipeRef] || null;
+    const currencyId = offer.sellCurrencyRef || Object.keys(catalogSection(ctx.catalogs, "currencies"))[0] || "";
+    const own = Math.max(0, safeInteger(offer.sellPriceMinor, 0));
+    const price = own > 0 ? own : Math.max(0, safeInteger(recipe?.learnPrice, 0));
+    const known = recipe ? this.recipeKnown(ctx, recipe) : true;
+    const funds = this.currencyAmount(ctx.profile.id, currencyId);
+    const profession = recipe?.professionId ? catalogSection(ctx.catalogs, "professions")[recipe.professionId] : null;
+    return Object.assign({}, offer, {
+      kind: "recipe",
+      displayName: "Recept: " + (recipe?.displayName || offer.recipeRef),
+      professionName: profession?.displayName || null,
+      known,
+      sellCurrencyRef: currencyId,
+      buyCurrencyRef: currencyId,
+      sellPriceMinor: price,
+      buyPriceMinor: 0,
+      sellPriceAuto: own <= 0,
+      buyPriceAuto: true,
+      owned: 0,
+      stock: null,
+      canBuy: Boolean(recipe) && vendor.inRange === true && !known && funds >= price,
+      canSell: false
     });
   }
 
@@ -1057,6 +1087,12 @@ export class Node05EconomyRuntimeService {
       error.status = 404;
       throw error;
     }
+    // Fase 9 herstel (Kevin 14-11): ophalen alleen bij de werkplek waar je het liet maken.
+    const station = this.craftingStations(ctx).find((entry) => entry.stationId === row.station_entity_id) || null;
+    const askedId = safeString(payload.stationId || payload.station_id, "");
+    const stationName = station?.linkedEntity?.label || "de werkplek waar je het liet maken";
+    if (!station || (askedId && askedId !== row.station_entity_id)) throw httpError(400, "Haal dit op bij " + stationName + ".");
+    this.assertInRange(station, "De werkplek");
     if (!row.completes_at || Date.parse(row.completes_at) > Date.now()) {
       const error = new Error("Crafting job is nog niet klaar.");
       error.status = 409;
@@ -1111,6 +1147,17 @@ export class Node05EconomyRuntimeService {
       const error = new Error("Vendor offer kan niet gekocht worden.");
       error.status = 404;
       throw error;
+    }
+    // Fase 9 herstel: een recept kopen = het leren (één keer, het geld verdwijnt uit het spel).
+    if (offer.recipeRef) {
+      const recipeOffer = this.recipeOfferSummary(ctx, vendor, offer);
+      const recipe = catalogSection(ctx.catalogs, "recipes")[offer.recipeRef] || null;
+      if (!recipe) throw httpError(404, "Dit recept bestaat niet meer.");
+      if (recipeOffer.known) throw httpError(409, "Dit recept ken je al.");
+      if (recipeOffer.sellPriceMinor > 0) this.spendCurrency(ctx, recipeOffer.sellCurrencyRef, recipeOffer.sellPriceMinor, "recipe_learn", offer.offerId, operationId);
+      this.node03RuntimeService.unlockRecipe(ctx, recipe.id, "shop");
+      this.node03RuntimeService.recordGameplayEvent(ctx, "recipe_learned", "player", vendor.vendorId, { recipeId: recipe.id, total: recipeOffer.sellPriceMinor });
+      return { action: "vendor_buy", grants: [], message: "Je kent nu " + (recipe.displayName || recipe.id) + "." + (recipeOffer.professionName ? " Maak het bij een werkplek voor " + recipeOffer.professionName + "." : "") };
     }
     const quantity = normalizeQuantity(payload.quantity, 1);
     // Quest Builder stap 4: een uniek item koop je niet als je het al hebt (en nooit meer dan 1).

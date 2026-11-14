@@ -155,6 +155,8 @@
 .gkToast span { min-width: 0; overflow-wrap: anywhere; }
 .gkToast.error { border-color: rgba(255, 90, 90, 0.75); background: rgba(48, 12, 16, 0.92); }
 .gkToast.warning { border-color: rgba(246, 197, 68, 0.75); }
+/* Kevin 14-11: iets is klaar bij een werkplek = goud en een pulsje, zodat je het ziet. */
+.gkToast.ready { border-color: var(--gk-gold); box-shadow: 0 0 14px rgba(246, 197, 68, 0.5); animation: gkPop 0.25s ease-out, gkXpPulse 1.2s ease-out 3; }
 .gkToast button { flex: none; width: 26px; height: 26px; margin: -4px -4px -4px 0; border-radius: 8px; border: 0; background: rgba(255, 255, 255, 0.08); padding: 5px; }
 
 /* level omhoog */
@@ -576,6 +578,9 @@
 .gkProf { display: grid; grid-template-columns: 26px 1fr auto; align-items: center; gap: 8px; padding: 6px; border: 1px solid var(--gk-line); border-radius: 8px; }
 .gkProf > .gkIco, .gkProf > .gkProfImg { width: 26px; height: 26px; }
 .gkProfNew { opacity: 0.6; }
+.gkProfFull { opacity: 0.45; }
+.gkRecipeOffer .gkRecipeMark { position: absolute; left: 3px; top: 2px; }
+.gkRecipeOffer .gkRecipeMark .gkIco { width: 16px; height: 16px; }
 .gkProfMain { display: grid; gap: 3px; min-width: 0; }
 .gkProfName { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
 .gkProf .gkBtn { min-height: 30px; padding: 3px 8px; }
@@ -584,6 +589,10 @@
 .gkJob { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; white-space: nowrap; }
 .gkJob .gkIco { width: 18px; height: 18px; }
 .gkJob .gkProgress { flex: 1 1 auto; }
+.gkJob .gkProgress i { transition: width 0.25s linear; }
+.gkJobLeft { min-width: 34px; color: var(--gk-muted); text-align: right; }
+.gkJobReady .gkJobLeft { color: #6dff9a; font-weight: 800; }
+.gkJobReady .gkBtn.gkGo:not(:disabled) { animation: gkXpPulse 1.2s ease-out infinite; }
 .gkCraftJobs .gkBtn { min-height: 30px; height: 30px; padding: 3px 8px; }
 
 @keyframes gkPop { from { transform: scale(0.94); opacity: 0; } to { transform: none; opacity: 1; } }

@@ -493,6 +493,15 @@ In de game: een loottabel mag geld laten vallen (🪙 in de editor, met proef); 
 - **Server:** maken controleert recept, werkplek (geen andere werkplek als de gevraagde niet bestaat), afstand, kennen, beroepsniveau, beroepen-grens, materiaal en geld voordat er iets uit de tas gaat; oogsten controleert het niveau voor de grondstof weg is. Maken geeft alleen beroeps-XP, geen gewone XP.
 - **⚖️ Balans:** rood voor een recept boven het hoogste niveau, zonder werkplek, "van een quest" zonder quest, een grondstof die je nergens krijgt, een niveau zonder beroeps-XP-bron, en een geldlus via een recept (alles kopen + maken < verkopen). Nieuwe blokken 🧰 Beroepen, 🪨 Grondstofbronnen en 🗡️ Uitrusting per level (oranje als een levelbereik niets heeft).
 
+**Handtest 14-11: A t/m E, H en I GO; F deels, G NO-GO. Herstel 1 14-11 (wacht op handtest), met twee keuzes van Kevin:**
+- **F:** wat je met een tijd laat maken, haal je alleen op bij de werkplek waar je het liet maken (server en HUD; bij een andere werkplek staat erbij waar het klaarligt).
+- **G:** een winkel kan ook een recept verkopen (sleep het in "Winkel: verkoopt"); kopen = leren, één keer. Prijs 0 = de prijs om te leren van het recept.
+- **I:** zit je aan de grens van Beroepen per character, dan zegt Uitrusting (C) bij de andere beroepen "kan niet" in plaats van "nog niet geleerd".
+- **Maken:** de balk loopt mee met de klok van de server; klaar = groen "klaar!", een gouden melding in beeld en een regel in de chat, ook als Maken dicht is.
+- **Keuze Kevin: vergeten bewaart je voortgang.** Je niveau blijft staan (migratie 032: `active`, `forgotten_at`); leer je het later weer, dan ga je verder waar je was. Opnieuw vergeten kan pas na het schuifje "Wachttijd na vergeten" (Instellingen > 💰 Geld > 🧰 Beroepen, standaard 24 uur).
+- **Keuze Kevin: een item met een beroep.** Een item krijgt het blok 🧰 Beroep (beroep, vanaf niveau, beroeps-XP). Een pickup oppakken vraagt het niveau en geeft XP; buit van een vijand krijg je altijd, XP pas vanaf het niveau. Uit een grondstof telt de XP van de grondstof. Zo kun je Koken maken met vis en kruiden.
+- **⚖️ Balans:** een recept dat een winkel verkoopt telt als bron (geen rood "van een quest"); oranje als een winkel een recept verkoopt dat je al meteen kent; items met een beroep tellen als bron van beroeps-XP.
+
 #### Fase 10 — Levende wereld en de hele route
 **Waarom:** NPC's staan stil, er is geen dag en nacht, lore zit alleen in quests, en niemand heeft de game nog van begin tot eind gespeeld. (Het verhaal zelf loopt al vanaf Fase 5 mee via de Quest Builder.)
 **Bouw:**

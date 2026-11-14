@@ -50,17 +50,37 @@ export function professionFields(subject, verb, verbYou, { xpDefault = 10 } = {}
   };
 }
 
+// Fase 9 herstel 1 (keuze van Kevin 14-11): een item met een beroep geeft beroeps-XP als je het oppakt (pickup) of als
+// buit van een vijand pakt. Alles staat in het blok 🧰 Beroep (de itemkaart heeft al genoeg velden in beeld).
+export function itemProfessionFields() {
+  return {
+    professionRef: { type: "ref", refKind: "profession", required: false, audience: "server", label: "Beroep",
+      ui: ui("🧰", "ref", "werkbank", { group: PROFESSION_GROUP }), default: null,
+      help: help("Bij welk beroep dit item hoort, bijv. vis of kruiden voor Koken. Oppakken (een pickup op de grond) of als buit van een vijand pakken geeft dan beroeps-XP. Uit een grondstof telt de XP van de grondstof, niet van het item. Leeg = geen beroep.",
+        "Sleep een 🧰 Beroep uit de Bibliotheek op dit vak. Maak er een recept bij met dit item als ingrediënt, bij een werkplek voor hetzelfde beroep.",
+        "Oppakken geeft geen beroeps-XP → sleep hier een beroep op en zet Beroeps-XP hoger dan 0.") },
+    professionLevel: { type: "integer", required: false, min: 1, max: 100, audience: "server", label: "Vanaf niveau",
+      ui: ui("🎚️", "slider", "werkbank", { step: 1, range: [1, 50], group: PROFESSION_GROUP }), default: 1,
+      help: help("Een pickup van dit item op de grond kun je pas vanaf dit niveau in het beroep oppakken (daaronder zegt de game waarom niet). Als buit van een vijand krijg je het altijd, maar beroeps-XP pas vanaf dit niveau.",
+        "1 voor gewone vis en kruiden; hoger voor zeldzame.", "Beginners kunnen het niet oppakken → lager.") },
+    professionXp: { type: "integer", required: false, min: 0, max: 100000, audience: "server", label: "Beroeps-XP",
+      ui: ui("⭐", "slider", "werkbank", { step: 1, range: [0, 200], group: PROFESSION_GROUP }), default: 5,
+      help: help("Hoeveel beroeps-XP je krijgt elke keer dat je dit item oppakt of als buit pakt (één keer per keer pakken, niet per stuk).",
+        "5 bij XP per niveau 100: twintig keer oppakken en je stijgt een niveau.", "Spelers stijgen te snel → minder. Te traag → meer, of laat koken meer XP geven.") }
+  };
+}
+
 // Recept: hoe leer je het.
 export const recipeLearnFields = () => ({
   learn: { type: "select", required: false, options: LEARN_MODES.slice(), optionIcons: { start: "✅", buy: "🪙", quest: "📜", level: "🎚️" },
-    optionLabels: { start: "Meteen bekend", buy: "Kopen bij de werkplek", quest: "Van een quest", level: "Vanzelf op het niveau" },
+    optionLabels: { start: "Meteen bekend", buy: "Kopen (werkplek of winkel)", quest: "Van een quest", level: "Vanzelf op het niveau" },
     audience: "server", label: "Hoe leer je het", ui: ui("📖", "select", "werkbank", { group: PROFESSION_GROUP }), default: "start",
-    help: help("Hoe een speler dit recept leert. Een recept dat je nog niet kent, zie je niet bij Maken (behalve Kopen: daar staat de knop Leren).",
+    help: help("Hoe een speler dit recept leert. Een recept dat je nog niet kent, zie je niet bij Maken (behalve Kopen: daar staat de knop Leren). Een recept dat een winkel verkoopt (sleep het in 'Winkel: verkoopt' bij een NPC) leer je ook door het daar te kopen.",
       "Meteen voor de eerste recepten (te hoog niveau = grijs met de reden). Kopen of een quest voor bijzondere recepten. Vanzelf: het verschijnt zodra je het niveau hebt.",
       "Niemand kent het → kijk of een quest het als beloning geeft (⚖️ Balans zegt het).") },
   learnPrice: { type: "integer", required: false, min: 0, max: 100000000, audience: "server", label: "Prijs om te leren",
-    ui: ui("🪙", "slider", "werkbank", { step: 5, range: [0, 1000], group: PROFESSION_GROUP, when: { key: "learn", is: ["buy"] } }), default: 50,
-    help: help("Wat leren kost bij de werkplek (in de eerste valuta). Dat geld verdwijnt uit het spel.", "50-200 voor een goed recept.", "Niemand koopt het → goedkoper. Iedereen heeft het meteen → duurder.") }
+    ui: ui("🪙", "slider", "werkbank", { step: 5, range: [0, 1000], group: PROFESSION_GROUP }), default: 50,
+    help: help("Wat leren kost: bij de werkplek (Hoe leer je het: Kopen, in de eerste valuta) en in een winkel die het recept verkoopt (een eigen prijs in de winkel gaat voor). Dat geld verdwijnt uit het spel.", "50-200 voor een goed recept.", "Niemand koopt het → goedkoper. Iedereen heeft het meteen → duurder.") }
 });
 
 // Een werkplek (NPC of model) hoort bij één beroep.

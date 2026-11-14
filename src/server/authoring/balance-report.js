@@ -228,6 +228,13 @@ export function balanceReport(documents, { buildErrors = [] } = {}) {
     const noteXp = (ref, doc) => { if (ref && int(doc.body.professionXp, 10) > 0) xpFrom.set(ref, (xpFrom.get(ref) || []).concat(doc)); };
     for (const doc of of("resource_definition")) noteXp(doc.body.professionRef, doc);
     for (const doc of of("recipe")) noteXp(doc.body.professionRef, doc);
+    // Fase 9 herstel 1: een item met een beroep geeft beroeps-XP bij oppakken en buit.
+    for (const doc of of("item_definition")) if (doc.body.professionRef && int(doc.body.professionXp, 5) > 0) xpFrom.set(doc.body.professionRef, (xpFrom.get(doc.body.professionRef) || []).concat(doc));
+    // Fase 9 herstel 1: recepten die een winkel verkoopt (kopen = leren).
+    const shopRecipes = new Map();
+    for (const npc of of("npc")) for (const row of Array.isArray(npc.body.shopOffers) ? npc.body.shopOffers : []) {
+      if (byKey.get(row?.ref)?.kind === "recipe") shopRecipes.set(row.ref, (shopRecipes.get(row.ref) || []).concat(npc));
+    }
     // Waar een item vandaan komt: grondstof, vijand, winkel, recept, quest, los in de wereld of bij de start.
     const sources = new Map();
     const noteSource = (ref, text, docKey) => {
@@ -270,11 +277,14 @@ export function balanceReport(documents, { buildErrors = [] } = {}) {
         add("red", "RECIPE_NO_STATION", recipe.docKey, "Recept " + nameOf(recipe) + where + " kan nergens gemaakt worden: geen NPC of model is een werkplek" + (prof ? " voor " + professionName(prof) : " zonder beroep")
           + ". Zet bij een NPC of model 'Kan dingen maken' aan" + (prof ? " en sleep " + professionName(prof) + " op 'Werkplek voor'." : " en laat 'Werkplek voor' leeg."));
       }
-      if (body.learn === "quest" && !questRewardRefs.has(recipe.docKey)) {
-        add("red", "RECIPE_NO_QUEST", recipe.docKey, "Recept " + nameOf(recipe) + " leer je alleen van een quest, maar geen enkele quest geeft het. Sleep het bij een quest op Beloning, of kies bij 'Hoe leer je het' iets anders.");
+      if (body.learn === "quest" && !questRewardRefs.has(recipe.docKey) && !shopRecipes.has(recipe.docKey)) {
+        add("red", "RECIPE_NO_QUEST", recipe.docKey, "Recept " + nameOf(recipe) + " leer je alleen van een quest, maar geen enkele quest of winkel geeft het. Sleep het bij een quest op Beloning of bij een NPC op 'Winkel: verkoopt', of kies bij 'Hoe leer je het' iets anders.");
+      }
+      if ((body.learn || "start") === "start" && shopRecipes.has(recipe.docKey)) {
+        add("orange", "RECIPE_SHOP_KNOWN", recipe.docKey, "Recept " + nameOf(recipe) + " ken je meteen (Hoe leer je het: Meteen bekend), maar " + nameOf(shopRecipes.get(recipe.docKey)[0]) + " verkoopt het: niemand koopt het. Kies bij 'Hoe leer je het' Kopen, of haal het uit de winkel.");
       }
       if (prof && need > 1 && !xpFrom.has(prof)) {
-        add("red", "PROFESSION_NO_XP", recipe.docKey, "Recept " + nameOf(recipe) + " vraagt " + professionName(prof) + " niveau " + need + ", maar geen grondstof of recept geeft " + professionName(prof) + "-XP: niemand komt boven niveau 1.");
+        add("red", "PROFESSION_NO_XP", recipe.docKey, "Recept " + nameOf(recipe) + " vraagt " + professionName(prof) + " niveau " + need + ", maar geen grondstof, item of recept geeft " + professionName(prof) + "-XP: niemand komt boven niveau 1.");
       }
       for (const row of Array.isArray(body.ingredients) ? body.ingredients : []) {
         if (!row?.ref || !byKey.has(row.ref)) continue;
@@ -315,16 +325,28 @@ export function balanceReport(documents, { buildErrors = [] } = {}) {
       if (need > professionMax(prof)) {
         add("red", "RESOURCE_LEVEL", doc.docKey, "Grondstof " + nameOf(doc) + " vraagt " + professionName(prof) + " niveau " + need + ", maar het hoogste niveau van dat beroep is " + professionMax(prof) + ": niemand kan hem oogsten.");
       } else if (need > 1 && !xpFrom.has(prof)) {
-        add("red", "PROFESSION_NO_XP", doc.docKey, "Grondstof " + nameOf(doc) + " vraagt " + professionName(prof) + " niveau " + need + ", maar geen grondstof of recept geeft " + professionName(prof) + "-XP: niemand komt boven niveau 1.");
+        add("red", "PROFESSION_NO_XP", doc.docKey, "Grondstof " + nameOf(doc) + " vraagt " + professionName(prof) + " niveau " + need + ", maar geen grondstof, item of recept geeft " + professionName(prof) + "-XP: niemand komt boven niveau 1.");
+      }
+    }
+    // Fase 9 herstel 1: een item met een beroep (oppakken vraagt een niveau).
+    for (const doc of of("item_definition")) {
+      const prof = doc.body.professionRef && byKey.get(doc.body.professionRef)?.kind === "profession" ? doc.body.professionRef : null;
+      if (!prof) continue;
+      const need = Math.max(1, int(doc.body.professionLevel, 1));
+      if (need > professionMax(prof)) {
+        add("red", "ITEM_PROFESSION_LEVEL", doc.docKey, "Item " + nameOf(doc) + " vraagt " + professionName(prof) + " niveau " + need + ", maar het hoogste niveau van dat beroep is " + professionMax(prof) + ": niemand kan het oppakken.");
+      } else if (need > 1 && !(xpFrom.get(prof) || []).some((other) => other.docKey !== doc.docKey)) {
+        add("red", "PROFESSION_NO_XP", doc.docKey, "Item " + nameOf(doc) + " vraagt " + professionName(prof) + " niveau " + need + ", maar geen grondstof, ander item of recept geeft " + professionName(prof) + "-XP: niemand komt boven niveau 1.");
       }
     }
     for (const prof of professions) {
       const recipesOf = of("recipe").filter((doc) => doc.body.professionRef === prof.docKey);
       const resourcesOf = of("resource_definition").filter((doc) => doc.body.professionRef === prof.docKey);
+      const itemsOf = of("item_definition").filter((doc) => doc.body.professionRef === prof.docKey);
       const stationList = stations.get(prof.docKey) || [];
       const xpList = xpFrom.get(prof.docKey) || [];
-      if (!recipesOf.length && !resourcesOf.length) add("orange", "PROFESSION_EMPTY", prof.docKey, "Beroep " + nameOf(prof) + " heeft nog geen grondstoffen of recepten: niemand leert het. Sleep het op een grondstof of recept.");
-      professionsReport.push({ docKey: prof.docKey, name: nameOf(prof), maxLevel: professionMax(prof.docKey), recipes: recipesOf.length, resources: resourcesOf.length,
+      if (!recipesOf.length && !resourcesOf.length && !itemsOf.length) add("orange", "PROFESSION_EMPTY", prof.docKey, "Beroep " + nameOf(prof) + " heeft nog geen grondstoffen, items of recepten: niemand leert het. Sleep het op een grondstof, item of recept.");
+      professionsReport.push({ docKey: prof.docKey, name: nameOf(prof), maxLevel: professionMax(prof.docKey), recipes: recipesOf.length, resources: resourcesOf.length, items: itemsOf.length,
         stations: stationList.map(nameOf), xpSources: xpList.slice(0, 4).map(nameOf), reachable: xpList.length ? professionMax(prof.docKey) : 1 });
     }
     // Grondstofbronnen: per item dat in een recept zit, waar je het vindt.

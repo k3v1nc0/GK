@@ -21,7 +21,7 @@ import { BALANCE_KINDS } from "./kinds/balance.js";
 import { ECONOMY_KINDS } from "./kinds/economy.js";
 import { TRADE_KINDS } from "./kinds/trade.js";
 import { PORTAL_KINDS } from "./kinds/portal.js";
-import { PROFESSION_KINDS } from "./kinds/profession.js";
+import { PROFESSION_KINDS, itemProfessionFields } from "./kinds/profession.js";
 import { effectFields } from "./kinds/effect-fields.js";
 import { AREA_SETTING_SPECS, AREA_SOORT_ORDER, AREA_SOORTEN, areaSettingsIssues, areaSoort } from "./kinds/area.js";
 import { questSpawnsShapeIssues, questStartShapeIssues, questStepsShapeIssues } from "../../../apps/web/public/shared/quest-graph.js";
@@ -166,7 +166,8 @@ export const CANONICAL_KINDS = {
       useCooldownS: { type: "integer", required: false, min: 0, max: 86400, audience: "client", label: "Wachttijd",
         ui: ui("⏱️", "slider", "werkbank", { step: 1, range: [0, 300], unit: "s", group: USE_GROUP }), default: 0,
         help: help("Hoe lang je moet wachten voor je dit item nog eens kunt gebruiken. Je ziet de tijd in de tas.", "10-30 s voor drankjes, 0 voor gewoon eten.", "Spelers drinken 20 drankjes in een gevecht → langer.") },
-      ...effectFields(USE_GROUP, { unit: "min", what: "het item" })
+      ...effectFields(USE_GROUP, { unit: "min", what: "het item" }),
+      ...itemProfessionFields()
     }
   },
   pickup: {

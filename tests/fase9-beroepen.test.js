@@ -12,6 +12,7 @@ import { professionProgress } from "../src/shared/authoring/kinds/profession.js"
 import { compileGameSection } from "../src/server/authoring/game-compiler.js";
 import { buildRuntimeWorld, itemSourcesFor } from "../src/server/authoring/world-builder.js";
 import { balanceReport } from "../src/server/authoring/balance-report.js";
+import { runtimeItemFromCanonical } from "../src/server/authoring/runtime-overlay.js";
 import { Node03RuntimeService } from "../src/server/node03-runtime-service.js";
 import { Node05EconomyRuntimeService } from "../src/server/node05-economy-runtime-service.js";
 import { runOperation } from "../src/server/persistence/operation-contract.js";
@@ -160,7 +161,7 @@ function setup(options = {}) {
   const swords = () => node03.ownedItemCount("p1", "item.sword");
   const money = () => svc.currencyAmount("p1", "currency.gold");
   const station = (id) => svc.buildCraftingSnapshot(ctx()).stations.find((entry) => entry.stationId === id);
-  return { db, svc, node03, ctx, act, give, giveMoney, ore, swords, money, station };
+  return { db, svc, node03, ctx, act, give, giveMoney, ore, swords, money, station, catalogs, zonePackage };
 }
 
 test("maken: de server weigert verkeerde werkplek, te laag niveau en te weinig materiaal, en er verdwijnt niets", () => {
@@ -311,4 +312,171 @@ test("HUD en editor: grijze recepten met reden, Leren, beroepen bij Uitrusting, 
   assert.match(editor, /"recipe", "profession", "world_flag"/, "Beroep staat in de Bibliotheek");
   assert.match(editor, /Grondstofbronnen/);
   assert.match(editor, /Uitrusting per level/);
+});
+
+// ---- Fase 9 herstel 1 (Kevin 14-11) ----
+
+test("herstel 1: een winkel verkoopt een recept; kopen = leren (één keer), en het staat in de build", () => {
+  const docs = [
+    doc("currency", { currencyId: "currency.gold", displayName: "Goud" }, "currency:currency.gold"),
+    doc("item_definition", { itemId: "item.ore", displayName: "Kopererts" }, "item_definition:item.ore"),
+    doc("item_definition", { itemId: "item.sword", displayName: "Zwaard" }, "item_definition:item.sword"),
+    doc("recipe", { recipeId: "recipe.book", displayName: "Boek", ingredients: [{ ref: "item_definition:item.ore", amount: 1 }], outputItemRef: "item_definition:item.sword", learn: "buy", learnPrice: 30 }, "recipe:recipe.book"),
+    doc("npc", { npcId: "npc.smid", displayName: "Smid", shopCurrencyRef: "currency:currency.gold", shopOffers: [{ ref: "recipe:recipe.book", price: 0, buyBack: 0 }, { ref: "item_definition:item.ore", price: 2, buyBack: 0 }] }, "npc:npc.smid")
+  ];
+  const section = compileGameSection(docs, {});
+  assert.deepEqual(section.errors, []);
+  const world = buildRuntimeWorld({ game: section.server });
+  const offers = Object.values(world.gameProject.catalogs.vendorCatalogs)[0].offers;
+  const recipeOffer = offers.find((offer) => offer.recipeRef === "recipe.book");
+  assert.equal(recipeOffer.visualItemRef, "item.sword", "het plaatje is wat je ermee maakt");
+  assert.ok(offers.some((offer) => offer.itemRef === "item.ore"), "gewone items blijven gewoon");
+
+  const w = setup();
+  w.catalogs.vendorCatalogs = { "vendor_catalog.smid": { offers: [{ offerId: "offer.npc.smid.recipe.recipe.secret", recipeRef: "recipe.secret", visualItemRef: "item.sword",
+    mode: "sell_to_player", sellCurrencyRef: "currency.gold", sellPriceMinor: 0, buyCurrencyRef: "currency.gold", buyPriceMinor: 0, stockMode: "infinite" }] } };
+  w.catalogs.recipes["recipe.secret"].learnPrice = 40;
+  w.zonePackage.entityComponents.push({ nodeType: "vendor_component", vendorId: "vendor.smid", vendorCatalogRef: "vendor_catalog.smid", range: 1000, x: 0, y: 0, z: 0 });
+  const offer = () => w.svc.buildVendorSnapshot(w.ctx()).vendors[0].offers[0];
+  assert.equal(offer().kind, "recipe");
+  assert.equal(offer().displayName, "Recept: Geheim");
+  assert.equal(offer().sellPriceMinor, 40, "prijs 0 in de winkel = de prijs om te leren");
+  assert.equal(offer().canBuy, false, "te weinig goud");
+  const buy = () => w.act("vendor_buy", { vendorId: "vendor.smid", offerId: "offer.npc.smid.recipe.recipe.secret", quantity: 1 });
+  assert.throws(buy, /Goud/);
+  w.giveMoney(100);
+  assert.match(buy().message, /Je kent nu Geheim\. Maak het bij een werkplek voor Smeden/);
+  assert.equal(w.money(), 60);
+  assert.ok(w.station("station.npc.smid").recipes.some((recipe) => recipe.recipeId === "recipe.secret"), "het quest-recept staat nu bij Maken");
+  assert.equal(offer().known, true);
+  assert.throws(buy, /ken je al/);
+  assert.equal(w.money(), 60, "twee keer kopen kost niets extra");
+});
+
+test("herstel 1: ophalen kan alleen bij de werkplek waar je het liet maken", () => {
+  const w = setup();
+  w.catalogs.recipes["recipe.soup"].craftDurationMs = 5000;
+  w.give("item.ore", 1);
+  const started = w.act("craft", { stationId: "station.npc.kok", recipeId: "recipe.soup" });
+  assert.match(started.message, /Craft gestart/);
+  w.db.prepare("UPDATE player_crafting_jobs SET completes_at = ? WHERE id = ?").run(new Date(Date.now() - 1000).toISOString(), started.jobId);
+  assert.throws(() => w.act("crafting:claim", { jobId: started.jobId, stationId: "station.npc.smid" }), /Haal dit op bij/);
+  assert.equal(w.swords(), 0, "niets gekregen bij de verkeerde werkplek");
+  w.act("crafting:claim", { jobId: started.jobId, stationId: "station.npc.kok" });
+  assert.equal(w.swords(), 1);
+  const body = node05ActionBody("crafting:claim", { jobId: "job.1", stationId: "station.npc.kok" }, "op");
+  assert.equal(body.stationId, "station.npc.kok", "de HUD stuurt de werkplek mee");
+});
+
+test("herstel 1: vergeten bewaart je niveau; opnieuw vergeten pas na de wachttijd", () => {
+  const w = setup({ money: { professionLimit: 1, professionSwitchWaitH: 24 } });
+  w.give("item.ore", 6);
+  w.node03.grantProfessionXp(w.ctx(), "prof.smeden", 150, "test");
+  const forgot = w.node03.forgetProfession(w.ctx(), { professionId: "prof.smeden" });
+  assert.match(forgot.message, /Niveau 2 blijft bewaard/);
+  assert.match(forgot.message, /Opnieuw vergeten kan over 24 uur/);
+  let hud = w.node03.professionsForHud(w.ctx());
+  assert.equal(hud.learnedCount, 0);
+  assert.ok(hud.switchReadyAt, "de HUD weet tot wanneer je moet wachten");
+  assert.deepEqual(hud.list.map((entry) => [entry.professionId, entry.learned, entry.kept, entry.level]), [["prof.smeden", false, true, 2], ["prof.koken", false, false, 1]]);
+  // Meteen een ander beroep leren mag; opnieuw vergeten nog niet.
+  assert.match(w.act("craft", { stationId: "station.npc.kok", recipeId: "recipe.soup" }).message, /\+5 Koken-XP/);
+  assert.throws(() => w.node03.forgetProfession(w.ctx(), { professionId: "prof.koken" }), /Opnieuw vergeten kan over/);
+  // De grens is vol: Smeden kan nu niet.
+  assert.throws(() => w.act("craft", { stationId: "station.npc.smid", recipeId: "recipe.sword" }), /Je hebt al 1 beroep/);
+  // 25 uur later: wisselen mag, en Smeden gaat verder waar het was (150 XP = niveau 2).
+  w.db.prepare("UPDATE player_professions SET forgotten_at = ? WHERE forgotten_at IS NOT NULL").run(new Date(Date.now() - 25 * 3600000).toISOString());
+  w.node03.forgetProfession(w.ctx(), { professionId: "prof.koken" });
+  const sword = w.act("craft", { stationId: "station.npc.smid", recipeId: "recipe.sword" });
+  assert.match(sword.message, /Je gaat verder met Smeden \(niveau 2\)\. \+20 Smeden-XP/);
+  assert.equal(w.node03.professionXpOf("p1").get("prof.smeden"), 170);
+  hud = w.node03.professionsForHud(w.ctx());
+  assert.deepEqual(hud.list.map((entry) => [entry.professionId, entry.learned, entry.kept]), [["prof.smeden", true, false], ["prof.koken", false, true]]);
+  // Wachttijd 0 = meteen weer wisselen.
+  const free = setup({ money: { professionLimit: 1, professionSwitchWaitH: 0 } });
+  free.node03.grantProfessionXp(free.ctx(), "prof.smeden", 10, "test");
+  free.node03.forgetProfession(free.ctx(), { professionId: "prof.smeden" });
+  free.node03.grantProfessionXp(free.ctx(), "prof.smeden", 10, "test");
+  assert.doesNotThrow(() => free.node03.forgetProfession(free.ctx(), { professionId: "prof.smeden" }));
+});
+
+test("herstel 1: een item met een beroep geeft beroeps-XP bij oppakken en buit", () => {
+  // Kaart naar wereld: Beroep, Vanaf niveau en Beroeps-XP komen mee.
+  const runtime = runtimeItemFromCanonical({ itemId: "item.fish", displayName: "Vis", professionRef: "profession:prof.koken", professionLevel: 2, professionXp: 7 });
+  assert.deepEqual([runtime.professionId, runtime.professionLevel, runtime.professionXp], ["prof.koken", 2, 7]);
+  assert.equal(runtimeItemFromCanonical({ itemId: "item.ore", displayName: "Erts" }).professionId, undefined);
+  const fields = CANONICAL_KINDS.item_definition.fields;
+  assert.equal(fields.professionRef.ui.group, "🧰 Beroep");
+  assert.equal(fields.professionXp.default, 5);
+
+  const w = setup();
+  w.catalogs.items["item.fish"] = { id: "item.fish", displayName: "Vis", stackable: true, tradable: true, vendorBaseValueMinor: 1, professionId: "prof.koken", professionLevel: 2, professionXp: 5 };
+  const fish = () => w.node03.ownedItemCount("p1", "item.fish");
+  // Buit van een vijand: te laag = wel het item, geen XP.
+  let rows = w.node03.grantLootRow(w.ctx(), { itemId: "item.fish", quantity: 2 }, "actor_defeated", "actor.wolf.1", "op_l1");
+  assert.equal(fish(), 2);
+  assert.ok(!rows.some((row) => row.kind === "profession_xp"));
+  w.node03.grantProfessionXp(w.ctx(), "prof.koken", 100, "test");
+  rows = w.node03.grantLootRow(w.ctx(), { itemId: "item.fish", quantity: 2 }, "actor_defeated", "actor.wolf.1", "op_l2");
+  assert.equal(rows.find((row) => row.kind === "profession_xp").amount, 5, "één keer XP per keer pakken, niet per stuk");
+  // Uit een grondstof telt de grondstof zelf, niet het item.
+  rows = w.node03.grantLootRow(w.ctx(), { itemId: "item.fish", quantity: 1 }, "resource_gathered", "res.1", "op_l3");
+  assert.ok(!rows.some((row) => row.kind === "profession_xp"));
+  // Een pickup op de grond: te laag = geweigerd (er verdwijnt niets), daarna XP.
+  const fresh = setup();
+  fresh.catalogs.items["item.fish"] = w.catalogs.items["item.fish"];
+  fresh.node03.questEvents = null;
+  fresh.node03.questPickupBlocked = () => "";
+  const pickup = { entityKind: "pickup", instanceId: "pickup.fish.1", pickupKind: "item", itemRef: "item.fish", displayName: "Vis", amount: 1, claimMode: "once", x: 0, z: 0 };
+  fresh.node03.getEntityState = () => ({ state: pickup });
+  fresh.node03.assertInRange = () => true;
+  assert.throws(() => fresh.node03.pickupTarget(fresh.ctx(), "pickup.fish.1", "op_p1"), /Koken niveau 2 nodig \(jij: 1\)/);
+  assert.equal(fresh.node03.ownedItemCount("p1", "item.fish"), 0);
+  fresh.node03.grantProfessionXp(fresh.ctx(), "prof.koken", 100, "test");
+  const picked = fresh.node03.pickupTarget(fresh.ctx(), "pickup.fish.1", "op_p2");
+  assert.match(picked.message, /\+5 Koken-XP/);
+  assert.equal(fresh.node03.ownedItemCount("p1", "item.fish"), 1);
+});
+
+test("herstel 1: Balans telt een recept uit een winkel en items met een beroep mee", () => {
+  const docs = [
+    doc("project_settings", { maxLevel: 10 }, "project_settings:project"),
+    doc("currency", { currencyId: "currency.gold", displayName: "Goud" }, "currency:currency.gold"),
+    doc("profession", { professionId: "prof.koken", displayName: "Koken", maxLevel: 5 }, "profession:prof.koken"),
+    doc("item_definition", { itemId: "item.fish", displayName: "Vis", professionRef: "profession:prof.koken", professionLevel: 1, professionXp: 5 }, "item_definition:item.fish"),
+    doc("item_definition", { itemId: "item.pearl", displayName: "Parel", professionRef: "profession:prof.koken", professionLevel: 9 }, "item_definition:item.pearl"),
+    doc("item_definition", { itemId: "item.soup", displayName: "Soep" }, "item_definition:item.soup"),
+    doc("pickup", { pickupId: "pickup.fish", itemRef: "item_definition:item.fish", x: 0, z: 0, amount: 1 }, "pickup:pickup.fish"),
+    doc("npc", { npcId: "npc.kok", displayName: "Kok", crafting: true, craftProfessionRef: "profession:prof.koken", shopCurrencyRef: "currency:currency.gold",
+      shopOffers: [{ ref: "recipe:recipe.stew", price: 0, buyBack: 0 }, { ref: "recipe:recipe.soup", price: 0, buyBack: 0 }] }, "npc:npc.kok"),
+    doc("recipe", { recipeId: "recipe.stew", displayName: "Stoofpot", ingredients: [{ ref: "item_definition:item.fish", amount: 1 }], outputItemRef: "item_definition:item.soup",
+      professionRef: "profession:prof.koken", professionLevel: 3, professionXp: 0, learn: "quest" }, "recipe:recipe.stew"),
+    doc("recipe", { recipeId: "recipe.soup", displayName: "Soep", ingredients: [{ ref: "item_definition:item.fish", amount: 1 }], outputItemRef: "item_definition:item.soup",
+      professionRef: "profession:prof.koken", professionLevel: 1, professionXp: 0, learn: "start" }, "recipe:recipe.soup")
+  ];
+  const report = balanceReport(docs);
+  const codes = (code) => report.findings.filter((finding) => finding.code === code).map((finding) => finding.docKey);
+  assert.deepEqual(codes("RECIPE_NO_QUEST"), [], "de winkel verkoopt het quest-recept");
+  assert.deepEqual(codes("RECIPE_SHOP_KNOWN"), ["recipe:recipe.soup"], "een recept dat je meteen kent hoeft niet in de winkel");
+  assert.deepEqual(codes("PROFESSION_NO_XP"), [], "Vis geeft Koken-XP");
+  assert.deepEqual(codes("ITEM_PROFESSION_LEVEL"), ["item_definition:item.pearl"]);
+  assert.deepEqual(codes("PROFESSION_EMPTY"), []);
+  assert.equal(report.professions.find((entry) => entry.name === "Koken").items, 2);
+});
+
+test("herstel 1: HUD: ophalen met werkplek, recept in de winkel, balk loopt mee, klaar valt op, grens vol, bewaard", () => {
+  const hud = fs.readFileSync("apps/web/public/game/hud/gk-hud.js", "utf8");
+  assert.match(hud, /api\.run05\("crafting:claim", \{ jobId: id, stationId: ui\.craft\?\.stationId \|\| "" \}\)/);
+  assert.match(hud, /Haal het daar op\./);
+  assert.match(hud, /offer\.visualItemRef \|\| offer\.itemRef/);
+  assert.match(hud, /"Leren "/);
+  assert.match(hud, /function tickCraftJobs\(\)/);
+  assert.match(hud, /tickCraftJobs\(\);\n\s+watchCraftJobs\(\);/);
+  assert.match(hud, / is klaar! Haal het op bij /);
+  assert.match(hud, /kan niet: je hebt al /);
+  assert.match(hud, /bewaard: niveau /);
+  assert.match(hud, /Vergeten over /);
+  const css = fs.readFileSync("apps/web/public/game/hud/gk-hud.css", "utf8");
+  assert.match(css, /\.gkToast\.ready/);
+  assert.match(css, /\.gkJobReady/);
 });

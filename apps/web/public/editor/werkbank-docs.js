@@ -1224,7 +1224,7 @@ export function createDocBench(options = {}) {
     for (const prof of professions) {
       const row = el("div", { class: "wbdFinding" }, [
         el("div", { class: "wbdFindingText", text: "🧰 " + prof.name + " — tot niveau " + prof.maxLevel + (prof.reachable < prof.maxLevel ? " (te halen: " + prof.reachable + ")" : "") }),
-        el("div", { class: "wbdNote", text: prof.recipes + " recept(en), " + prof.resources + " grondstof(fen). Werkplek: " + (prof.stations.length ? prof.stations.join(", ") : "geen")
+        el("div", { class: "wbdNote", text: prof.recipes + " recept(en), " + prof.resources + " grondstof(fen)" + (prof.items ? ", " + prof.items + " item(s)" : "") + ". Werkplek: " + (prof.stations.length ? prof.stations.join(", ") : "geen")
           + ". XP uit: " + (prof.xpSources.length ? prof.xpSources.join(", ") : "niets") + "." })]);
       if (openDoc) {
         const go = el("button", { type: "button", class: "wbdGhost", text: "➡️ Open de kaart" });

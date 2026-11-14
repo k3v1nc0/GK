@@ -57,6 +57,17 @@ export function runtimeItemFromCanonical(item, legacy = null) {
   // Fase 6: uitrusting "vanaf level" (1 = altijd; dan sturen we niets mee).
   if (Number.isInteger(item.requiredLevel) && item.requiredLevel > 1) runtime.requiredLevel = item.requiredLevel;
   else delete runtime.requiredLevel;
+  // Fase 9 herstel 1 (keuze van Kevin 14-11): een item met een beroep geeft beroeps-XP bij oppakken en buit.
+  const professionId = String(item.professionRef || "").startsWith("profession:") ? String(item.professionRef).slice("profession:".length) : "";
+  if (professionId) {
+    runtime.professionId = professionId;
+    runtime.professionLevel = Number.isInteger(item.professionLevel) && item.professionLevel > 1 ? item.professionLevel : 1;
+    runtime.professionXp = Number.isInteger(item.professionXp) && item.professionXp >= 0 ? item.professionXp : 5;
+  } else {
+    delete runtime.professionId;
+    delete runtime.professionLevel;
+    delete runtime.professionXp;
+  }
   // Healing (2-11): het effect bij gebruiken (min mag: bijv. een vies drankje met -2 pantser).
   for (const field of ["effectAttackPower", "effectArmor", "effectHealPower", "effectHealthPctBp", "effectManaPctBp"]) {
     if (Number.isInteger(item[field]) && item[field] !== 0) runtime[field] = item[field];
