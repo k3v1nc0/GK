@@ -951,7 +951,10 @@ export class ActorRuntime {
     if (ctx.safe || this.pointIsSafe(actor.x, actor.z)) throw httpError(409, "Hier kun je niet vechten (veilig gebied).", "SAFE_AREA");
     const auto = !ctx.ability;
     const ability = ctx.ability || playerAbilityFromSection(section, ctx.classId || null);
-    const reachMm = ability.rangeMm + actor.def.radiusMm + RANGE_SLACK_MM;
+    // Het bereik loopt van botsrand tot botsrand. De vijand-AI telt de
+    // spelersradius ook mee; doe dat hier eveneens zodat beide kanten elkaar
+    // kunnen raken wanneer een vijand op zijn maximale aanvalsafstand staat.
+    const reachMm = ability.rangeMm + PLAYER_RADIUS_MM + actor.def.radiusMm + RANGE_SLACK_MM;
     if (!withinRangeMm(mm(ctx.x), mm(ctx.z), mm(actor.x), mm(actor.z), reachMm)) {
       const error = httpError(400, "Target is te ver weg voor attack.", "TARGET_OUT_OF_RANGE");
       error.details = { range: meters(ability.rangeMm), radius: meters(actor.def.radiusMm) };

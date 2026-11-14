@@ -132,6 +132,9 @@ test("spelersaanval: plan schrijft niets, pas na apply; dood -> loot-plan en res
   players[0].x = 11; players[0].z = 10;
   const far = () => runtime.planPlayerAttack({ playerId: "p1", targetId: "actor:w1:1", x: 30, z: 30, safe: false, attackPower: 10, nowMs: now, operationId: "op0" });
   assert.throws(far, /te ver weg/);
+  const edge = runtime.planPlayerAttack({ playerId: "p1", targetId: "actor:w1:1", x: 14, z: 10, safe: false, attackPower: 10, nowMs: now, operationId: "op-edge" });
+  assert.ok(edge.plan, "speler en vijand kunnen elkaar op de rand van hun botscirkels raken");
+  runtime.dropPending("op-edge");
   const first = runtime.planPlayerAttack({ playerId: "p1", targetId: "actor:w1:1", x: 11, z: 10, safe: false, attackPower: 10, nowMs: now, operationId: "op1" });
   assert.equal(first.plan.damage, 21);
   assert.equal(runtime.actors.get("actor:w1").hp, 30, "nog niets veranderd voor COMMIT");

@@ -380,7 +380,7 @@ function handleActorMessage(message) {
     state.runtime.playCombatFx({ from: String(message.id), to: target === state.player?.id ? "self" : target.startsWith("actor:") ? target : "player:" + target, style: "slash", tone: "damage" });
   }
   // Kevin 10-11: word je aangevallen en sla je zelf nog niemand, dan sla je vanzelf terug.
-  if (message.e === "attack" && message.target && message.target === state.player?.id && !message.defeated) retaliateAgainst(String(message.id));
+  if (message.e === "attack" && message.target && String(message.target) === String(state.player?.id || "") && !message.defeated) retaliateAgainst(String(message.id));
   // Healing (2-11): kleine zwevende getallen boven de vijand (schade rood, genezen groen) en boven andere spelers.
   if (gkHud && Number(message.amount) > 0) {
     if (message.e === "hit" || message.e === "death") gkHud.worldFloat(message.id, "-" + Math.round(Number(message.amount)), "dmg");
@@ -7700,16 +7700,14 @@ async function runNode03Action(action, targetId, extra = {}) {
 // ---- Fase 5: auto-aanval (vak 1) en vaardigheden (vak 2 en 3) ----
 // De client vraagt alleen; de server controleert bereik, muur, wachttijd en schade (zie node03 attack/skill).
 const NODE03_SNAPSHOT_ACTIONS = new Set(["attack", "skill", "loadout_set", "maker_level", "maker_xp"]);
-const AUTO_ATTACK_SLACK_M = 1.0;
 
-// Kevin 10-11: terugslaan op wie jou aanvalt, als je nog geen doel hebt en hij binnen bereik staat.
+// Kevin 10-11: terugslaan op wie jou aanvalt, als je nog geen doel hebt.
+// De aanvalsmelding komt van de server; clientposities lopen tijdens bewegen iets vooruit/achter.
+// Daarom beslist alleen de server of de tegenaanval werkelijk binnen bereik is.
 function retaliateAgainst(actorId) {
   if (!actorId || !actorId.startsWith("actor:") || state.node03.autoAttack.targetId || isNode03Defeated()) return;
   const target = node03TargetWithClientRange(node03TargetById(actorId));
   if (!target || target.available === false || target.action !== "attack") return;
-  const position = state.predictedPosition || state.position;
-  const reach = Math.max(0, num(target.range, 0)) + Math.max(0, num(target.radius, 0)) + AUTO_ATTACK_SLACK_M;
-  if (!position || Math.hypot(num(position.x, 0) - num(target.x, 0), num(position.z, 0) - num(target.z, 0)) > reach) return;
   if (!state.node03.selectedTargetId) selectNode03Target(actorId);
   startAutoAttack(actorId);
   scheduleAutoAttack(0);
@@ -7759,12 +7757,6 @@ function autoAttackSwing() {
   if (isNode03Defeated()) { stopAutoAttack(); return; }
   const target = autoAttackTarget();
   if (!target) { stopAutoAttack(); return; }
-  const position = state.predictedPosition || state.position;
-  const reach = Math.max(0, num(target.range, 0)) + Math.max(0, num(target.radius, 0)) + AUTO_ATTACK_SLACK_M;
-  if (position && Math.hypot(num(position.x, 0) - num(target.x, 0), num(position.z, 0) - num(target.z, 0)) > reach) {
-    stopAutoAttack("Te ver weg: auto-aanval gestopt.");
-    return;
-  }
   if (state.node03.actionInFlight) { scheduleAutoAttack(120); return; }
   runNode03Action("attack", auto.targetId, { skipMoveToTarget: true, autoSwing: true });
 }
