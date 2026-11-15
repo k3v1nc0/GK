@@ -419,7 +419,7 @@ export function createGkHud(api) {
     lootSeen: null,         // wat er in de tas zat: sleutel -> { itemId, qty }
     newKeys: new Set(),     // nieuw in de tas sinds je de tas niet meer open had
     bagWasOpen: false,
-    bagSelect: false,       // selectiestand om meerdere tasvakjes tegelijk weg te gooien
+    bagSelect: false,       // selectiestand voor de passende tasactie: weggooien, verkopen, post of ruil
     bagSelection: new Set(),
     bagAnchor: "",         // eerste vakje van een Shift-bereik
     // Fase 8b: welke ruil je al gezien hebt (zodat het tabblad Ruilen één keer vanzelf opengaat).
@@ -1663,6 +1663,7 @@ export function createGkHud(api) {
   }
   // Gesprek met een NPC stoppen (kruisje, of het pijltje in de menubalk).
   function closeTalk() {
+    clearBagSelectionState();
     ui.trade = null;
     ui.craft = null;
     ui.market = null;
@@ -2539,7 +2540,7 @@ export function createGkHud(api) {
     const view = m === "trade" ? "trade" : m === "craft" ? "craft" : store.tab;
     // Kevin 11-11: zolang de tas open staat blijven de "nieuw"-stempels staan; dicht = gezien.
     if (view === "bag") ui.bagWasOpen = true; else bagSeen();
-    const parts = [view, store.filter, store.item, store.quest, store.done, store.sectionFold, ui.sure, d.busy, ui.trade, ui.craft, store.minimap, store.music, store.size, store.combatFold, store.debug, store.icoSize, store.icoColor, store.icoAnim,
+    const parts = [view, store.filter, store.item, store.quest, store.done, store.sectionFold, ui.sure, d.busy, ui.trade, ui.craft, ui.market, store.minimap, store.music, store.size, store.combatFold, store.debug, store.icoSize, store.icoColor, store.icoAnim,
       ui.bagSelect, Array.from(ui.bagSelection).sort(), store.stackSplits];
     // Healing (2-11): levens/mana veranderen elke seconde (regeneratie); de tas hoeft daarvoor niet opnieuw getekend te worden.
     if (view === "bag" || view === "trade" || view === "craft" || view === "gear") parts.push(d.s03?.inventory, d.s03?.equipment, d.s03?.currencies, d.s03?.catalog, Object.keys(d.s03?.itemCooldowns || {}));
@@ -2550,6 +2551,7 @@ export function createGkHud(api) {
     if (view === "money") parts.push(d.s03?.currencies, d.s05?.trade);
     // Fase 8 herstel: tijdens de winkel toont de tas wat de winkel ervoor betaalt; de post zijn berichten.
     if (view === "bag" && ui.trade) parts.push(api.vendor(ui.trade.vendorId)?.sells || null);
+    if (view === "bag" && ui.market) parts.push(d.s05?.market?.sellableItems || null);
     // Fase 8 herstel 3: met Post of Ruilen onderin kun je uit de tas slepen (dan krijgen de vakjes een sleep-greep).
     if (view === "bag") parts.push(root.dataset.dock || "", Boolean(ui.post.compose), openTrade()?.state || "");
     if (view === "skills") parts.push(d.s03?.skills?.slots, (d.s03?.skills?.list || []).map(function (e) { return e.abilityId + (e.unlocked ? "" : ":" + e.lock); }), d.s03?.skills?.auto, d.s03?.progression?.level, d.isAdmin);
@@ -2635,6 +2637,7 @@ export function createGkHud(api) {
     ui.trade = null;
     ui.craft = null;
     ui.market = null;
+    clearBagSelectionState();
     ui.dockPick = view;
     store.tab = "bag";
     store.item = null;
@@ -2644,8 +2647,8 @@ export function createGkHud(api) {
     render();
   }
   function leavePane() {
+    clearBagSelectionState();
     ui.dockPick = ui.chatOpen ? "chat" : root.dataset.mode === "talk" ? "talk" : "";
-    ui.sure = "";
   }
   function closePane() {
     leavePane();
@@ -2774,22 +2777,58 @@ export function createGkHud(api) {
     return Array.from(ui.bagSelection).map(function (key) { return byKey.get(key); }).filter(Boolean);
   }
 
-  function bagSelectionBar(all) {
-    const selected = selectedBagEntries(all);
+  function bagSelectionContext() {
+    if (ui.trade) return "vendor";
+    if (ui.market) return "market";
+    const target = giveTarget();
+    if (target === "post") return "post";
+    if (target === "swap") return "swap";
+    return "destroy";
+  }
+
+  function bagSelectionEligible(item, context = bagSelectionContext()) {
+    if (!item || item.def.questItem === true || item.category === "quest") return false;
+    if (context === "vendor") return shopSellInfo(item.entry.itemId)?.canSell === true;
+    if (context === "market") return (marketData()?.sellableItems || []).some(function (entry) { return entry.itemId === item.entry.itemId; });
+    if (context === "post" || context === "swap") return item.def.tradable !== false;
+    return true;
+  }
+
+  function clearBagSelectionState() {
+    ui.bagSelect = false;
+    ui.bagSelection.clear();
+    ui.bagAnchor = "";
+    ui.sure = "";
+  }
+
+  function bagSelectionBar(all, context) {
+    const selected = selectedBagEntries(all).filter(function (item) { return bagSelectionEligible(item, context); });
     const count = selected.reduce(function (sum, item) { return sum + bagEntryQuantity(item); }, 0);
-    const sure = ui.sure === "destroy-selection";
+    const busy = Boolean(data().busy?.n05);
+    const config = context === "vendor"
+      ? { act: "bag-sell-selection", icon: "two-coins", text: "Selectie verkopen", className: "gkGo" }
+      : context === "market"
+        ? { act: "bag-market-selection", icon: "scales", text: ui.sure === "market-selection" ? "Zeker? Tegen adviesprijs" : "Op markt (adviesprijs)", className: ui.sure === "market-selection" ? "gkSure" : "gkGo" }
+        : context === "post"
+          ? { act: "bag-post-selection", icon: "envelope", text: "Selectie in de brief", className: "gkGo" }
+          : context === "swap"
+            ? { act: "bag-swap-selection", icon: "swap-bag", text: "Selectie in de ruil", className: "gkGo" }
+            : { act: "bag-destroy", icon: "trash-can", text: ui.sure === "destroy-selection" ? "Zeker? Tik nog eens" : "Weggooien", className: "gkWarn" + (ui.sure === "destroy-selection" ? " gkSure" : "") };
     return h("div", { class: "gkBagActions" }, [
       h("strong", { text: count ? fmt(count) + " geselecteerd" : "Tik spullen aan" }),
       h("button", { type: "button", class: "gkBtn", "data-act": "bag-select-clear", disabled: selected.length ? null : true }, "Selectie wissen"),
-      h("button", { type: "button", class: "gkBtn gkWarn" + (sure ? " gkSure" : ""), "data-act": "bag-destroy", disabled: selected.length ? null : true },
-        [ico("trash-can", "plain"), sure ? " Zeker? Tik nog eens" : " Weggooien"])
+      h("button", { type: "button", class: "gkBtn " + config.className, "data-act": config.act,
+        disabled: !selected.length || (context !== "destroy" && busy) ? true : null }, [ico(config.icon, "plain"), " " + config.text])
     ]);
   }
 
   function sheetBag() {
     const all = inventoryEntries();
-    const availableKeys = new Set(all.map(function (item) { return item.key; }));
-    for (const key of Array.from(ui.bagSelection)) if (!availableKeys.has(key)) ui.bagSelection.delete(key);
+    const context = bagSelectionContext();
+    const available = new Map(all.map(function (item) { return [item.key, item]; }));
+    for (const key of Array.from(ui.bagSelection)) {
+      if (!bagSelectionEligible(available.get(key), context)) ui.bagSelection.delete(key);
+    }
     const presentFilters = FILTERS.filter(function (filter) {
       return filter.id === "all" || all.some(function (item) { return filterMatch(item.category, filter.id); });
     });
@@ -2808,13 +2847,16 @@ export function createGkHud(api) {
       const giveTo = ui.trade ? "" : giveTarget();
       body.append(h("div", { class: "gkGrid", "data-drop": ui.trade ? "bag" : null }, shown.map(function (item) {
         const questItem = item.def.questItem === true || item.category === "quest";
-        if (ui.bagSelect) return bagCell(item, { act: "bag-pick", on: ui.bagSelection.has(item.key), no: questItem, disabled: questItem });
+        if (ui.bagSelect) {
+          const eligible = bagSelectionEligible(item, context);
+          return bagCell(item, { act: "bag-pick", on: ui.bagSelection.has(item.key), no: !eligible, disabled: !eligible });
+        }
         const canGive = item.def.tradable !== false && !questItem;
         return bagCell(item, { on: item.key === store.item, drag: !canGive ? null : ui.trade ? "sell:" + item.key : giveTo ? "give:" + item.key : null });
       }).concat(emptyCells(shown.length))));
     }
     const parts = [head("knapsack", "Tas", filters), body];
-    if (ui.bagSelect) parts.push(bagSelectionBar(all));
+    if (ui.bagSelect) parts.push(bagSelectionBar(all, context));
     parts.push(bagFoot(all.length, all.reduce(function (sum, item) { return sum + bagEntryQuantity(item); }, 0)));
     const detail = itemDetail(store.item);
     if (detail) parts.push(detail);
@@ -3121,10 +3163,14 @@ export function createGkHud(api) {
     if (ui.swapSeen === id) return;
     ui.swapSeen = id;
     if (!trade) {
-      if (ui.dockPick === "swap") ui.dockPick = ui.chatOpen ? "chat" : "talk";
+      if (ui.dockPick === "swap") {
+        clearBagSelectionState();
+        ui.dockPick = ui.chatOpen ? "chat" : "talk";
+      }
       return;
     }
     if (trade.waitingForMe) toast(trade.partnerName + " wil met je ruilen.", { icon: "swap-bag" });
+    clearBagSelectionState();
     if (ui.trade || ui.craft || ui.market) { ui.trade = null; ui.craft = null; ui.market = null; store.item = null; }
     ui.dockPick = "swap";
     store.tab = "bag";
@@ -3386,23 +3432,26 @@ export function createGkHud(api) {
     return parts.length ? "Je stuurt " + listNl(parts) + " naar " + to + ". Dat gaat meteen uit je tas." : "Je stuurt een bericht naar " + to + " (zonder spullen).";
   }
   // Een item uit je tas in de brief (slepen of "In de brief"): een stapel gaat er helemaal in; het getal kun je daarna lager zetten.
-  function attachToPost(key) {
+  function attachToPost(key, options = {}) {
     const item = inventoryEntries().find(function (row) { return row.key === key; });
-    if (!item) return;
-    if (item.def.tradable === false || item.def.questItem || item.category === "quest") { toast(item.name + " kun je niet versturen.", { tone: "error" }); return; }
+    if (!item) return false;
+    if (item.def.tradable === false || item.def.questItem || item.category === "quest") { toast(item.name + " kun je niet versturen.", { tone: "error" }); return false; }
     if (!ui.post.compose) ui.post.compose = newLetter("");
     const c = ui.post.compose;
     if (!Array.isArray(c.items)) c.items = [];
     const have = num(bagCounts().get(item.entry.itemId)?.qty, 1);
     const known = c.items.find(function (entry) { return entry.itemId === item.entry.itemId; });
     if (known) known.quantity = Math.min(have, Math.round(num(known.quantity, 1)) + bagEntryQuantity(item));
-    else if (c.items.length >= POST_ITEM_KINDS) { toast("Hooguit " + POST_ITEM_KINDS + " soorten items in één brief.", { tone: "error" }); return; }
+    else if (c.items.length >= POST_ITEM_KINDS) { toast("Hooguit " + POST_ITEM_KINDS + " soorten items in één brief.", { tone: "error" }); return false; }
     else c.items.push({ itemId: item.entry.itemId, quantity: Math.min(have, bagEntryQuantity(item)) });
     store.item = null;
     ui.sure = "";
     save();
-    renderSheet();
-    renderPane();
+    if (options.render !== false) {
+      renderSheet();
+      renderPane();
+    }
+    return true;
   }
   // Een item uit je tas in de ruil (slepen): er komt de hele stapel bij wat er al lag (nooit meer dan je hebt).
   function offerToSwap(key) {
@@ -4653,6 +4702,7 @@ export function createGkHud(api) {
   }
   function endServiceTalk() {
     if (!ui.serviceTalk) return;
+    clearBagSelectionState();
     ui.trade = null;
     ui.craft = null;
     ui.market = null;
@@ -4676,6 +4726,7 @@ export function createGkHud(api) {
   }
   function openTab(id) {
     if (ui.trade || ui.craft || ui.market) {
+      clearBagSelectionState();
       ui.trade = null;
       ui.craft = null;
       ui.market = null;
@@ -4711,12 +4762,13 @@ export function createGkHud(api) {
   }
   function startService(kind, id) {
     store.item = null;
+    clearBagSelectionState();
     ui.trade = null;
     ui.craft = null;
     ui.market = null;
     // Fase 8 herstel: in de winkel staat je tas erboven (daar verkoop je).
     if (kind === "vendor") { ui.trade = { vendorId: id, offerId: null }; store.tab = "bag"; save(); }
-    else if (kind === "market") ui.market = { marketId: id, tab: "buy", orderId: null, itemId: null, qty: 1, price: 0 };
+    else if (kind === "market") { ui.market = { marketId: id, tab: "buy", orderId: null, itemId: null, qty: 1, price: 0 }; store.tab = "bag"; save(); }
     else { ui.craft = { stationId: id, recipeId: null }; ui.craftSearch = ""; }
     ui.dockPick = "talk";
     ui.farTradeSince = 0;
@@ -4724,6 +4776,7 @@ export function createGkHud(api) {
     render();
   }
   function endService() {
+    clearBagSelectionState();
     ui.trade = null;
     ui.craft = null;
     ui.market = null;
@@ -4798,7 +4851,7 @@ export function createGkHud(api) {
   }
 
   function destroyBagSelection() {
-    const selected = selectedBagEntries();
+    const selected = selectedBagEntries().filter(function (item) { return bagSelectionEligible(item, "destroy"); });
     if (!selected.length || !confirmDestroy(selected, "destroy-selection")) return;
     const items = destroyPayloadsFor(selected);
     if (!items.length) return;
@@ -4810,6 +4863,86 @@ export function createGkHud(api) {
       save();
       renderSheet();
     });
+  }
+
+  function groupedBagSelection(context) {
+    const grouped = new Map();
+    for (const item of selectedBagEntries().filter(function (row) { return bagSelectionEligible(row, context); })) {
+      const itemId = item.entry.itemId;
+      const known = grouped.get(itemId) || { itemId, quantity: 0, items: [] };
+      known.quantity += bagEntryQuantity(item);
+      known.items.push(item);
+      grouped.set(itemId, known);
+    }
+    return Array.from(grouped.values());
+  }
+
+  function finishBagSelection() {
+    clearBagSelectionState();
+    store.item = null;
+    save();
+    renderSheetOrService();
+  }
+
+  async function sellBagSelection() {
+    const vendorId = ui.trade?.vendorId;
+    const groups = groupedBagSelection("vendor");
+    if (!vendorId || !groups.length) return;
+    for (const group of groups) {
+      const result = await api.run05("vendor_sell", { vendorId, itemId: group.itemId, quantity: group.quantity });
+      if (!result?.ok) { renderSheetOrService(); return; }
+    }
+    finishBagSelection();
+  }
+
+  async function listBagSelectionOnMarket() {
+    const marketId = ui.market?.marketId;
+    const market = marketData();
+    const groups = groupedBagSelection("market");
+    if (!marketId || !market || !groups.length) return;
+    if (!confirmTwice("market-selection")) return;
+    const sellable = new Map((market.sellableItems || []).map(function (entry) { return [entry.itemId, entry]; }));
+    for (const group of groups) {
+      const entry = sellable.get(group.itemId);
+      const quantity = Math.max(1, Math.min(Math.round(num(entry?.quantity, 1)), group.quantity));
+      const price = Math.max(1, Math.round(num(entry?.suggestedPriceMinor, 1)));
+      const result = await api.run05("market_list", { marketId, itemId: group.itemId, quantity, unitPriceMinor: price, currencyId: market.currencyId || null });
+      if (!result?.ok) { renderSheetOrService(); return; }
+    }
+    if (ui.market) ui.market.tab = "mine";
+    finishBagSelection();
+  }
+
+  function attachBagSelectionToPost() {
+    const groups = groupedBagSelection("post");
+    if (!groups.length) return;
+    const existing = new Set((ui.post.compose?.items || []).map(function (entry) { return entry.itemId; }));
+    for (const group of groups) existing.add(group.itemId);
+    if (existing.size > POST_ITEM_KINDS) {
+      toast("Hooguit " + POST_ITEM_KINDS + " soorten items in één brief. Maak je selectie kleiner.", { tone: "error" });
+      return;
+    }
+    for (const group of groups) {
+      for (const item of group.items) attachToPost(item.key, { render: false });
+    }
+    finishBagSelection();
+  }
+
+  async function offerBagSelectionToSwap() {
+    const firstSwap = openTrade();
+    const groups = groupedBagSelection("swap");
+    if (!firstSwap || firstSwap.state !== "open" || !groups.length) return;
+    for (const group of groups) {
+      const swap = openTrade();
+      if (!swap || swap.state !== "open") { renderSheetOrService(); return; }
+      const already = num((swap.give || []).find(function (line) { return line.itemId === group.itemId; })?.quantity, 0);
+      const have = num(bagCounts().get(group.itemId)?.qty, 0);
+      const quantity = Math.min(have, already + group.quantity);
+      if (quantity <= already) continue;
+      const result = await api.run05("trade_offer", { tradeId: swap.tradeId, itemId: group.itemId, quantity });
+      if (!result?.ok) { renderSheetOrService(); return; }
+    }
+    finishBagSelection();
   }
   function attack() {
     ui.combatAt = performance.now();
@@ -4889,9 +5022,13 @@ export function createGkHud(api) {
         break;
       case "bag-select-clear": ui.bagSelection.clear(); ui.bagAnchor = ""; ui.sure = ""; renderSheet(); break;
       case "bag-destroy": destroyBagSelection(); break;
+      case "bag-sell-selection": sellBagSelection(); break;
+      case "bag-market-selection": listBagSelectionOnMarket(); break;
+      case "bag-post-selection": attachBagSelectionToPost(); break;
+      case "bag-swap-selection": offerBagSelectionToSwap(); break;
       case "select-all-item": {
         const matches = inventoryEntries().filter(function (item) {
-          return item.entry.itemId === id && item.def.questItem !== true && item.category !== "quest";
+          return item.entry.itemId === id && bagSelectionEligible(item);
         });
         if (!matches.length) break;
         ui.bagSelect = true;
@@ -4906,7 +5043,7 @@ export function createGkHud(api) {
       case "item": {
         if (event.shiftKey) {
           const shifted = inventoryEntries().find(function (entry) { return entry.key === key; }) || null;
-          if (!shifted || shifted.def.questItem === true || shifted.category === "quest") break;
+          if (!bagSelectionEligible(shifted)) break;
           ui.bagSelect = true;
           ui.bagSelection.clear();
           ui.bagSelection.add(key);
@@ -5297,7 +5434,7 @@ export function createGkHud(api) {
   }
 
   // Mobiel: lang indrukken begint selecteren; daarna over vakjes vegen voegt ze veilig toe.
-  // De selectie voert zelf geen actie uit: weggooien blijft achter de bevestigingsknop zitten.
+  // De knop onder de selectie voert daarna de actie uit die bij tas, winkel, markt, post of ruil hoort.
   function startBagTouchSelection(event, cell) {
     if (!cell || cell.disabled || event.pointerType === "mouse" || event.button > 0) return false;
     // Fase 8 herstel: in de winkel betekent slepen uit je tas "verkopen"; herstel 3: bij Post/Ruilen "erin leggen". Ook op een telefoon.
@@ -5310,7 +5447,7 @@ export function createGkHud(api) {
       const key = target.dataset.key || "";
       if (!key || ui.bagSelection.has(key)) return;
       const item = inventoryEntries().find(function (entry) { return entry.key === key; }) || null;
-      if (!item || item.def.questItem === true || item.category === "quest") return;
+      if (!bagSelectionEligible(item)) return;
       ui.bagSelection.add(key);
       if (!ui.bagAnchor) ui.bagAnchor = key;
       ui.sure = "";
