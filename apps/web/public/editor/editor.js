@@ -1,4 +1,4 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261111-fase6";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261115-focuscenter1";
 import { edgeBetweenPoints, editClosedEdges } from "./walkable-edge-tools.js?v=20261031-randen1";
 import { createTerrainEditor } from "./terrain-editor.js?v=20261102-terrein10";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261106-perf1";
@@ -21245,7 +21245,10 @@ function authoringIndicatorDefinitions() {
 function authoringIndicatorScaleForScreen(screen) {
   const distance = Number(screen?.distance);
   if (!Number.isFinite(distance) || distance <= 0) return 1;
-  return Math.max(0.52, Math.min(1, 28 / distance));
+  const distanceScale = Math.max(0.52, Math.min(1, 28 / distance));
+  const closeScale = Math.min(VIEWPORT_LABEL_MAX_CLOSE_SCALE,
+    Math.max(1, VIEWPORT_LABEL_CLOSE_SCALE_START_METERS / distance));
+  return distanceScale * closeScale;
 }
 
 function positionAuthoringIndicatorCluster(cluster, screen, wrapRect) {
@@ -21334,6 +21337,8 @@ function viewportLabelEntries() {
 }
 
 const VIEWPORT_LABEL_FULL_SIZE_METERS = 25;
+const VIEWPORT_LABEL_CLOSE_SCALE_START_METERS = 10;
+const VIEWPORT_LABEL_MAX_CLOSE_SCALE = 2;
 const VIEWPORT_LABEL_MIN_PX = 6;
 
 function syncViewportLabels() {
@@ -21350,11 +21355,15 @@ function syncViewportLabels() {
   for (const anchor of anchors) {
     const entry = cache.byId.get(anchor.id);
     if (!entry) continue;
-    // Names shrink when the camera moves away, like the objects themselves.
+    // Names shrink when the camera moves away, but grow at close zoom so the tag
+    // remains comfortably readable while inspecting an NPC or other object.
     const isSelected = selected.has(entry.docKey);
     const baseSize = Math.max(8, Math.min(48, Number(anchor.fontSizePx) || 13));
-    const distanceScale = Math.min(1, VIEWPORT_LABEL_FULL_SIZE_METERS / Math.max(1, Number(anchor.distance) || 0));
-    let fontSizePx = baseSize * distanceScale;
+    const distance = Math.max(1, Number(anchor.distance) || 0);
+    const distanceScale = Math.min(1, VIEWPORT_LABEL_FULL_SIZE_METERS / distance);
+    const closeScale = Math.min(VIEWPORT_LABEL_MAX_CLOSE_SCALE,
+      Math.max(1, VIEWPORT_LABEL_CLOSE_SCALE_START_METERS / distance));
+    let fontSizePx = baseSize * distanceScale * closeScale;
     if (fontSizePx < VIEWPORT_LABEL_MIN_PX) {
       if (!isSelected) continue;
       fontSizePx = VIEWPORT_LABEL_MIN_PX;

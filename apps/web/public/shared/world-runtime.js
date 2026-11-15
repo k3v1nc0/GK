@@ -4932,6 +4932,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let camDistance = 24;
   let camMinDistance = 1;
   let camMaxDistance = 500;
+  const editorInspectionMinDistance = 1;
   let camFollow = true;
   let camTargetHeightOffset = 1.6;
   let camRotateSpeed = 90;
@@ -8125,14 +8126,8 @@ function resolveChunkDebugCenter(policy) {
       if (event.button === 1) {
         updateOrbitMouseMapping(event.ctrlKey || event.metaKey);
         event.preventDefault();
-        // MMB is mapped to ROTATE, but OrbitControls itself swaps ROTATE for PAN whenever
-        // shiftKey is held on the initiating pointerdown (see its onMouseDown). Shift is now
-        // also the fly-camera sprint modifier, so neutralize it here to keep MMB orbiting.
-        if (event.shiftKey) {
-          try {
-            Object.defineProperty(event, "shiftKey", { value: false, configurable: true });
-          } catch {}
-        }
+        // MMB orbits; OrbitControls switches that same drag to pan while Shift is held,
+        // matching Blender without changing the existing pan controls.
       }
     };
     editorContextMenuHandler = function (event) {
@@ -9010,7 +9005,7 @@ function resolveChunkDebugCenter(policy) {
       camera.up.set(viewState.cameraUp.x, viewState.cameraUp.y, viewState.cameraUp.z);
     }
     if (orbitControls && Number.isFinite(Number(viewState.orbitMinDistance)) && Number.isFinite(Number(viewState.orbitMaxDistance))) {
-      orbitControls.minDistance = num(viewState.orbitMinDistance, orbitControls.minDistance);
+      orbitControls.minDistance = Math.min(editorInspectionMinDistance, num(viewState.orbitMinDistance, orbitControls.minDistance));
       orbitControls.maxDistance = num(viewState.orbitMaxDistance, orbitControls.maxDistance);
     }
     selectedEntityId = viewState.selectedEntityId || null;
@@ -12969,9 +12964,55 @@ function resolveChunkDebugCenter(policy) {
     return (maxSize * 1.25) / Math.tan(fov / 2);
   }
 
+  function visibleMeshBounds(object) {
+    const bounds = new THREE.Box3();
+    if (!object) return bounds;
+    object.updateWorldMatrix(true, true);
+    object.traverseVisible(function (child) {
+      if (!(child.isMesh || child.isInstancedMesh)) return;
+      if (child.userData?.runtimeTargetHitProxy === true || child.userData?.shadowProxy === true) return;
+      if (child.name === "node03-runtime-target-ring") return;
+      const materials = (Array.isArray(child.material) ? child.material : [child.material]).filter(Boolean);
+      if (materials.length && materials.every(function (material) {
+        return material.visible === false || material.colorWrite === false || (material.transparent === true && Number(material.opacity) <= 0);
+      })) return;
+      let localBounds = null;
+      if (child.isInstancedMesh) {
+        if (!child.boundingBox && typeof child.computeBoundingBox === "function") child.computeBoundingBox();
+        localBounds = child.boundingBox || null;
+      } else if (child.geometry) {
+        if (!child.geometry.boundingBox && typeof child.geometry.computeBoundingBox === "function") child.geometry.computeBoundingBox();
+        localBounds = child.geometry.boundingBox || null;
+      }
+      if (!localBounds || localBounds.isEmpty()) return;
+      bounds.union(localBounds.clone().applyMatrix4(child.matrixWorld));
+    });
+    return bounds;
+  }
+
+  function focusBoundsForObject(object) {
+    if (object?.userData?.runtimeTarget === true) {
+      const measured = runtimeTargetVisualMeasurement(object, object.userData.runtimeTargetPayload || {});
+      const center = new THREE.Vector3(measured.centerX, measured.centerY, measured.centerZ);
+      object.localToWorld(center);
+      const worldScale = object.getWorldScale(new THREE.Vector3());
+      const size = new THREE.Vector3(
+        Math.max(0.1, measured.width * Math.abs(worldScale.x)),
+        Math.max(0.1, measured.height * Math.abs(worldScale.y)),
+        Math.max(0.1, measured.depth * Math.abs(worldScale.z))
+      );
+      return new THREE.Box3().setFromCenterAndSize(center, size);
+    }
+    const visualBounds = visibleMeshBounds(object);
+    if (!visualBounds.isEmpty()) return visualBounds;
+    return new THREE.Box3().setFromObject(object);
+  }
+
   function frameObject(object, preserveDirection) {
     if (!orbitControls || !object) return false;
-    const box = new THREE.Box3().setFromObject(object);
+    // Camera focus belongs at the center of the visible asset. Invisible pickup/NPC
+    // hitboxes, selection rings and floating nameplates must not pull it upward.
+    const box = focusBoundsForObject(object);
     if (box.isEmpty()) {
       const target = new THREE.Vector3();
       object.getWorldPosition(target);
@@ -13055,7 +13096,7 @@ function resolveChunkDebugCenter(policy) {
   function setView(viewName) {
     if (!orbitControls) return false;
     const object = selectedObjectRoot() || content;
-    const box = new THREE.Box3().setFromObject(object);
+    const box = focusBoundsForObject(object);
     const center = new THREE.Vector3();
     if (box.isEmpty()) {
       object.getWorldPosition(center);
@@ -13400,7 +13441,12 @@ function resolveChunkDebugCenter(policy) {
     camDistance = mode === "editor"
       ? num(cam?.distance, editorCameraDefaults.distance)
       : num(Number.isFinite(Number(cam?.startDistance)) ? cam.startDistance : cam?.distance, gameCameraDefaults.startDistance);
-    camMinDistance = num(cam?.minDistance, mode === "editor" ? editorCameraDefaults.minDistance : gameCameraDefaults.minDistance);
+    const configuredMinDistance = num(cam?.minDistance, mode === "editor" ? editorCameraDefaults.minDistance : gameCameraDefaults.minDistance);
+    // The authored editor-camera limit is useful as a starting view, but should not
+    // prevent close-up inspection. Game camera limits remain exactly as configured.
+    camMinDistance = mode === "editor"
+      ? Math.min(editorInspectionMinDistance, configuredMinDistance)
+      : configuredMinDistance;
     camMaxDistance = num(cam?.maxDistance, mode === "editor" ? editorCameraDefaults.maxDistance : gameCameraDefaults.maxDistance);
     camFollow = mode === "editor" ? false : cam?.follow !== false;
     camRotateSpeed = num(cam?.rotateSpeed, mode === "editor" ? editorCameraDefaults.rotateSpeed : gameCameraDefaults.rotateSpeed);
