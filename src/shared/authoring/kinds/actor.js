@@ -26,7 +26,8 @@ const soundHelp = (wat) => help(
   "Te hard of te zacht → pas het geluidsbestand aan of kies een ander."
 );
 
-export const ACTOR_BEHAVIORS = Object.freeze(["aggressive", "defensive"]);
+// Werkbank Fase 10 (Kevin 15-11): "flee" = een wild dier. Valt nooit aan en rent weg als je te dichtbij komt of hem slaat.
+export const ACTOR_BEHAVIORS = Object.freeze(["aggressive", "defensive", "flee"]);
 
 const HEAL_GROUP = "💚 Genezen";
 const ELITE_GROUP = "💪 Af en toe een sterkere";
@@ -105,9 +106,9 @@ export const ACTOR_KINDS = {
       shieldAlways: { type: "boolean", required: false, audience: "client", label: "Altijd een schild (baas)",
         ui: ui("🛡️", "toggle", "werkbank", { more: true }), default: false,
         help: help("Heeft deze vijand altijd een schild? Zolang het schild staat doet de auto-aanval (vak 1) maar weinig schade; vak 2 of 3 breekt het. Hoe sterk en hoe lang staat in Instellingen > Genezen en effecten.", "Aan voor een baas. Gewone vijanden: uit (een sterkere vijand van een plek krijgt vanzelf een schild).", "Baas valt om met alleen vak 1 → zet dit aan.") },
-      behavior: { type: "select", required: true, options: ACTOR_BEHAVIORS.slice(), optionIcons: { aggressive: "😠", defensive: "🙂" }, optionLabels: { aggressive: "Valt aan", defensive: "Alleen terug" }, audience: "server", label: "Gedrag",
+      behavior: { type: "select", required: true, options: ACTOR_BEHAVIORS.slice(), optionIcons: { aggressive: "😠", defensive: "🙂", flee: "🐇" }, optionLabels: { aggressive: "Valt aan", defensive: "Alleen terug", flee: "Wild dier (rent weg)" }, audience: "server", label: "Gedrag",
         ui: ui("🧠", "select", "werkbank"), default: "aggressive",
-        help: help("Valt de vijand je zelf aan, of alleen als jij eerst slaat?", "Valt aan voor gevaarlijke plekken, Alleen terug voor dieren bij het startpunt.", "Beginners worden steeds aangevallen → Alleen terug.") },
+        help: help("Valt de vijand je zelf aan, alleen als jij eerst slaat, of is het een wild dier dat nooit aanvalt en wegrent?", "Valt aan voor gevaarlijke plekken, Alleen terug voor dieren bij het startpunt, Wild dier voor een hert of konijn (rent weg als je dichterbij komt dan 'Ziet je op' of als je hem slaat).", "Beginners worden steeds aangevallen → Alleen terug. Een hert vecht terug → kies Wild dier.") },
       aggroRangeMm: { type: "integer", required: true, min: 0, max: 50000, audience: "server", label: "Ziet je op",
         ui: ui("👁️", "slider", "werkbank", Object.assign({ step: 100, more: true }, M)), default: 8000,
         help: help("Vanaf welke afstand de vijand je opmerkt.", "5 tot 10 meter.", "Vijanden rennen van ver op je af → lager.") },
@@ -163,6 +164,10 @@ export const ACTOR_KINDS = {
       eliteStrengthPct: { type: "integer", required: false, min: 100, max: 1000, audience: "server", label: "Hoeveel sterker",
         ui: ui("💪", "slider", "werkbank", { step: 10, unit: "%", range: [100, 500], group: ELITE_GROUP }), default: 200,
         help: help("Hoeveel levens, schade en XP een sterkere heeft vergeleken met de gewone vijand.", "200 % = dubbel zoveel levens, schade en XP.", "Sterkere is niet te doen → lager.") },
+      // Werkbank Fase 10 (Kevin 15-11): rondwandelen rond zijn plek als hij niet vecht (0 = blijft staan).
+      wanderRadiusMm: { type: "integer", required: false, min: 0, max: 50000, audience: "server", label: "Rondwandelen",
+        ui: ui("🚶", "slider", "werkbank", Object.assign({ step: 500, range: [0, 30000] }, M)), default: 0,
+        help: help("Hoe ver de vijand rondwandelt rond zijn plek als hij niet vecht. 0 m = hij blijft staan.", "3-8 m voor een wolf of een wild dier, 0 m voor een wachter bij een poort.", "Loopt te ver weg van zijn plek → kleiner. Staat er stijf bij → groter.") },
       patrolPointsMm: { type: "pointList", required: false, minItems: 2, maxItems: 16, min: -MAX_WORLD_MM, max: MAX_WORLD_MM, audience: "server", label: "Looproute",
         ui: ui("🧭", "points", "viewport"), default: null,
         help: help("De punten waar de vijand langs loopt als hij niet vecht.", "2-5 punten dicht bij de plek; teken ze in de 3D-view.", "Vijand loopt door muren → zet de punten op een open pad.") }

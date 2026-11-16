@@ -22,6 +22,7 @@ import { SymbolIndexService } from "./symbol-index-service.js";
 import { TokenResolver } from "./token-resolver.js";
 import { GameProjectCompiler } from "./game-project-compiler.js";
 import { AuthoringRoutes } from "./authoring/routes.js";
+import { LoreRuntime } from "./runtime/lore-runtime.js";
 import { assertIsolatedNetwork, resolveAssetsPath } from "./storage-policy.js";
 import { assertSecureCookieConfiguration, LoginAttemptLimiter } from "./auth-security.js";
 import { assertAllowedOrigin, isDeniedPublicPath, isMutationRequest, WS_MAX_PAYLOAD_BYTES } from "./request-boundary.js";
@@ -61,10 +62,12 @@ const userAdminService = new UserAdminService(db, { closeSessionConnections: (se
 const node03RuntimeService = new Node03RuntimeService(db, repository, mmoService);
 const node04QuestRuntimeService = new Node04QuestRuntimeService(db, repository, mmoService, node03RuntimeService);
 const node05EconomyRuntimeService = new Node05EconomyRuntimeService(db, repository, mmoService, node03RuntimeService);
+// Werkbank Fase 10 (10b): 📚 kennisboek (lezen bij een model met een 📕 Verhaal).
+const loreRuntime = new LoreRuntime({ db, contextFor: (req) => node03RuntimeService.getRequestContext(req), flags: () => mmoService.worldFlags });
 // Fase 03: canonieke builds staan naast de database, in storage/builds (of naast DATABASE_PATH).
 const authoringBuildsRoot = process.env.AUTHORING_BUILDS_PATH || path.join(path.dirname(resolveDatabasePath(rootDir)), "builds");
 const authoringRoutes = new AuthoringRoutes({
-  db, authService, repository, mmoService, assetService, buildsRoot: authoringBuildsRoot, sendJson, readJson,
+  db, authService, repository, mmoService, assetService, buildsRoot: authoringBuildsRoot, sendJson, readJson, rootDir,
   // Verhuizen leest de huidige graph (draft), niet de laatst gepubliceerde wereld.
   currentGraphWorld: function () {
     const draftWorld = repository.getDraftWorld();
@@ -609,6 +612,15 @@ async function handleApi(req, res, url) {
       }
       return sendJson(res, 404, { ok: false, message: "Onbekende gebruikersactie." });
     }
+    // Werkbank Fase 10: meldingen van spelers over een andere speler (alleen admin), in Instellingen > Gebruikers.
+    if (url.pathname === "/api/admin/reports" || url.pathname.startsWith("/api/admin/reports/")) {
+      const admin = authService.requireEditor(req);
+      if (admin.role !== "admin") return sendJson(res, 403, { ok: false, message: "Alleen de admin ziet meldingen." });
+      if (req.method === "GET" && url.pathname === "/api/admin/reports") return sendJson(res, 200, { ok: true, reports: mmoService.chatRuntime.adminReports() });
+      const match = /^\/api\/admin\/reports\/(\d+)\/done$/.exec(url.pathname);
+      if (match && req.method === "POST") return sendJson(res, 200, Object.assign({ ok: true }, mmoService.chatRuntime.markReportDone(Number(match[1]), admin.username)));
+      return sendJson(res, 404, { ok: false, message: "Onbekende actie voor meldingen." });
+    }
     // Quest Builder (5-11): per quest wie hem nog niet heeft, bezig is (welke stap) of klaar is; Opnieuw en Naar stap per speler (alleen admin).
     if (url.pathname === "/api/admin/quest-players") {
       const admin = authService.requireEditor(req);
@@ -616,6 +628,9 @@ async function handleApi(req, res, url) {
       if (req.method === "GET") return sendJson(res, 200, { ok: true, me: admin.id, players: node04QuestRuntimeService.questPlayersForAdmin(url.searchParams.get("questId")) });
       if (req.method === "POST") return sendJson(res, 200, Object.assign({ ok: true }, node04QuestRuntimeService.adminQuestAction(await readJson(req))));
     }
+    // Werkbank Fase 10 (10b): 📚 kennisboek (wat je al las) en een verhaal lezen bij een model.
+    if (req.method === "GET" && url.pathname === "/api/game/lore") return sendJson(res, 200, loreRuntime.stateForRequest(req));
+    if (req.method === "POST" && url.pathname === "/api/game/lore/read") return sendJson(res, 200, loreRuntime.readForRequest(req, await readJson(req)));
     // Klassen: per account een character per klasse; wisselen en uiterlijk kiezen in het Characters-venster.
     if (req.method === "GET" && url.pathname === "/api/game/characters") {
       return sendJson(res, 200, node03RuntimeService.charactersForRequest(req));

@@ -292,6 +292,10 @@ export const CANONICAL_KINDS = {
         help: help("Welk deelgebied wint als twee elkaar overlappen.", "0 voor gewone plekken; hoger voor een klein plekje binnen een groter gebied.", "Verkeerde muziek op een overlap → geef het kleine gebied meer voorrang.") },
       musicAssetId: { type: "asset", assetType: "audio", required: false, maxLength: 160, audience: "client", label: "Muziek",
         ui: ui("🎵", "asset", "werkbank", { soorten: ["deelgebied"] }), default: null, help: MUSIC_HELP },
+      // Werkbank Fase 10 (10b): bij binnenkomst zie je de naam groot in beeld, met deze ene zin eronder.
+      enterText: { type: "text", required: false, maxLength: 140, audience: "client", label: "Zin bij binnenkomst",
+        ui: ui("📜", "text", "werkbank", { soorten: ["deelgebied"] }), default: "",
+        help: help("Eén korte zin die de speler ziet als hij dit deelgebied binnenloopt, onder de naam.", "Bijv. \"Hier hangt altijd mist.\" Leeg = alleen de naam.", "Zin te lang → hooguit 140 tekens.") },
       // Kevin 8-11: een loopvlak (bijv. een brug) is er alleen als een vlag aan (of uit) staat, per speler (zoals een NPC of model).
       flagRef: { type: "ref", refKind: "world_flag", required: false, audience: "client", label: "Alleen als vlag",
         ui: ui("🚩", "ref", "werkbank", { more: true, soorten: ["loopvlak"] }), default: null,
@@ -444,6 +448,19 @@ export function validateDocument(kind, body) {
       const lengthOk = (point) => point.length === 2 || (field.allowHeight && point.length === 3);
       const bad = value.some((point) => !Array.isArray(point) || !lengthOk(point) || point.some((n) => !Number.isInteger(n) || n < field.min || n > field.max));
       if (bad) issues.push(issue(key, "FIELD_POINT", field.label + ": elk punt is [x, z] in hele mm" + (field.allowHeight ? " (een loopvlak mag [x, z, hoogte])." : ".")));
+      continue;
+    }
+    if (field.type === "route") {
+      // Werkbank Fase 10 (Kevin 16-11): { x, z } in meter; h = hoogte boven de grond (zonder h = aan de grond), waitS, clip.
+      if (!Array.isArray(value)) { issues.push(issue(key, "FIELD_TYPE", field.label + " moet een lijst zijn.")); continue; }
+      if (value.length > field.maxItems) issues.push(issue(key, "FIELD_RANGE", field.label + ": hooguit " + field.maxItems + " punten."));
+      const inRange = (n, min, max) => typeof n === "number" && Number.isFinite(n) && n >= min && n <= max;
+      const badPoint = (point) => !point || typeof point !== "object" || Array.isArray(point)
+        || Object.keys(point).some((name) => !["x", "z", "h", "waitS", "clip"].includes(name))
+        || !inRange(point.x, MM.min / 1000, MM.max / 1000) || !inRange(point.z, MM.min / 1000, MM.max / 1000)
+        || (point.h !== undefined && !inRange(point.h, 0, 300)) || (point.waitS !== undefined && !inRange(point.waitS, 0, 600))
+        || (point.clip !== undefined && (typeof point.clip !== "string" || point.clip.length > 120));
+      if (value.some(badPoint)) issues.push(issue(key, "FIELD_POINT", field.label + ": elk punt is { x, z } in meter, met hoogte 0-300 m, wachten 0-600 s en een animatie."));
       continue;
     }
     if (field.type === "linkList") {

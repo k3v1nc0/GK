@@ -36,7 +36,9 @@ const ICON_THEME = {
   "three-friends": "sky", "shaking-hands": "skin", envelope: "parchment", "swap-bag": "leather",
   "chat-bubble": "sky", conversation: "plain", lips: "arcane", silenced: "blood", "paper-plane": "sky",
   // Fase 5: vaardigheden.
-  "spell-book": "arcane", padlock: "steel", "magic-swirl": "arcane", "fire-ray": "fire", "shield-reflect": "steel"
+  "spell-book": "arcane", padlock: "steel", "magic-swirl": "arcane", "fire-ray": "fire", "shield-reflect": "steel",
+  // Werkbank Fase 10: kennisboek en melden.
+  "open-book": "parchment", "report-flag": "blood"
 };
 // Kleuren van de iconen (Instellingen): "color" = elk icoon zijn eigen kleur, de rest één kleur voor alles.
 const ICON_COLORS = [["color", "Kleur"], ["gold", "Goud"], ["ice", "IJs"], ["plain", "Wit"]];
@@ -49,10 +51,15 @@ const TABS = [
   { id: "quests", icon: "scroll-unfurled", title: "Quests", module: "quest_tracker_hud", key: "KeyL" },
   { id: "money", icon: "two-coins", title: "Geld", module: "wallet_hud", key: null },
   // Fase 8 herstel 3 (Kevin 13-11): Post en Ruilen staan onderin de menubalk bij Chat en Gesprek (paneel onder, tas erboven).
+  // Werkbank Fase 10: vrienden (O) en het 📚 kennisboek (J) met de verhalen die je las.
+  { id: "friends", icon: "shaking-hands", title: "Vrienden", module: null, key: "KeyO" },
+  { id: "lore", icon: "open-book", title: "Kennisboek", module: null, key: "KeyJ" },
   { id: "chars", icon: "pointy-hat", title: "Characters", module: null, key: "KeyP" },
   { id: "settings", icon: "cog", title: "Instellingen", module: null, key: null },
   { id: "logout", icon: "exit-door", title: "Uitloggen", module: null, key: null }
 ];
+// Werkbank Fase 10: waarom je een speler meldt (dezelfde sleutels als de server, zie chat-runtime REPORT_REASONS).
+const REPORT_REASONS = [["abuse", "Schelden of pesten"], ["spam", "Spam"], ["cheat", "Vals spelen"], ["name", "Nare naam"], ["other", "Iets anders"]];
 const FILTERS = [
   { id: "all", icon: "chest", title: "Alles" },
   { id: "equipment", icon: "broadsword", title: "Uitrusting" },
@@ -343,7 +350,9 @@ export function createGkHud(api) {
     eventOffset: 0,         // serverklok min eigen klok (zo klopt de aftelling)
     eventSnap: null,
     eventKey: "",
-    story: null,            // 5-11: verhaal in het gesprek: { kind: "letter", itemId } of { kind: "started", questId }
+    story: null,            // 5-11: verhaal in het gesprek: { kind: "letter", itemId } of { kind: "started", questId } (Fase 10: of { kind: "lore", loreId })
+    reportFor: null,        // Fase 10: spelermenu toont de redenen om deze speler te melden
+    friendName: "",         // Fase 10: wat je typte bij Vrienden > Toevoegen
     storyKnown: null,       // 5-11: quests die al liepen (null = nog geen stand gezien)
     storyQueue: [],         // 5-11: gebied/vanzelf-quests waarvan het verhaal nog moet komen
     focusQuest: null,       // 5-11: { questId, until } = open Menu > Quests bij deze quest zodra hij loopt
@@ -481,7 +490,9 @@ export function createGkHud(api) {
   const mapCanvas = h("canvas", { width: "120", height: "120" });
   const mapNorth = h("div", { class: "gkMapNorth" }, [h("b", { text: "N" })]);
   const mapZoom = h("button", { type: "button", class: "gkMapZoom", "data-act": "map", title: "Minimap uitzoomen", "aria-label": "Minimap uitzoomen", text: "−" });
-  const mapButton = h("div", { class: "gkMap", "data-act": "minimap-walk", role: "button", title: "Klik om hierheen te lopen" }, [mapCanvas, mapNorth, mapZoom]);
+  // Werkbank Fase 10: zon of maan op de minimap (title zegt hoe lang nog).
+  const mapSky = h("div", { class: "gkMapSky", hidden: true, "aria-live": "polite" });
+  const mapButton = h("div", { class: "gkMap", "data-act": "minimap-walk", role: "button", title: "Klik om hierheen te lopen" }, [mapCanvas, mapNorth, mapZoom, mapSky]);
   const mapLabel = h("div", { class: "gkMapLabel gkText" });
   const fullIcon = h("span", { style: "display:contents" }, [ico("expand")]);
   const fullBtn = h("button", { type: "button", class: "gkMini", "data-act": "fullscreen", title: "Volledig scherm" }, [fullIcon]);
@@ -1235,6 +1246,7 @@ export function createGkHud(api) {
     renderMenu();
   }
   function closeMenu() {
+    ui.reportFor = null;
     if (!ui.menu) return;
     ui.menu = null;
     renderMenu();
@@ -1268,7 +1280,10 @@ export function createGkHud(api) {
     const canHeal = Boolean(d.s03?.healSpell);
     const blocks = chatBlocked();
     const blockedNow = m.id !== "group" && blocks.some(function (entry) { return entry.id === m.id; });
-    const signature = JSON.stringify([m, party?.partyId, party?.leaderId, party?.whoCanInvite, members.length, mate, ui.healTarget, ui.sure, canHeal, d.selfId, blocks]);
+    // Werkbank Fase 10: vriend, gedempt en melden (eerst een reden kiezen).
+    const mutedNow = m.id !== "group" && chatMuted().some(function (entry) { return entry.id === m.id; });
+    const friend = m.id !== "group" ? friendsList().find(function (entry) { return entry.id === m.id; }) || null : null;
+    const signature = JSON.stringify([m, party?.partyId, party?.leaderId, party?.whoCanInvite, members.length, mate, ui.healTarget, ui.sure, canHeal, d.selfId, blocks, mutedNow, friend, ui.reportFor]);
     if (ui.sig.menu === signature) return;
     ui.sig.menu = signature;
     const items = [];
@@ -1307,11 +1322,22 @@ export function createGkHud(api) {
       if (!blockedNow) items.push(swapMenuItem(m.id));
       if (!blockedNow) items.push(postMenuItem(m.id));
     }
-    // MMO stap 2 (3-11): blokkeren (twee keer tikken) of weer deblokkeren.
-    if (m.id !== "group") {
+    // Werkbank Fase 10: melden bij de maker: eerst de reden kiezen (dan staat de rest even weg).
+    if (m.id !== "group" && ui.reportFor === m.id) {
+      items.length = 0;
+      sub = "Waarom meld je deze speler?";
+      for (const reason of REPORT_REASONS) items.push(menuItem("chat-report-send", m.id + "|" + reason[0], "report-flag", reason[1]));
+      items.push(menuItem("chat-report-cancel", m.id, "cancel", "Toch niet"));
+    } else if (m.id !== "group") {
+      if (!blockedNow && !friend) items.push(menuItem("friend-add", m.id, "shaking-hands", "Vriend worden"));
+      else if (friend?.state === "in") items.push(menuItem("friend-accept", m.id, "shaking-hands", "Vriendschap accepteren"));
+      else if (friend?.state === "out") items.push(menuItem("friend-add", m.id, "shaking-hands", "Vriendverzoek gestuurd", "", "Wacht tot hij het accepteert"));
+      items.push(menuItem("chat-mute", m.id, "speaker-off", mutedNow ? "Dempen uit" : "Dempen", "", ""));
+      // MMO stap 2 (3-11): blokkeren (twee keer tikken) of weer deblokkeren.
       items.push(blockedNow ? menuItem("chat-block", m.id, "silenced", "Deblokkeren")
         : ui.sure === "block:" + m.id ? menuItem("chat-block", m.id, "silenced", "Zeker? Tik nog eens", "gkWarn")
           : menuItem("chat-block", m.id, "silenced", "Blokkeren"));
+      items.push(menuItem("chat-report", m.id, "report-flag", "Melden bij de maker"));
     }
     const head = h("div", { class: "gkMenuHead" }, [
       h("div", { class: "gkMenuName" }, [h("b", { text: m.name }), sub ? h("small", { text: sub }) : null]),
@@ -1385,6 +1411,15 @@ export function createGkHud(api) {
   }
   function chatBlocked() {
     const list = data().chatBlocks;
+    return Array.isArray(list) ? list : [];
+  }
+  // Werkbank Fase 10: wie je dempte en je vrienden (met verzoeken), allebei van de server.
+  function chatMuted() {
+    const list = data().chatMutes;
+    return Array.isArray(list) ? list : [];
+  }
+  function friendsList() {
+    const list = data().friends;
     return Array.isArray(list) ? list : [];
   }
   function chatInParty() {
@@ -1481,12 +1516,13 @@ export function createGkHud(api) {
     }
     if (!open) { ui.sig.chat = ""; ui.chatScrollDown = true; chatBox.classList.remove("gkChatTop"); return; }
     const blocks = chatBlocked();
-    const blockedIds = new Set(blocks.map(function (entry) { return entry.id; }));
+    const mutes = chatMuted();
+    const blockedIds = new Set(blocks.concat(mutes).map(function (entry) { return entry.id; }));
     const tab = CHAT_TABS.some(function (entry) { return entry.id === store.chatTab; }) ? store.chatTab : "all";
     const mode = chatMode();
     const rules = chatRulesNow();
     const last = ui.chatLines[ui.chatLines.length - 1];
-    const signature = JSON.stringify([tab, mode, ui.chatWhisper, ui.chatBlocksOpen, ui.chatBig, blocks, ui.chatLines.length, last?.id, chatInParty(), rules.quick, rules.maxLength, data().selfId]);
+    const signature = JSON.stringify([tab, mode, ui.chatWhisper, ui.chatBlocksOpen, ui.chatBig, blocks, mutes, ui.chatLines.length, last?.id, chatInParty(), rules.quick, rules.maxLength, data().selfId]);
     if (ui.sig.chat === signature) return;
     ui.sig.chat = signature;
     const tabs = CHAT_TABS.map(function (entry) {
@@ -1494,20 +1530,26 @@ export function createGkHud(api) {
       return h("button", { type: "button", class: "gkChatTab" + (on ? " gkOn" : ""), "data-act": "chat-tab", "data-id": entry.id, role: "tab", "aria-selected": on ? "true" : "false", title: entry.title },
         [ico(entry.icon), h("span", { text: entry.title })]);
     });
-    if (blocks.length) {
-      tabs.push(h("button", { type: "button", class: "gkChatTab gkChatBlk" + (ui.chatBlocksOpen ? " gkOn" : ""), "data-act": "chat-blocks", title: "Geblokkeerde spelers" },
-        [ico("silenced"), h("span", { text: String(blocks.length) })]));
+    if (blocks.length || mutes.length) {
+      tabs.push(h("button", { type: "button", class: "gkChatTab gkChatBlk" + (ui.chatBlocksOpen ? " gkOn" : ""), "data-act": "chat-blocks", title: "Geblokkeerde en gedempte spelers" },
+        [ico("silenced"), h("span", { text: String(blocks.length + mutes.length) })]));
     }
     tabs.push(h("button", { type: "button", class: "gkClose gkChatSize", "data-act": "chat-size", title: ui.chatBig ? "Terug: chat onderin het paneel" : "Chat over het hele paneel (om terug te lezen)" },
       [ico(ui.chatBig ? "contract" : "expand")]));
     tabs.push(h("button", { type: "button", class: "gkClose", "data-act": "chat-close", title: "Chat dicht (Esc)" }, [ico("cancel")]));
     chatTabs.replaceChildren(...tabs);
     const nearBottom = chatLog.scrollTop + chatLog.clientHeight >= chatLog.scrollHeight - 40;
-    if (ui.chatBlocksOpen && blocks.length) {
-      chatLog.replaceChildren(h("div", { class: "gkChatNote", text: "Deze spelers zie je niet in de chat, en ze kunnen je niet uitnodigen of fluisteren." }),
+    if (ui.chatBlocksOpen && (blocks.length || mutes.length)) {
+      chatLog.replaceChildren(
+        blocks.length ? h("div", { class: "gkChatNote", text: "Geblokkeerd: je ziet ze niet in de chat, en ze kunnen je niet uitnodigen of fluisteren." }) : null,
         ...blocks.map(function (entry) {
           return h("div", { class: "gkChatBlockRow" }, [h("b", { text: entry.name || "Speler" }),
             h("button", { type: "button", class: "gkChatUnblock", "data-act": "chat-unblock", "data-id": entry.id }, [ico("check-mark"), "Deblokkeren"])]);
+        }),
+        mutes.length ? h("div", { class: "gkChatNote", text: "Gedempt: je ziet hun berichten niet. Uitnodigen, ruilen en post kan nog." }) : null,
+        ...mutes.map(function (entry) {
+          return h("div", { class: "gkChatBlockRow" }, [h("b", { text: entry.name || "Speler" }),
+            h("button", { type: "button", class: "gkChatUnblock", "data-act": "chat-unmute", "data-id": entry.id }, [ico("speaker"), "Dempen uit"])]);
         }));
     } else {
       if (ui.chatBlocksOpen) ui.chatBlocksOpen = false;
@@ -1530,7 +1572,7 @@ export function createGkHud(api) {
   // Chat dicht: de laatste berichten staan nog even linksonder (en vervagen).
   function renderChatFeed(now = performance.now()) {
     const showChatLines = !chatShown();
-    const blockedIds = new Set(chatBlocked().map(function (entry) { return entry.id; }));
+    const blockedIds = new Set(chatBlocked().concat(chatMuted()).map(function (entry) { return entry.id; }));
     // Alles voor jou (questmeldingen, groep, fluisteren, systeem), ook wat je wegklikte: dat zie je uitgeklapt terug.
     const history = ui.chatLines.filter(function (line) { return (line.quest || FEED_CHANNELS.has(line.channel)) && chatShows(line, "all", blockedIds); });
     // De open chat toont de gewone regels al in het paneel. Alleen die regels
@@ -2276,11 +2318,12 @@ export function createGkHud(api) {
   }
 
   // Quest Builder stap 8: wat een NPC zegt die je begeleidt: een ballon boven zijn hoofd (8 s) en een regel in de chat.
-  function npcSay(anchorId, text, name = "") {
+  // bubbleOnly (Werkbank Fase 10): een praatje van een NPC komt alleen als ballon, niet ook in de chat.
+  function npcSay(anchorId, text, name = "", bubbleOnly = false) {
     const message = String(text || "").trim();
     if (!message || !anchorId) return;
-    chatBubble(anchorId, message, 8);
-    chatNotice((name ? String(name) + ": " : "") + message, "", true);
+    chatBubble(anchorId, message, bubbleOnly ? 6 : 8);
+    if (!bubbleOnly) chatNotice((name ? String(name) + ": " : "") + message, "", true);
   }
 
   // Quest Builder stap 5: Bericht in beeld (Als → Dan). Groot in het midden, kort, en ook in de chat.
@@ -2293,6 +2336,18 @@ export function createGkHud(api) {
     game.append(node);
     window.setTimeout(function () { node.remove(); }, 5200);
     chatNotice((title ? String(title) + ": " : "") + message, "", true, String(questId || ""));
+  }
+
+  // Werkbank Fase 10: bij binnenkomst van een deelgebied de naam groot in beeld, met de zin uit de editor eronder.
+  function areaTitle(name, text = "") {
+    const title = String(name || "").trim();
+    if (!title) return;
+    for (const old of game.querySelectorAll(".gkAreaTitle")) old.remove();
+    const line = String(text || "").trim();
+    const node = h("div", { class: "gkAreaTitle", role: "status" }, [h("b", { text: title }), line ? h("span", { text: line }) : null]);
+    game.append(node);
+    window.setTimeout(function () { node.remove(); }, 6200);
+    chatNotice("Je bent nu in " + title + (line ? ": " + line : ""), "", true);
   }
 
   function toast(text, options = {}) {
@@ -2332,7 +2387,7 @@ export function createGkHud(api) {
   // Kevin 5-11: het verhaal van een quest die niet bij een NPC begint staat in het gespreksvenster.
   // Brief: klik op de brief in de tas = de brief in het gesprek met de knop Quest accepteren.
   // Gebied of vanzelf: de quest is al begonnen = het verhaal in het gesprek met Op pad!. Daarna Menu > Quests bij die quest.
-  const STORY_LOOK = { item: ["Brief", "scroll-unfurled"], area: ["In de buurt", "position-marker"], auto: ["Nieuwe opdracht", "star-medal"] };
+  const STORY_LOOK = { item: ["Brief", "scroll-unfurled"], area: ["In de buurt", "position-marker"], auto: ["Nieuwe opdracht", "star-medal"], lore: ["Verhaal", "open-book"] };
   function watchQuestStarts() {
     const active = data().s04?.quests?.active;
     if (!Array.isArray(active)) return;
@@ -2355,6 +2410,14 @@ export function createGkHud(api) {
   function storyView() {
     const story = ui.story;
     const active = data().s04?.quests?.active || [];
+    // Werkbank Fase 10 (10b): een verhaal lezen (grafsteen, boek, bord); ook later opnieuw uit het kennisboek.
+    if (story?.kind === "lore") {
+      const entry = (data().lore || {})[story.loreId];
+      if (!entry) return null;
+      return { mode: "lore", questId: story.loreId, itemId: "", displayName: entry.title || "Verhaal", description: entry.text || "", imageAssetId: null,
+        small: (entry.category || "Verhalen") + (story.first ? " · nieuw in je kennisboek" : ""), goals: [], afterQuest: null,
+        button: story.fromBook ? ["talk-close", "Sluiten", "check-mark"] : ["story-lore-book", "Naar het kennisboek", "open-book"] };
+    }
     if (story?.kind === "letter") {
       const reads = catalogItem(story.itemId)?.reads;
       if (!reads) return null;
@@ -2379,7 +2442,7 @@ export function createGkHud(api) {
     const art = api.assetUrl(view.imageAssetId, false);
     talk.replaceChildren(h("div", { class: "gkStoryCard gkStory--" + view.mode, "aria-label": view.displayName }, [
       h("div", { class: "gkStoryArt" }, [art ? h("img", { src: art, alt: "" }) : ico(look[1])]),
-      h("div", { class: "gkStoryHead" }, [h("small", { text: look[0] }), h("strong", { text: view.displayName }),
+      h("div", { class: "gkStoryHead" }, [h("small", { text: view.small || look[0] }), h("strong", { text: view.displayName }),
         view.afterQuest ? h("em", null, [ico("check-mark"), view.afterQuest + " afgerond"]) : null]),
       h("button", { type: "button", class: "gkClose", "data-act": "talk-close", title: "Sluiten (Esc)" }, [ico("cancel")]),
       view.description ? h("div", { class: "gkStoryText", text: view.description }) : null,
@@ -2437,7 +2500,7 @@ export function createGkHud(api) {
     // Fase 8 herstel: een NPC met "Markt" aan heeft de keuze Markt (zolang de markt open is in Instellingen > Handel).
     const market = activeMarket || (dialogue && marketOpen() ? marketAccess("market." + npcId) || pick("market") : null);
     const serviceParts = ui.trade
-      ? [ui.trade, vendor, d.s03?.inventory, d.s03?.currencies, d.s03?.catalog, d.busy?.n05]
+      ? [ui.trade, vendor, d.s03?.inventory, d.s03?.currencies, d.s03?.catalog, d.busy?.n05, d.dayNight?.isDay]
       : ui.craft ? [ui.craft, station, d.s03?.inventory, d.s03?.currencies, d.s03?.catalog, d.s05?.crafting?.jobs, d.busy?.n05]
         : ui.market ? [ui.market, market, d.s05?.market, d.s03?.currencies, d.s03?.catalog, d.busy?.n05, ui.sure] : [];
     const signature = dialogue ? JSON.stringify([root.dataset.mode, root.dataset.dock, dialogue.speakerName, dialogue.dialogueId, dialogue.entryId, dialogue.text,
@@ -2545,7 +2608,7 @@ export function createGkHud(api) {
     // Healing (2-11): levens/mana veranderen elke seconde (regeneratie); de tas hoeft daarvoor niet opnieuw getekend te worden.
     if (view === "bag" || view === "trade" || view === "craft" || view === "gear") parts.push(d.s03?.inventory, d.s03?.equipment, d.s03?.currencies, d.s03?.catalog, Object.keys(d.s03?.itemCooldowns || {}));
     if (view === "gear") parts.push(d.s03?.stats, d.s03?.professions);
-    if (view === "trade") parts.push(api.vendor(ui.trade?.vendorId));
+    if (view === "trade") parts.push(api.vendor(ui.trade?.vendorId), d.dayNight?.isDay);
     if (view === "craft") parts.push(api.station(ui.craft?.stationId), d.s05?.crafting?.jobs);
     if (view === "quests") parts.push(d.s04?.quests, d.s04?.trackedQuest?.questId);
     if (view === "money") parts.push(d.s03?.currencies, d.s05?.trade);
@@ -2556,6 +2619,8 @@ export function createGkHud(api) {
     if (view === "bag") parts.push(root.dataset.dock || "", Boolean(ui.post.compose), openTrade()?.state || "");
     if (view === "skills") parts.push(d.s03?.skills?.slots, (d.s03?.skills?.list || []).map(function (e) { return e.abilityId + (e.unlocked ? "" : ":" + e.lock); }), d.s03?.skills?.auto, d.s03?.progression?.level, d.isAdmin);
     if (view === "chars") parts.push(ui.chars, ui.charsBusy);
+    if (view === "friends") parts.push(d.friends);
+    if (view === "lore") parts.push(d.loreReads, Object.keys(d.lore || {}).length);
     if (view === "settings") parts.push(d.isAdmin, d.defeated, store.floatNums, store.nameWorld, store.namePlayers, store.nameSelf,
       store.healthPing, store.healthTps, store.healthMspt, store.healthCpu, store.healthGpu, store.healthPacketLoss, d.healthDefaults);
     const signature = JSON.stringify(parts);
@@ -2569,7 +2634,8 @@ export function createGkHud(api) {
     const oldTop = sheet.querySelector(".gkSplitTop");
     const topScroll = !viewChanged && oldTop ? oldTop.scrollTop : 0;
     const built = view === "bag" ? sheetBag() : view === "gear" ? sheetGear() : view === "skills" ? sheetSkills() : view === "quests" ? sheetQuests() : view === "money" ? sheetMoney()
-      : view === "chars" ? sheetChars() : view === "settings" ? sheetSettings() : view === "logout" ? sheetLogout() : view === "trade" ? sheetTrade() : sheetCraft();
+      : view === "chars" ? sheetChars() : view === "friends" ? sheetFriends() : view === "lore" ? sheetLore()
+        : view === "settings" ? sheetSettings() : view === "logout" ? sheetLogout() : view === "trade" ? sheetTrade() : sheetCraft();
     keepFocus(function () { replaceSheetChildren(built); });
     if (!viewChanged) sheet.style.animation = "none";
     else sheet.style.animation = "";
@@ -3625,6 +3691,89 @@ export function createGkHud(api) {
     return [head("pointy-hat", "Characters"), body];
   }
 
+  // Werkbank Fase 10 (Kevin 15-11): 👥 vrienden. Toevoegen op naam; verzoeken accepteren of weigeren; 🟢 = online.
+  function sheetFriends() {
+    const list = friendsList();
+    const body = h("div", { class: "gkBody" });
+    const input = h("input", { type: "text", class: "gkFriendName", maxlength: "40", placeholder: "Naam van een speler", "aria-label": "Naam van een speler", enterkeyhint: "send", autocomplete: "off" });
+    input.value = ui.friendName || "";
+    input.addEventListener("input", function () { ui.friendName = input.value; });
+    input.addEventListener("keydown", function (event) {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      event.stopPropagation();
+      addFriendByName();
+    });
+    body.append(h("div", { class: "gkFriendAdd" }, [input, h("button", { type: "button", class: "gkBtn gkGo", "data-act": "friend-add-name" }, [ico("shaking-hands", "plain"), "Toevoegen"])]));
+    const rows = h("div", { class: "gkList" });
+    if (!list.length) rows.append(emptyNote("shaking-hands", "Nog geen vrienden. Typ hierboven een naam, of houd een speler ingedrukt (rechtsklik) en kies Vriend worden."));
+    const btn = function (act, id, icon, label, extra) {
+      return h("button", { type: "button", class: "gkBtn" + (extra ? " " + extra : ""), "data-act": act, "data-id": id, title: label }, [ico(icon, "plain"), label]);
+    };
+    for (const friend of list) {
+      const btns = [];
+      if (friend.state === "in") btns.push(btn("friend-accept", friend.id, "check-mark", "Accepteren", "gkGo"), btn("friend-remove", friend.id, "cancel", "Weigeren"));
+      else if (friend.state === "out") btns.push(btn("friend-remove", friend.id, "cancel", "Intrekken"));
+      else {
+        if (friend.online) btns.push(btn("friend-whisper", friend.id, "lips", "Fluisteren"), btn("party-invite", friend.id, "three-friends", "Uitnodigen"));
+        btns.push(ui.sure === "unfriend:" + friend.id ? btn("friend-remove", friend.id, "trash-can", "Zeker?", "gkWarn") : btn("friend-remove", friend.id, "trash-can", "Weg"));
+      }
+      const note = friend.state === "in" ? "wil je vriend worden" : friend.state === "out" ? "wacht op antwoord" : friend.online ? "online" : "offline";
+      rows.append(h("div", { class: "gkFriend gkFriend--" + friend.state }, [
+        h("i", { class: "gkFriendDot" + (friend.online ? " gkOn" : ""), "aria-hidden": "true" }),
+        h("span", { class: "gkFriendText" }, [h("b", { text: friend.name }), h("small", { text: note })]),
+        h("div", { class: "gkFriendBtns" }, btns)]));
+    }
+    body.append(rows);
+    return [head("shaking-hands", "Vrienden"), body];
+  }
+  function addFriendByName() {
+    const name = String(ui.friendName || "").trim();
+    if (!name) { toast("Typ eerst de naam van een speler.", { icon: "shaking-hands", ms: 2500 }); return; }
+    if (!api.friendAdd || !api.friendAdd({ name })) { toast("Geen verbinding met de server.", { tone: "error" }); return; }
+    ui.friendName = "";
+    ui.sig.sheet = "";
+    renderSheet();
+  }
+
+  // Werkbank Fase 10 (10b): 📚 kennisboek: de verhalen die je las, per kopje. Tik er een aan om hem nog eens te lezen.
+  function sheetLore() {
+    const d = data();
+    const lore = d.lore || {};
+    const reads = Array.isArray(d.loreReads) ? d.loreReads : null;
+    const body = h("div", { class: "gkBody" });
+    if (!reads) { body.append(emptyNote("hourglass", "Laden...")); return [head("open-book", "Kennisboek"), body]; }
+    const known = reads.filter(function (row) { return lore[row.loreId]; });
+    body.append(h("div", { class: "gkLoreCount", text: known.length + " van " + Object.keys(lore).length + " verhalen gevonden" }));
+    if (!known.length) body.append(emptyNote("open-book", "Nog leeg. Kijk goed rond: een grafsteen, een boek of een bord kun je soms lezen (klik erop)."));
+    const byTitle = new Map();
+    for (const row of known) {
+      const entry = lore[row.loreId];
+      const title = entry.category || "Verhalen";
+      if (!byTitle.has(title)) byTitle.set(title, []);
+      byTitle.get(title).push({ id: row.loreId, entry });
+    }
+    for (const title of Array.from(byTitle.keys()).sort(function (a, b) { return a.localeCompare(b); })) {
+      const list = h("div", { class: "gkList" });
+      for (const item of byTitle.get(title).sort(function (a, b) { return String(a.entry.title).localeCompare(String(b.entry.title)); })) {
+        list.append(h("button", { type: "button", class: "gkLoreRow", "data-act": "lore-open", "data-id": item.id }, [ico("open-book"), h("span", { text: item.entry.title || "Verhaal" })]));
+      }
+      body.append(h("h3", { class: "gkLoreHead", text: title }), list);
+    }
+    return [head("open-book", "Kennisboek"), body];
+  }
+  // Een verhaal in beeld (in het gesprek-vak, zoals een brief). first = net voor het eerst gelezen.
+  function readLore(loreId, options = {}) {
+    if (!loreId || !(data().lore || {})[loreId]) return;
+    store.item = null;
+    ui.story = { kind: "lore", loreId: String(loreId), first: options.first === true, fromBook: options.fromBook === true };
+    ui.dockPick = "talk";
+    save();
+    applyLayout();
+    render();
+    if (options.first) toast("📚 Nieuw in je kennisboek: " + ((data().lore || {})[loreId].title || "Verhaal") + " (J)", { icon: "open-book", ms: 3500 });
+  }
+
   function sheetSettings() {
     const d = data();
     const toggle = function (id, icon, label, note, on) {
@@ -3650,7 +3799,7 @@ export function createGkHud(api) {
       toggle("namePlayers", "person", "Namen van andere spelers", null, store.namePlayers),
       toggle("nameSelf", "person", "Mijn eigen naam", "Boven je eigen poppetje.", store.nameSelf),
       has("float_numbers_hud") ? toggle("floatNums", "heart-plus", "Zwevende getallen", "Klein boven spelers en vijanden: rood schade, groen genezen, blauw mana.", store.floatNums !== false) : null,
-      toggle("music", store.music ? "musical-notes" : "speaker-off", "Muziek", null, store.music),
+      toggle("music", store.music ? "musical-notes" : "speaker-off", "Muziek en geluid", null, store.music),
       toggle("combatFold", "crossed-swords", "Paneel klein tijdens gevecht", "Op een telefoon of smal venster: na het gevecht komt het terug.", store.combatFold),
       h("div", { class: "gkRow" }, [ico("resize"), h("span", null, ["Grootte van het scherm", h("small", { text: "Knoppen, kaart en paneel." })]), sizes]),
       h("div", { class: "gkRow" }, [ico("sparkles"), h("span", null, ["Scherpte", h("small", { text: "1 = standaard. Hoger is scherper (fijn op een telefoon), maar zwaarder voor de computer." })]),
@@ -3691,7 +3840,13 @@ export function createGkHud(api) {
     const d = data();
     const vendor = api.vendor(ui.trade?.vendorId);
     if (!vendor) return [h("div", { class: "gkBody" }, [emptyNote("shop", "Deze winkel is er niet meer.")])];
-    const offers = (vendor.offers || []).filter(function (offer) { return ["sell_to_player", "both"].includes(offer.mode); });
+    // Werkbank Fase 10: dicht buiten de openingstijd (de server zegt het, en de HUD ziet zelf de dag of nacht wisselen).
+    const sky = d.dayNight;
+    const liveClosed = Boolean(vendor.openHours && vendor.openHours !== "always" && sky && !sky.always && (vendor.openHours === "day" ? !sky.isDay : sky.isDay));
+    const closedText = liveClosed ? "De winkel is dicht. Hij gaat open als het " + (vendor.openHours === "day" ? "dag" : "nacht") + " wordt (over "
+      + Math.max(1, Math.ceil(num(sky.msToSwitch) / 60000)) + " min)." : (sky && vendor.openHours && vendor.openHours !== "always" ? "" : vendor.closed || "");
+    const offers = (vendor.offers || []).filter(function (offer) { return ["sell_to_player", "both"].includes(offer.mode); })
+      .map(function (offer) { return closedText ? Object.assign({}, offer, { canBuy: false }) : offer; });
     // Fase 9 herstel: een winkel kan ook een recept verkopen (kopen = leren); het plaatje is dan wat je ermee maakt.
     const look = function (offer) { return offer.visualItemRef || offer.itemRef; };
     const wares = h("div", { class: "gkGrid", "data-drop": "wares" }, offers.map(function (offer) {
@@ -3703,7 +3858,8 @@ export function createGkHud(api) {
         h("span", { class: "gkPrice" }, [currencyVisual(offer.sellCurrencyRef), fmt(offer.sellPriceMinor)])]);
     }));
     // Fase 8 herstel: zeg erbij hoe verkopen gaat (de tas staat boven de winkel).
-    const top = h("div", { class: "gkBody" }, [h("div", { class: "gkShopHint" }, [ico("two-coins", "plain"),
+    const top = h("div", { class: "gkBody" }, [closedText ? h("div", { class: "gkShopHint gkShopClosed" }, [h("span", { text: "\ud83c\udf19" }), h("span", { text: closedText })])
+      : h("div", { class: "gkShopHint" }, [ico("two-coins", "plain"),
       h("span", { text: "Verkopen: tik iets in je tas en kies Verkopen, of sleep het hierheen." })]),
       offers.length ? wares : emptyNote("shop", "Deze winkel verkoopt niets.")]);
     const selected = offers.find(function (offer) { return offer.offerId === ui.trade.offerId; });
@@ -3825,6 +3981,19 @@ export function createGkHud(api) {
     return [h("div", { class: "gkCraft" }, [h("div", { class: "gkCraftTools" }, [ico("anvil-impact"), search]), profHead, list, noRecipes, jobs])];
   }
 
+  // Werkbank Fase 10: dag of nacht op de minimap, met hoe lang nog (minuten).
+  function renderSky() {
+    const sky = data().dayNight;
+    const show = Boolean(sky) && !sky.always;
+    const text = show ? (sky.isDay ? "\u2600\ufe0f" : "\ud83c\udf19") : "";
+    const minutes = show ? Math.max(1, Math.ceil(num(sky.msToSwitch) / 60000)) : 0;
+    const title = show ? (sky.isDay ? "Dag · nacht over " : "Nacht · dag over ") + minutes + " min" : "";
+    if (mapSky.textContent !== text) mapSky.textContent = text;
+    if (mapSky.title !== title) { mapSky.title = title; mapSky.setAttribute("aria-label", title); }
+    mapSky.hidden = !show;
+    root.dataset.night = show && !sky.isDay ? "1" : "0";
+  }
+
   // Kevin 14-11: hoe ver een klus is (0-100), en elke kwartseconde de balk, de tijd en de knop bijwerken.
   function jobPct(start, end, now, ready) {
     if (ready || end <= start) return 100;
@@ -3940,6 +4109,7 @@ export function createGkHud(api) {
       tickCooldowns(now);
       tickCraftJobs();
       watchCraftJobs();
+      renderSky();
       renderInvite(now);
       renderLoot();
     }
@@ -3996,6 +4166,8 @@ export function createGkHud(api) {
     if (target?.entityKind === "pickup" || action === "pickup") return "pickup";
     if (target?.entityKind === "resource" || action === "gather") return "gather";
     if (action === "travel") return "travel";
+    // Werkbank Fase 10 (10b): een model met een verhaal (E = lezen).
+    if (action === "lore_read") return "read";
     return "";
   }
   function nearestAttackTarget(targets = liveTargets()) {
@@ -4022,7 +4194,7 @@ export function createGkHud(api) {
     if (kind + "|" + label !== ui.doKind) {
       ui.doKind = kind + "|" + label;
       const name = String(label).toLowerCase();
-      const icon = kind === "talk" ? "talk" : kind === "pickup" ? "grab" : kind === "travel" ? "exit-door"
+      const icon = kind === "talk" ? "talk" : kind === "pickup" ? "grab" : kind === "travel" ? "exit-door" : kind === "read" ? "open-book"
         : kind === "gather" ? (/erts|steen|rots|ijzer|ore|rock|stone|kristal/.test(name) ? "mining" : /kruid|bloem|plant|herb|flower|bes/.test(name) ? "herbs-bundle" : "wood-axe") : "hand";
       doIcon.replaceChildren(ico(icon));
       doLabel.textContent = label;
@@ -4741,6 +4913,7 @@ export function createGkHud(api) {
     if (store.tab !== id) store.item = null;
     store.tab = id;
     if (id === "chars") loadCharacters(true);
+    if (id === "lore" && api.loreBook) api.loreBook();
     // Openen tijdens een gevecht: dan wil je het echt zien, dus niet meteen weer inklappen.
     ui.combatAt = -1e9;
     setPanel("open");
@@ -5163,6 +5336,9 @@ export function createGkHud(api) {
       case "respawn": api.run03("respawn", null, {}); break;
       case "story-accept": ui.focusQuest = { questId: id, until: performance.now() + 8000 }; api.run03("use", null, { itemId: el.dataset.item }); break;
       case "story-open": showQuest(id); break;
+      // Werkbank Fase 10 (10b): kennisboek en verhalen.
+      case "story-lore-book": closeTalk(); openTab("lore"); break;
+      case "lore-open": readLore(id, { fromBook: true }); break;
       case "unstuck": api.run03("unstuck", null, {}); break;
       case "attack": attack(); break;
       case "heal": heal(); break;
@@ -5386,6 +5562,47 @@ export function createGkHud(api) {
       case "chat-blocks": ui.chatBlocksOpen = !ui.chatBlocksOpen; renderChat(); break;
       case "chat-size": ui.chatBig = !ui.chatBig; ui.chatScrollDown = true; render(); placeChat(); break;
       case "chat-unblock": if (!api.chatBlock || !api.chatBlock(id, false)) toast("Geen verbinding met de server.", { tone: "error" }); break;
+      // Werkbank Fase 10: dempen, melden en vrienden.
+      case "chat-unmute": if (!api.chatMute || !api.chatMute(id, false)) toast("Geen verbinding met de server.", { tone: "error" }); break;
+      case "chat-mute": {
+        const muted = chatMuted().some(function (entry) { return entry.id === id; });
+        closeMenu();
+        if (!api.chatMute || !api.chatMute(id, !muted)) toast("Geen verbinding met de server.", { tone: "error" });
+        break;
+      }
+      case "chat-report": ui.reportFor = id; renderMenu(); break;
+      case "chat-report-cancel": ui.reportFor = null; renderMenu(); break;
+      case "chat-report-send": {
+        const cut = id.lastIndexOf("|");
+        ui.reportFor = null;
+        closeMenu();
+        if (!api.chatReport || !api.chatReport(id.slice(0, cut), id.slice(cut + 1))) toast("Geen verbinding met de server.", { tone: "error" });
+        break;
+      }
+      case "friend-add": closeMenu(); if (!api.friendAdd || !api.friendAdd({ playerId: id })) toast("Geen verbinding met de server.", { tone: "error" }); break;
+      case "friend-add-name": addFriendByName(); break;
+      case "friend-accept": closeMenu(); if (!api.friendAccept || !api.friendAccept(id)) toast("Geen verbinding met de server.", { tone: "error" }); break;
+      case "friend-remove": {
+        const friend = friendsList().find(function (entry) { return entry.id === id; });
+        if (friend?.state === "friend" && ui.sure !== "unfriend:" + id) {
+          ui.sure = "unfriend:" + id;
+          window.clearTimeout(ui.sureTimer);
+          ui.sureTimer = window.setTimeout(function () { ui.sure = ""; ui.sig.sheet = ""; renderSheet(); }, 3000);
+          ui.sig.sheet = "";
+          renderSheet();
+          break;
+        }
+        ui.sure = "";
+        if (!api.friendRemove || !api.friendRemove(id)) toast("Geen verbinding met de server.", { tone: "error" });
+        break;
+      }
+      case "friend-whisper": {
+        const friend = friendsList().find(function (entry) { return entry.id === id; });
+        ui.chatWhisper = { id, name: friend?.name || "Speler" };
+        ui.chatModeSel = "whisper";
+        openChat({ tab: store.chatTab === "all" ? null : "whisper", focus: true });
+        break;
+      }
       case "chat-name": {
         const rect = el.getBoundingClientRect();
         openPlayerMenu({ id, name: el.dataset.name || "Speler", x: rect.right, y: rect.top });
@@ -5702,6 +5919,8 @@ export function createGkHud(api) {
     skillFailed,
     autoSwung,
     questBanner,
+    areaTitle,
+    readLore,
     questDone,
     npcSay,
     setMapPresentation,

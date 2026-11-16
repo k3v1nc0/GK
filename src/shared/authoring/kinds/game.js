@@ -59,6 +59,27 @@ const CLASS_GROW_GROUP = "📈 Groeit per level";
 const SCALE_GROUP = "⚖️ Schaling: oud gebied blijft een gevecht";
 const SCALE_ON = Object.freeze({ key: "levelScaling", is: [true] });
 const SHIELD_GROUP = "🛡️ Schild van sterkere vijanden";
+// Werkbank Fase 10: een model dat rondjes vliegt (vogels, draak).
+const FLY_GROUP = "🦅 Vliegen";
+const FLY_ON = Object.freeze({ key: "fly", is: [true] });
+// Werkbank Fase 10 (Kevin 16-11): een eigen route (tekenen in de 3D-view zoals de Weg), voor een NPC en voor vliegers.
+const WALK_GROUP = "🚶 Lopen";
+const WALKS = Object.freeze({ key: "walkMode", is: ["wander", "route"] });
+const NPC_ROUTE_ON = Object.freeze({ key: "walkMode", is: ["route"] });
+const FLY_ROUTE_ON = Object.freeze({ key: "flyMode", is: ["route"], also: FLY_ON });
+const FLY_CIRCLE_ON = Object.freeze({ key: "flyMode", is: ["circle"], also: FLY_ON });
+const routeField = (label, audience, group, when, wat) => ({ type: "route", required: false, maxItems: 64, audience, label,
+  ui: ui("🛣️", "route", "werkbank", { group, when }), default: null,
+  help: help("De route van " + wat + ": punten die hij een voor een afgaat. Per punt: aan de grond of op een hoogte, hoe lang hij daar wacht en welke animatie hij dan speelt.",
+    "Kies " + wat + " in de 3D-view, druk F en klik op de grond: klik, klik, klik (Esc = klaar). Klik een punt en druk G om te schuiven, G en dan Z voor de hoogte. Wachten 5-20 s met bijv. een zwaai- of werk-animatie.",
+    "Hij loopt door een muur → zet er een punt bij om de muur heen. Hij zweeft → zet ⛰️ aan de grond aan.") });
+const routeEndField = (audience, group, when) => ({ type: "select", required: false, options: ["loop", "back"], optionIcons: { loop: "🔁", back: "↩️" },
+  optionLabels: { loop: "Terug naar punt 1", back: "Omkeren" }, audience, label: "Aan het eind",
+  ui: ui("🔁", "select", "werkbank", { group, when }), default: "loop",
+  help: help("Wat er gebeurt bij het laatste punt: in een rondje terug naar punt 1, of omkeren en dezelfde weg terug.",
+    "Rondje voor een wachter rond het dorp of vogels rond een berg; omkeren voor een boer tussen huis en akker.",
+    "Hij steekt dwars door het dorp terug naar punt 1 → kies Omkeren of zet er punten bij.") });
+
 export const STACKING_LABELS = Object.freeze({ refresh: "Opnieuw beginnen", extend: "Tijd erbij", block: "Niet nog eens" });
 
 const MAP_ICON_OPTIONS = Object.freeze(["dot", "diamond", "square", "triangle", "star", "pin", "portal", "cross", "ring", "arrow"]);
@@ -166,8 +187,37 @@ export const GAME_KINDS = {
       idleClip: clipField("Animatie stilstaan", "🧍"),
       // Stap 8: een NPC die je begeleidt loopt mee.
       walkClip: { type: "text", required: false, maxLength: 120, audience: "client", label: "Animatie lopen",
-        ui: ui("🚶", "select", "werkbank", { optionsFrom: "clips:modelAssetId", more: true }), default: null,
-        help: help("Welke animatie uit het model speelt als hij loopt (als je hem begeleidt in een quest).", "Kies uit de lijst; die komt uit het model dat je erop sleepte.", "Hij glijdt over de grond → kies hier een loop-animatie.") },
+        ui: ui("🚶", "select", "werkbank", { optionsFrom: "clips:modelAssetId", group: WALK_GROUP }), default: null,
+        help: help("Welke animatie uit het model speelt als hij loopt (rondlopen, een route, of als je hem begeleidt in een quest).", "Kies uit de lijst; die komt uit het model dat je erop sleepte.", "Hij glijdt over de grond → kies hier een loop-animatie.") },
+      // Werkbank Fase 10 (keuze van Kevin 15-11): dag en nacht. Een winkel kan 's nachts dicht zijn.
+      openHours: { type: "select", required: false, options: ["always", "day", "night"], optionIcons: { always: "🕒", day: "☀️", night: "🌙" },
+        optionLabels: { always: "Altijd", day: "Alleen overdag", night: "Alleen 's nachts" }, audience: "client", label: "Winkel open",
+        ui: ui("🕒", "select", "werkbank", { group: "🌗 Dag en nacht" }), default: "always",
+        help: help("Wanneer je bij deze NPC kunt kopen en verkopen. Dicht = hij praat wel, maar de winkel zegt hoe lang het nog duurt. Hoe lang dag en nacht duren staat in Instellingen > Wereld > 🌗 Dag en nacht.",
+          "Altijd voor de eerste winkels. Alleen overdag voor een gewone winkel in het dorp, alleen 's nachts voor een smokkelaar.",
+          "Spelers kunnen nergens kopen → zet minstens één winkel op Altijd.") },
+      // Werkbank Fase 10 (Kevin 15-11): een NPC kan rondlopen. Hij blijft staan als een speler bij hem is (om te praten).
+      walkMode: { type: "select", required: false, options: ["stand", "wander", "route"], optionIcons: { stand: "🧍", wander: "🚶", route: "🛣️" },
+        optionLabels: { stand: "Staat stil", wander: "Loopt rond", route: "Loopt een route" }, audience: "server", label: "Lopen",
+        ui: ui("🚶", "select", "werkbank", { group: WALK_GROUP }), default: "stand",
+        help: help("Staat de NPC op zijn plek, loopt hij rond, of loopt hij een route die jij tekent? Komt een speler bij hem, dan blijft hij staan en kijkt hem aan (om te praten of te handelen).",
+          "Loopt rond voor een kind in het dorp (over de 🛣️ Weg als die er ligt). Loopt een route voor een wachter of een boer: kies hem in de 3D-view, druk F en klik de punten. Een NPC met 'Alleen als vlag' blijft staan.",
+          "Hij loopt door een huis of muur → kies een open plek, of teken een route om het huis heen.") },
+      walkRadius: { type: "number", required: false, min: 1, max: 60, audience: "server", label: "Hoe ver",
+        ui: ui("📏", "slider", "werkbank", { step: 1, unit: "m", range: [2, 30], group: WALK_GROUP, when: { key: "walkMode", is: ["wander"] } }), default: 8,
+        help: help("Hoe ver de NPC van zijn plek af loopt.", "5-10 m op een plein, 15-30 m langs een weg.", "Hij is te vaak weg als je hem zoekt → kleiner.") },
+      route: routeField("Route", "server", WALK_GROUP, NPC_ROUTE_ON, "deze NPC"),
+      routeEnd: routeEndField("server", WALK_GROUP, NPC_ROUTE_ON),
+      walkSpeed: { type: "number", required: false, min: 0.3, max: 8, audience: "server", label: "Hoe snel",
+        ui: ui("💨", "slider", "werkbank", { step: 0.1, unit: "m/s", range: [0.5, 5], group: WALK_GROUP, when: WALKS }), default: 1.2,
+        help: help("Hoe snel de NPC loopt.", "1-1,5 m/s is gewoon wandelen, 3-5 m/s is rennen (kies dan ook een ren-animatie).", "Zijn benen gaan sneller dan hij vooruit komt → maak hem sneller of kies een rustiger animatie.") },
+      walkSound: { type: "asset", assetType: "audio", required: false, maxLength: 160, audience: "client", label: "Geluid tijdens lopen",
+        ui: ui("🔊", "asset", "werkbank", { group: WALK_GROUP, when: WALKS }), default: null,
+        help: help("Een geluid dat speelt terwijl de NPC loopt (voetstappen, belletjes, gerammel). Hoe dichterbij, hoe harder.", "Sleep een kort geluid (mp3, ogg of wav) dat mooi rondloopt. Leeg = stil.", "Het is te hard of te druk → kies een zachter geluid; spelers zetten het uit met Muziek en geluid.") },
+      // Werkbank Fase 10 (10a): een NPC zegt soms een praatje (ballon boven zijn hoofd) als je in de buurt bent.
+      chatter: { type: "text", required: false, maxLength: 400, audience: "client", label: "Praatjes (één per regel)",
+        ui: ui("💬", "text", "werkbank", { multiline: true, group: "💬 Praatjes" }), default: null,
+        help: help("Wat de NPC soms zomaar zegt als je in de buurt bent (een ballon boven zijn hoofd). Elke regel is een praatje; hij kiest er af en toe één.", "Twee tot vier korte zinnen, bijv. \"Mooi weer vandaag.\" en \"Heb jij de smid gezien?\"", "Het wordt te druk → minder regels; zonder regels zegt hij niets.") },
       ...flagGate("deze NPC"),
       x: pos("X", "↔️"),
       y: height,
@@ -191,6 +241,27 @@ export const GAME_KINDS = {
       scope: { type: "select", required: false, options: Object.keys(FLAG_SCOPES), optionLabels: Object.fromEntries(Object.entries(FLAG_SCOPES).map(([key, entry]) => [key, entry.icon + " " + entry.label])),
         audience: "client", label: "Voor wie", ui: ui("👥", "select", "werkbank"), default: "group",
         help: help("Voor wie de vlag aangaat als een quest hem zet.", "Groep voor een poort die voor jullie opengaat; Iedereen voor iets dat de hele wereld verandert (bijv. na een wereld-event).", "Een ander ziet het ook → kies Alleen voor de speler of Voor de groep.") }
+    }
+  },
+  // Werkbank Fase 10 (10b): een verhaal-kaart (een grafsteen, een boek, een bord). Zet hem op een model (📜 Lezen):
+  // de speler leest hem daar, en daarna staat hij in zijn 📚 kennisboek (per account bewaard).
+  lore_entry: {
+    label: "Verhaal",
+    plural: "Verhalen",
+    icon: "📕",
+    place: "werkbank",
+    singleton: false,
+    domain: "quests",
+    idField: "loreId",
+    fields: {
+      loreId: idField("Verhaal-ID", "dit verhaal"),
+      displayName: Object.assign(nameField("dit verhaal"), { label: "Titel" }),
+      text: { type: "text", required: true, maxLength: 2000, audience: "client", label: "Tekst",
+        ui: ui("📜", "text", "werkbank", { multiline: true }), default: "",
+        help: help("Wat de speler leest: het opschrift van een grafsteen, een bladzijde uit een boek, een bord.", "Een paar zinnen tot een korte bladzijde. Een witregel = een nieuwe alinea.", "Niemand leest het → korter, en vertel iets wat de speler nog niet wist.") },
+      category: { type: "text", required: false, maxLength: 40, audience: "client", label: "Kopje in het kennisboek",
+        ui: ui("🗂️", "text", "werkbank"), default: "",
+        help: help("Onder welk kopje dit verhaal in het 📚 kennisboek staat.", "Bijv. Geschiedenis, Personen of Plekken. Leeg = Verhalen.", "Het boek is een rommeltje → geef verhalen die bij elkaar horen hetzelfde kopje.") }
     }
   },
   quest: {
@@ -330,6 +401,40 @@ export const GAME_KINDS = {
         help("Kun je bij dit model dingen maken? Loop erheen en druk E (of klik het).", "Aan voor een aambeeld, oven of kookpot, en sleep bij Werkplek voor het beroep erop.", "Je kunt er niets maken → zet dit aan, kies het beroep en geef de recepten hetzelfde beroep."),
         { group: "🔨 Werkplek" }),
       craftProfessionRef: workstationProfessionField("dit model", "🔨 Werkplek"),
+      // Werkbank Fase 10 (10b): een verhaal op dit model (grafsteen, boek, bord): klik het en lees; daarna staat het in het 📚 kennisboek.
+      loreRef: refField("Verhaal om te lezen", "📕", "lore_entry", false,
+        help("Kun je dit model lezen? Sleep een 📕 Verhaal uit de Bibliotheek hierop.", "Voor een grafsteen, een boek op een tafel of een bord bij de weg. De speler klikt het model en leest het verhaal; daarna staat het in zijn kennisboek.", "Je kunt het niet lezen → staat er een verhaal op, en sta je dichtbij genoeg (4 m)?"),
+        { group: "📕 Lezen" }),
+      // Werkbank Fase 10 (Kevin 15-11): vogels of een draak die rondjes vliegen boven deze plek (alleen om naar te kijken).
+      fly: { type: "boolean", required: false, audience: "client", label: "Vliegt",
+        ui: ui("🦅", "toggle", "werkbank", { group: FLY_GROUP }), default: false,
+        help: help("Vliegt dit model in rondjes boven deze plek? Alleen om naar te kijken: je kunt het niet aanvallen.",
+          "Aan voor vogels of een draak. Sleep een model met een vlieg-animatie (kies die bij Animatie). In de editor staat het model op het midden van het rondje; in de game vliegt het.",
+          "Het vliegt door een berg → maak de hoogte groter of het rondje kleiner.") },
+      // Werkbank Fase 10 (Kevin 16-11): rondjes, of een eigen route met per punt een hoogte (of aan de grond = landen), wachten en een animatie.
+      flyMode: { type: "select", required: false, options: ["circle", "route"], optionIcons: { circle: "⭕", route: "🛣️" },
+        optionLabels: { circle: "Rondjes", route: "Een route" }, audience: "client", label: "Hoe",
+        ui: ui("🧭", "select", "werkbank", { group: FLY_GROUP, when: FLY_ON }), default: "circle",
+        help: help("Vliegen ze rondjes boven deze plek, of een route die jij tekent?",
+          "Rondjes voor vogels boven een bos. Een route voor een draak die van de berg naar het dorp vliegt, landt (punt aan de grond, wachten + animatie) en terugvliegt.",
+          "Ze vliegen door een berg → zet de punten hoger (G en dan Z) of kies Rondjes.") },
+      flyRoute: routeField("Vliegroute", "client", FLY_GROUP, FLY_ROUTE_ON, "dit model"),
+      flyEnd: routeEndField("client", FLY_GROUP, FLY_ROUTE_ON),
+      flyCount: { type: "integer", required: false, min: 1, max: 12, audience: "client", label: "Hoeveel",
+        ui: ui("🔢", "slider", "werkbank", { step: 1, group: FLY_GROUP, when: FLY_ON }), default: 3,
+        help: help("Hoeveel er samen rondvliegen.", "3-6 vogels, 1 draak.", "Het wordt te druk of de game hapert → minder.") },
+      flyRadius: { type: "number", required: false, min: 3, max: 150, audience: "client", label: "Grootte rondje",
+        ui: ui("⭕", "slider", "werkbank", { step: 1, unit: "m", range: [5, 80], group: FLY_GROUP, when: FLY_CIRCLE_ON }), default: 20,
+        help: help("Hoe groot het rondje is (straal).", "10-20 m voor vogels, 40-80 m voor een draak.", "Je ziet ze nooit → kleiner rondje.") },
+      flyHeight: { type: "number", required: false, min: 2, max: 200, audience: "client", label: "Hoogte",
+        ui: ui("⬆️", "slider", "werkbank", { step: 1, unit: "m", range: [5, 120], group: FLY_GROUP, when: FLY_CIRCLE_ON }), default: 25,
+        help: help("Hoe hoog boven de grond ze vliegen.", "15-30 m voor vogels, 40-80 m voor een draak.", "Ze vliegen door bomen of bergen → hoger.") },
+      flySpeed: { type: "number", required: false, min: 1, max: 60, audience: "client", label: "Snelheid",
+        ui: ui("💨", "slider", "werkbank", { step: 0.5, unit: "m/s", range: [1, 30], group: FLY_GROUP, when: FLY_ON }), default: 6,
+        help: help("Hoe snel ze vliegen.", "4-8 m/s voor vogels, 10-15 m/s voor een draak.", "Ze schieten voorbij → langzamer.") },
+      flySound: { type: "asset", assetType: "audio", required: false, maxLength: 160, audience: "client", label: "Geluid",
+        ui: ui("🔊", "asset", "werkbank", { group: FLY_GROUP, when: FLY_ON }), default: null,
+        help: help("Een geluid dat je hoort als ze in de buurt vliegen (gekwetter, vleugels, gebrul). Hoe dichterbij, hoe harder.", "Sleep een geluid (mp3, ogg of wav) dat mooi rondloopt. Leeg = stil.", "Het is te hard of te druk → kies een zachter geluid; spelers zetten het uit met Muziek en geluid.") },
       ...flagGate("dit model"),
       x: pos("X", "↔️"),
       y: Object.assign({}, height, { ui: ui("↕️", "slider", "werkbank", { step: 0.1, unit: "m", range: [-20, 20] }) }),

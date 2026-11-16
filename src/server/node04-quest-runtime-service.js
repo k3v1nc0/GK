@@ -5,6 +5,7 @@ import { runOperation } from "./persistence/operation-contract.js";
 import { QUEST_NEARBY_M, pointInArea, worldEventWindow } from "../../apps/web/public/shared/quest-graph.js";
 import { WorldFlags } from "./world-flags.js";
 import { combatRulesFromProject, scaledXp } from "./runtime/player-effects.js";
+import { withNpcLivePosition } from "./runtime/npc-live-positions.js";
 
 
 function now() {
@@ -76,6 +77,11 @@ function displayForCurrency(catalogs, currencyId) {
 function displayForAbility(catalogs, abilityId) {
   const ability = catalogSection(catalogs, "abilities")[abilityId] || {};
   return ability.displayName || abilityId;
+}
+
+// Werkbank Fase 10: praten met een NPC die rondloopt: de afstand telt vanaf waar hij nu staat.
+function livePlace(ctx, target) {
+  return withNpcLivePosition(ctx?.worldId, target, target?.entityRef || target?.linkedEntity?.entityId);
 }
 
 function positionDistance(position, target) {
@@ -1969,7 +1975,7 @@ export class Node04QuestRuntimeService {
     const target = this.resolveQuestTarget(ctx.project, objective?.targetRef);
     if (!target) return allowUnknown;
     if (safeString(objective.zoneRef || target.zoneRef || ctx.zoneId) !== safeString(ctx.zoneId)) return false;
-    const distance = positionDistance(ctx.position, target);
+    const distance = positionDistance(ctx.position, livePlace(ctx, target));
     if (distance === null) return allowUnknown;
     return distance <= Math.max(0.1, safeNumber(objective.radius || target.radius, 3)) + slack;
   }
@@ -2873,7 +2879,8 @@ export class Node04QuestRuntimeService {
     return this.node03RuntimeService.linkOriginPosition(ctx, link);
   }
 
-  runtimeTargetFromQuestTarget(ctx, target, extra) {
+  runtimeTargetFromQuestTarget(ctx, questTarget, extra) {
+    const target = livePlace(ctx, questTarget);
     const distance = positionDistance(ctx.position, target);
     const range = Math.max(1, safeNumber(target.radius, 3));
     const entityRef = safeString(target.entityRef, "");

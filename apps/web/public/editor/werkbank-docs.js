@@ -4,7 +4,7 @@
 import { api, command, el, friendlyError, slug } from "./canonical-api.js";
 import { createAssetPicker, createMiniPicker } from "./mini-asset-picker.js?v=20261106-thumbs150";
 import { convertShape } from "./werkbank-world.js?v=20261108-portals1";
-import { renderUsers } from "./werkbank-users.js?v=20261104-account-reset1";
+import { renderUsers } from "./werkbank-users.js?v=20261115-fase10";
 import { computeDamage, rollLoot } from "../shared/combat-math.js";
 import { cleanXpCurve, xpCostAt, xpTotals } from "../shared/level-math.js";
 import { areaCenterMm, areaCirclePointsMm, areaRectPointsMm, areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261108-roads7";
@@ -29,7 +29,7 @@ const REASON_TEXT = {
 // Een placed_model is een losse wereldinstantie, geen herbruikbare Bibliotheek-kaart.
 // De bron blijft de asset (of bij een pickup: het item); zo groeit de Werkbank niet
 // uit tot een lijst met iedere boom/stoel/steen die ooit in de wereld is neergezet.
-const LIBRARY_KINDS = ["item_definition", "currency", "ability", "loot_table", "resource_definition", "actor_archetype", "npc", "portal", "quest", "recipe", "profession", "world_flag"];
+const LIBRARY_KINDS = ["item_definition", "currency", "ability", "loot_table", "resource_definition", "actor_archetype", "npc", "portal", "quest", "lore_entry", "recipe", "profession", "world_flag"];
 // Kaarten met een plek in de wereld: klik in de 3D-view, G = verplaatsen (R = draaien, T = groter/kleiner waar het kan).
 // Een pickup draait per plek; zijn grootte komt van het item (Grootte op de grond).
 // tilt = kantelen (R en dan X of Y); NPC's en portals blijven rechtop staan.
@@ -342,6 +342,55 @@ export function createDocBench(options = {}) {
     input.checked = emptyValue(value) ? Boolean(field.default) : Boolean(value);
     input.addEventListener("change", () => onChange(input.checked));
     return input;
+  }
+
+  // Werkbank Fase 10 (Kevin 16-11): de punten van een route (NPC of vlieger). Tekenen in de 3D-view (F); hier per punt:
+  // aan de grond of een hoogte, hoe lang hij daar wacht en welke animatie hij dan speelt. Klik het nummer = punt kiezen in 3D.
+  function routeControl(field, value, body, onChange) {
+    const points = Array.isArray(value) ? value : [];
+    const clips = dynamicOptions({ ui: { optionsFrom: "clips:modelAssetId" } }, body);
+    const box = el("div", { class: "wbdRoute" });
+    box.append(el("div", { class: "wbdNote", text: points.length
+      ? "🛣️ " + points.length + (points.length === 1 ? " punt" : " punten") + ". In de 3D-view: F = punten erbij, klik een punt + G = schuiven, G en Z = hoogte, Del = weg."
+      : "🛣️ Nog geen punten. Kies hem in de 3D-view, druk F en klik op de grond: klik, klik, klik. Esc = klaar." }));
+    const change = (index, patch) => {
+      const next = points.map((point, i) => {
+        if (i !== index) return point;
+        const out = Object.assign({}, point, patch);
+        for (const [k, v] of Object.entries(out)) if (v === null || v === undefined || v === "" || (k === "waitS" && !(Number(v) > 0))) delete out[k];
+        return out;
+      });
+      onChange(next);
+    };
+    points.forEach((point, index) => {
+      const air = Number.isFinite(Number(point.h));
+      const num = el("button", { type: "button", class: "wbdRouteNum", text: String(index + 1), title: "Kies dit punt in de 3D-view" });
+      num.addEventListener("click", () => { if (typeof bench.onRoutePick === "function") bench.onRoutePick(index); });
+      const ground = el("input", { type: "checkbox", class: "wbdToggle", title: "Aan de grond (uit = op een hoogte)" });
+      ground.checked = !air;
+      ground.addEventListener("change", () => change(index, { h: ground.checked ? null : 3 }));
+      const height = el("input", { type: "number", class: "wbdNumber wbdRouteH", min: "0", max: "300", step: "0.5", value: air ? String(point.h) : "0", title: "Hoogte boven de grond (m)" });
+      height.disabled = !air;
+      height.addEventListener("change", () => change(index, { h: Math.max(0, Math.min(300, Number(height.value) || 0)) }));
+      const wait = el("input", { type: "number", class: "wbdNumber wbdRouteWait", min: "0", max: "600", step: "1", value: String(Number(point.waitS) || 0), title: "Hoe lang hij hier wacht (seconden)" });
+      wait.addEventListener("change", () => change(index, { waitS: Math.max(0, Math.min(600, Number(wait.value) || 0)) }));
+      const clip = el("select", { class: "wbdSelect wbdRouteClip", title: "Animatie als hij hier wacht" }, [el("option", { value: "", text: "🎞️ (gewoon)" })]
+        .concat(clips.map((option) => el("option", { value: option.value, text: option.label }))));
+      if (point.clip && !clips.some((option) => option.value === point.clip)) clip.append(el("option", { value: point.clip, text: point.clip }));
+      clip.value = point.clip || "";
+      clip.addEventListener("change", () => change(index, { clip: clip.value || null }));
+      const del = el("button", { type: "button", class: "wbdGhost wbdRouteDel", text: "✕", title: "Punt weghalen" });
+      del.addEventListener("click", () => onChange(points.length > 1 ? points.filter((_, i) => i !== index) : null));
+      box.append(el("div", { class: "wbdRouteRow", "data-route-index": String(index) }, [
+        num,
+        el("label", { class: "wbdRouteCell", title: "Aan de grond" }, [ground, el("span", { text: "⛰️" })]),
+        el("label", { class: "wbdRouteCell", title: "Hoogte (m)" }, [el("span", { text: "↕️" }), height]),
+        el("label", { class: "wbdRouteCell", title: "Wachten (s)" }, [el("span", { text: "⏸️" }), wait]),
+        clip, del
+      ]));
+    });
+    if (points.length) box.append(el("div", { class: "wbdNote", text: "⛰️ aan = aan de grond, uit = op ↕️ meter hoogte. ⏸️ = seconden wachten op dat punt, met de animatie ernaast." }));
+    return box;
   }
 
   function dynamicOptions(field, body) {
@@ -824,6 +873,7 @@ export function createDocBench(options = {}) {
       return input;
     }
     if (type === "curve") return curveControl(field, value, body, onChange);
+    if (type === "route") return routeControl(field, value, body, onChange);
     if (type === "points") {
       const count = Array.isArray(value) ? value.length : 0;
       const what = field.type === "linkList" ? " lijnen" : " punten";
@@ -934,15 +984,18 @@ export function createDocBench(options = {}) {
       return entry;
     };
     // ui.when: { key, is: [...] } = alleen tonen als dat andere veld zo staat (bijv. Geneest alleen bij soort Genezen).
-    const shownWhen = (field) => {
-      // ui.hideWhen: weg zodra dat andere veld gevuld is (snelle questvelden zodra de quest eigen stappen heeft).
-      if (field.ui?.hideWhen && !emptyValue(body[field.ui.hideWhen])) return false;
-      const when = field.ui?.when;
+    // ui.when.also: nog een voorwaarde erbij (bijv. Vliegroute: alleen als Vliegt aan staat én Hoe = Een route).
+    const whenHolds = (when) => {
       if (!when) return true;
       // Een pad (bijv. "start.mode") kijkt in een object-veld; fallback = de waarde als het leeg is.
       const value = String(when.key).split(".").reduce((part, name) => (part && typeof part === "object" ? part[name] : undefined), body);
       const current = emptyValue(value) ? (when.fallback !== undefined ? when.fallback : spec.fields[when.key]?.default) : value;
-      return when.is.includes(current);
+      return when.is.includes(current) && whenHolds(when.also);
+    };
+    const shownWhen = (field) => {
+      // ui.hideWhen: weg zodra dat andere veld gevuld is (snelle questvelden zodra de quest eigen stappen heeft).
+      if (field.ui?.hideWhen && !emptyValue(body[field.ui.hideWhen])) return false;
+      return whenHolds(field.ui?.when);
     };
     for (const [key, field] of Object.entries(spec.fields)) {
       if (field.ui?.place === "viewport") { viewportOnly.push([key, field]); continue; }
@@ -983,7 +1036,7 @@ export function createDocBench(options = {}) {
         if (key === "displayName" && isNew && spec.idField && !bench.draft.idTouched) {
           const prefix = { item_definition: "item", ability: "ability", loot_table: "loot", resource_definition: "resource", actor_archetype: "actor",
             currency: "currency", npc: "npc", portal: "portal", quest: "quest", recipe: "recipe", placed_model: "model", player_class: "class",
-            terrain_texture: "tex", terrain_stamp: "stamp", terrain_water: "water", world_flag: "flag", profession: "profession" }[kind];
+            terrain_texture: "tex", terrain_stamp: "stamp", terrain_water: "water", world_flag: "flag", profession: "profession", lore_entry: "lore" }[kind];
           if (prefix && next) body[spec.idField] = prefix + "." + slug(next);
         }
         if (isNew && !spec.singleton) { rerender(); return; }
@@ -1008,7 +1061,7 @@ export function createDocBench(options = {}) {
       const fieldControl = lockedRoadType
         ? el("div", { class: "wbdNote", text: "🛣️ Weg is een vast type en kan niet in een ander vlak worden veranderd." })
         : control(key, field, body, isNew, onChange);
-      const row = fieldRow(key, shown, fieldControl, ["loot", "refList", "assetList", "curve"].includes(field.ui?.control) || field.ui?.multiline);
+      const row = fieldRow(key, shown, fieldControl, ["loot", "refList", "assetList", "curve", "route"].includes(field.ui?.control) || field.ui?.multiline);
       if (field.ui?.group) groupBox(field.ui.group).fields.append(row);
       else (field.ui?.more && !bare ? more : visible).append(row);
     }
@@ -1214,6 +1267,34 @@ export function createDocBench(options = {}) {
         row.append(go);
       }
       box.append(row);
+    }
+
+    // Werkbank Fase 10: de Game Bible tegenover de game (geen rood of oranje: de bijbel loopt vaak voor).
+    const bible = report.bible || null;
+    if (bible) {
+      const head = el("div", { class: "wbdHead" }, [el("span", { class: "wbdHeadIcon", text: "📖" }),
+        el("div", { class: "wbdHeadText" }, [el("div", { class: "wbdHeadKind", text: "Bijbel" }),
+          el("div", { class: "wbdHeadName", text: bible.counts.inGame + " in de game · " + bible.counts.missing + " nog niet · " + bible.counts.extra + " niet in de bijbel" })])]);
+      box.append(head);
+      if (typeof options.openBible === "function") {
+        const open = el("button", { type: "button", class: "wbdGhost", text: "📖 Open de bijbel" });
+        open.addEventListener("click", () => options.openBible());
+        box.append(open);
+      }
+      if (bible.missing.length) {
+        box.append(el("div", { class: "wbdFinding" }, [
+          el("div", { class: "wbdFindingText", text: "📖 In de bijbel, nog niet in de game" + (bible.counts.missing > bible.missing.length ? " (eerste " + bible.missing.length + ")" : "") }),
+          el("div", { class: "wbdNote", text: bible.missing.map((entry) => entry.name + " (" + entry.kind + (entry.lost ? ", koppeling kwijt" : "") + ")").join(" · ") })]));
+      }
+      for (const entry of bible.extra) {
+        const row = el("div", { class: "wbdFinding" }, [el("div", { class: "wbdFindingText", text: "🆕 " + entry.kind + " " + entry.name + " staat in de game, maar nog niet in de bijbel" })]);
+        if (openDoc) {
+          const go = el("button", { type: "button", class: "wbdGhost", text: "➡️ Open de kaart" });
+          go.addEventListener("click", () => openDoc(entry.docKey));
+          row.append(go);
+        }
+        box.append(row);
+      }
     }
 
     // Fase 9: beroepen, waar de grondstoffen voor recepten vandaan komen, en uitrusting per levelbereik.

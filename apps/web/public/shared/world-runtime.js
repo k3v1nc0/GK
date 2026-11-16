@@ -4711,6 +4711,10 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let roadEditorOverlay = null;
   let roadEditorState = null;
   let roadEditorPositions = [];
+  // Werkbank Fase 10 (Kevin 16-11): de route van één NPC of vlieger (editor), zie setRouteEditorOverlay.
+  let routeEditorOverlay = null;
+  let routeEditorState = null;
+  let routeEditorPositions = [];
   let scatterEditorOverlay = null;
   let scatterEditorOverlayState = null;
   let terrainRuntimeGroup = null;
@@ -4728,6 +4732,9 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let scatterShadowFallbacks = 0;
   let nonInstancedShadowCasters = 0;
   const directionalLights = [];
+  // Werkbank Fase 10: dag en nacht. De lampen onthouden hun eigen sterkte; setDaylight schaalt ze (1 = dag).
+  const ambientLights = [];
+  let daylightLevel = 1;
   const groundChunkState = {
     mode: "full",
     tilesByChunkKey: new Map(),
@@ -8047,6 +8054,11 @@ function resolveChunkDebugCenter(policy) {
     roadEditorOverlay.frustumCulled = false;
     markDebugOverlayTree(roadEditorOverlay, "terrain");
     scene.add(roadEditorOverlay);
+    routeEditorOverlay = new THREE.Group();
+    routeEditorOverlay.name = "GK editor terrain overlay (route)";
+    routeEditorOverlay.frustumCulled = false;
+    markDebugOverlayTree(routeEditorOverlay, "terrain");
+    scene.add(routeEditorOverlay);
     scatterEditorOverlay = createScatterOverlay();
     sanitizeNonWorldShadowCasters(scatterEditorOverlay);
     scene.add(scatterEditorOverlay);
@@ -8795,6 +8807,7 @@ function resolveChunkDebugCenter(policy) {
     frameTiming.syncChunkMs = round(performance.now() - sectionStart);
     sectionStart = performance.now();
     if (combatFx.length) updateCombatFx(performance.now());
+    if (flyerRoots.length && shouldAnimateModels) updateFlyers(false);
     if (dangerZones.size) updateDangerZones(performance.now());
     if (gpuFrameTimer) gpuFrameTimer.begin();
     renderer.render(scene, camera);
@@ -8953,6 +8966,7 @@ function resolveChunkDebugCenter(policy) {
       if (light?.target?.parent) light.target.parent.remove(light.target);
     }
     directionalLights.length = 0;
+    ambientLights.length = 0;
     groundShadowAnchorKey = "";
     shadowAnchorState = {
       mode: "static",
@@ -9654,6 +9668,78 @@ function resolveChunkDebugCenter(policy) {
       if (d <= radiusPx * 0.7 && (!best || d < best.d)) best = { kind: "link", index: k, d };
     });
     return best ? { kind: best.kind, index: best.index } : null;
+  }
+
+  // Werkbank Fase 10 (Kevin 16-11): de route van een NPC of vlieger. state = { points: [{ x, z, h? }] (h = hoogte boven de grond,
+  // zonder h = aan de grond), selected (index of -1), loop (laatste punt terug naar punt 1), active }. Klikken via pickRouteEditor.
+  function buildRouteEditorOverlay() {
+    if (!routeEditorOverlay) return;
+    for (const child of Array.from(routeEditorOverlay.children)) {
+      routeEditorOverlay.remove(child);
+      disposeObject(child);
+    }
+    routeEditorPositions = [];
+    const data = routeEditorState;
+    const points = Array.isArray(data?.points) ? data.points : [];
+    routeEditorOverlay.visible = mode === "editor" && points.length > 0;
+    if (!routeEditorOverlay.visible) { requestRender("route-overlay"); return; }
+    const pos = points.map((p) => {
+      const y = roadOverlayY(p.x, p.z) + (Number.isFinite(Number(p.h)) ? Number(p.h) : 0);
+      return new THREE.Vector3(num(p.x, 0), y, num(p.z, 0));
+    });
+    routeEditorPositions = pos;
+    const add = (object, order) => {
+      object.renderOrder = order;
+      object.frustumCulled = false;
+      object.raycast = function () {};
+      object.userData.debugOverlay = true;
+      object.userData.debugOverlayKind = "terrain";
+      routeEditorOverlay.add(object);
+    };
+    const lineMaterial = (color, opacity) => new THREE.LineBasicMaterial({ color, depthTest: false, depthWrite: false, transparent: true, opacity, toneMapped: false });
+    const chain = pos.slice();
+    if (data.loop === true && pos.length > 2) chain.push(pos[0]);
+    if (chain.length > 1) add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(chain), lineMaterial(0x7dd3fc, 1)), 2002);
+    // Een punt in de lucht krijgt een streep naar de grond (dan zie je hoe hoog hij is).
+    const stems = [];
+    points.forEach((p, i) => { if (Number(p.h) > 0) stems.push(pos[i], new THREE.Vector3(pos[i].x, roadOverlayY(p.x, p.z), pos[i].z)); });
+    if (stems.length) add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(stems), lineMaterial(0xffffff, 0.45)), 2002);
+    const selected = Number.isInteger(data.selected) ? data.selected : -1;
+    const sphere = (list, radius, color, order) => {
+      if (!list.length) return;
+      const mesh = new THREE.InstancedMesh(new THREE.SphereGeometry(radius, 12, 8),
+        new THREE.MeshBasicMaterial({ color, depthTest: false, depthWrite: false, transparent: true, opacity: 1, toneMapped: false }), list.length);
+      const matrix = new THREE.Matrix4();
+      list.forEach((i, k) => { matrix.makeTranslation(pos[i].x, pos[i].y, pos[i].z); mesh.setMatrixAt(k, matrix); });
+      mesh.instanceMatrix.needsUpdate = true;
+      add(mesh, order);
+    };
+    const all = points.map((_, i) => i).filter((i) => i !== selected);
+    // Oranje = aan de grond, blauw = in de lucht, groter = hij wacht daar; wit = gekozen; punt 1 is groen.
+    sphere(all.filter((i) => i === 0), 0.55, 0x4ade80, 2004);
+    sphere(all.filter((i) => i > 0 && !(Number(points[i].waitS) > 0) && !Number.isFinite(Number(points[i].h))), 0.4, 0xffb347, 2004);
+    sphere(all.filter((i) => i > 0 && !(Number(points[i].waitS) > 0) && Number.isFinite(Number(points[i].h))), 0.4, 0x38bdf8, 2004);
+    sphere(all.filter((i) => i > 0 && Number(points[i].waitS) > 0), 0.6, 0xf472b6, 2004);
+    if (selected >= 0 && pos[selected]) sphere([selected], 0.7, 0xffffff, 2005);
+    requestRender("route-overlay");
+  }
+  function setRouteEditorOverlay(state) {
+    routeEditorState = state || null;
+    buildRouteEditorOverlay();
+  }
+  // Welk routepunt ligt onder de muis (index), of -1.
+  function pickRouteEditor(clientX, clientY, radiusPx = 14) {
+    const points = Array.isArray(routeEditorState?.points) ? routeEditorState.points : [];
+    if (mode !== "editor" || !points.length) return -1;
+    let best = -1;
+    let bestD = Infinity;
+    points.forEach((p, i) => {
+      const s = routeEditorPositions[i] ? worldToScreen(routeEditorPositions[i]) : null;
+      if (!s) return;
+      const d = Math.hypot(s.x - clientX, s.y - clientY);
+      if (d <= radiusPx && d < bestD) { best = i; bestD = d; }
+    });
+    return best;
   }
 
   function setTerrainEditorOverlay(nextOverlay) {
@@ -11679,6 +11765,7 @@ function resolveChunkDebugCenter(policy) {
         for (const root of overlayRoots) hideRoot(root);
         hideRoot(multiSelectionBoundsHelper);
         hideRoot(roadEditorOverlay);
+        hideRoot(routeEditorOverlay);
         hideRoot(terrainEditorOverlay);
       };
       hideOverlaysForBake();
@@ -13588,6 +13675,119 @@ function resolveChunkDebugCenter(policy) {
     return [ground.materialColor || "", asset?.sourcePath || "", sharedWorldPerformance().smoothShading === false ? "flat" : "smooth"].join("|");
   }
 
+  // Werkbank Fase 10 (Kevin 15-11): vogels of een draak die rondjes vliegen. Alleen om naar te kijken (geen doel, geen botsing).
+  // Kevin 16-11: of een getekende route: per punt een hoogte (of aan de grond = landen), wachten en een animatie.
+  // Licht voor de oude laptop: hooguit 40, geen schaduw, en wie ver weg is wordt niet bijgewerkt.
+  const FLYER_MAX = 40;
+  const FLYER_UPDATE_M = 220;
+  const flyerRoots = [];
+  // De route als vaste dienstregeling: per stuk wachten bij a, dan vliegen naar b. Iedereen ziet hetzelfde (Date.now).
+  function flyerRoutePlan(flyer, worldData) {
+    const raw = Array.isArray(flyer?.route) ? flyer.route : [];
+    if (raw.length < 2) return null;
+    const base = num(worldData?.ground?.y, 0);
+    const pts = raw.map(function (p) {
+      const h = Number.isFinite(Number(p?.h)) ? Number(p.h) : 0;
+      return { x: num(p?.x, 0), z: num(p?.z, 0), y: base + terrainLift(p?.x, p?.z) + h, air: h > 0.5, waitS: Math.max(0, num(p?.waitS, 0)), clip: String(p?.clip || "") };
+    });
+    const order = pts.map(function (_, i) { return i; });
+    if (flyer.loop === false) for (let i = pts.length - 2; i >= 1; i -= 1) order.push(i);
+    const speed = Math.max(0.5, num(flyer.speed, 6));
+    const legs = [];
+    let time = 0;
+    for (let k = 0; k < order.length; k += 1) {
+      const a = pts[order[k]];
+      const b = pts[order[(k + 1) % order.length]];
+      const travel = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z) / speed;
+      legs.push({ a: a, b: b, start: time, waitEnd: time + a.waitS, end: time + a.waitS + travel });
+      time += a.waitS + travel;
+    }
+    const cx = pts.reduce(function (sum, p) { return sum + p.x; }, 0) / pts.length;
+    const cz = pts.reduce(function (sum, p) { return sum + p.z; }, 0) / pts.length;
+    const reach = pts.reduce(function (most, p) { return Math.max(most, Math.hypot(p.x - cx, p.z - cz)); }, 0);
+    return { legs: legs, period: Math.max(0.1, time), cx: cx, cz: cz, reach: reach };
+  }
+  function buildFlyers(worldData) {
+    flyerRoots.length = 0;
+    if (mode !== "game") return;
+    const list = Array.isArray(worldData?.flyers) ? worldData.flyers : [];
+    for (const flyer of list) {
+      if (!flyer?.modelAssetId) continue;
+      const count = Math.max(1, Math.min(12, Math.round(num(flyer.count, 1))));
+      let seed = 0;
+      for (const ch of String(flyer.id || "")) seed = (seed * 31 + ch.charCodeAt(0)) >>> 0;
+      const rand = function () { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+      const cx = num(flyer.x, 0), cz = num(flyer.z, 0);
+      const ground = terrainLift(cx, cz) + num(worldData?.ground?.y, 0);
+      const plan = flyerRoutePlan(flyer, worldData);
+      const soundUrl = flyer.soundAssetId ? assetById(worldData, flyer.soundAssetId)?.sourcePath || null : null;
+      for (let i = 0; i < count && flyerRoots.length < FLYER_MAX; i += 1) {
+        const root = new THREE.Group();
+        root.name = "fase10-flyer";
+        root.userData.runtimeAlive = true;
+        // De Animatie uit de kaart (bijv. vliegen) speelt als "stilstaan".
+        if (flyer.idleClip) root.userData.actorClips = { idle: flyer.idleClip };
+        root.scale.setScalar(Math.max(0.01, num(flyer.scale, 1)));
+        // Samen in een losse groep: ieder een eigen afstand, hoogte en plek in het rondje (of op de route iets achter elkaar).
+        root.userData.flyer = {
+          cx: plan ? plan.cx : cx, cz: plan ? plan.cz : cz, y: ground + num(flyer.height, 25) + (rand() - 0.5) * 4,
+          radius: plan ? plan.reach : Math.max(2, num(flyer.radius, 20) * (0.85 + rand() * 0.3)),
+          speed: Math.max(0.5, num(flyer.speed, 6)), phase: i * 0.5 + rand() * 0.3, bob: rand() * Math.PI * 2,
+          // Vliegt het model achteruit of opzij? Dan draait Kevin het met Draaien bij.
+          turn: num(flyer.rotationY, 0) * Math.PI / 180,
+          plan: plan, lag: i * 1.2, dx: i ? (rand() - 0.5) * 3 : 0, dz: i ? (rand() - 0.5) * 3 : 0, dy: i ? rand() * 1.5 : 0, heading: 0, anim: "",
+          soundUrl: i === 0 ? soundUrl : null, soundKey: "flyer:" + String(flyer.id || flyerRoots.length)
+        };
+        content.add(root);
+        flyerRoots.push(root);
+        loadModelInto(root, flyer.modelAssetId, worldData, null, { castShadow: false, receiveShadow: false });
+      }
+    }
+    if (flyerRoots.length) updateFlyers(true);
+  }
+  function flyerAnimation(root, f, next) {
+    if (f.anim === next) return;
+    if (playAnimationState(root, next, 0.3)) f.anim = next;
+  }
+  function updateFlyers(force) {
+    if (!flyerRoots.length) return;
+    const t = Date.now() / 1000;
+    const near = player.root ? player.pos : null;
+    for (const root of flyerRoots) {
+      const f = root.userData.flyer;
+      if (!force && near && Math.hypot(f.cx - near.x, f.cz - near.z) > FLYER_UPDATE_M + f.radius) continue;
+      if (f.plan) {
+        const time = (((t - f.lag) % f.plan.period) + f.plan.period) % f.plan.period;
+        const leg = f.plan.legs.find(function (entry) { return time < entry.end; }) || f.plan.legs[f.plan.legs.length - 1];
+        if (time < leg.waitEnd) {
+          root.position.set(leg.a.x + f.dx, leg.a.y + f.dy, leg.a.z + f.dz);
+          flyerAnimation(root, f, leg.a.clip ? "clip:" + leg.a.clip : "idle");
+        } else {
+          const s = Math.min(1, (time - leg.waitEnd) / Math.max(0.001, leg.end - leg.waitEnd));
+          const bob = leg.a.air || leg.b.air ? Math.sin(t * 0.8 + f.bob) * 0.5 * Math.sin(Math.PI * s) : 0;
+          root.position.set(leg.a.x + (leg.b.x - leg.a.x) * s + f.dx, leg.a.y + (leg.b.y - leg.a.y) * s + f.dy + bob, leg.a.z + (leg.b.z - leg.a.z) * s + f.dz);
+          if (Math.hypot(leg.b.x - leg.a.x, leg.b.z - leg.a.z) > 0.01) f.heading = Math.atan2(leg.b.x - leg.a.x, leg.b.z - leg.a.z);
+          flyerAnimation(root, f, "idle");
+        }
+        root.rotation.y = f.heading + f.turn;
+        continue;
+      }
+      // Tegen de klok in; de kop wijst de vliegrichting op.
+      const angle = f.phase + (t * f.speed) / f.radius;
+      root.position.set(f.cx + Math.cos(angle) * f.radius, f.y + Math.sin(t * 0.8 + f.bob) * 0.8, f.cz - Math.sin(angle) * f.radius);
+      root.rotation.y = angle + Math.PI + f.turn;
+    }
+  }
+  // Kevin 16-11: waar vliegers met een geluid nu zijn (één geluid per groep): [{ key, url, x, y, z }].
+  function flyerSounds() {
+    const out = [];
+    for (const root of flyerRoots) {
+      const f = root.userData.flyer;
+      if (f?.soundUrl) out.push({ key: f.soundKey, url: f.soundUrl, x: root.position.x, y: root.position.y, z: root.position.z, range: 60 });
+    }
+    return out;
+  }
+
   // Hoogte van het terrein (zonder ground.y) op x, z; 0 zonder terrein.
   function terrainLift(x, z) {
     return terrainLayer.active ? terrainHeightAt(terrainLayer.heightfield, num(x, 0), num(z, 0)) : 0;
@@ -14291,10 +14491,14 @@ function resolveChunkDebugCenter(policy) {
     if (stableSunShadowController?.setPolicy) stableSunShadowController.setPolicy(policy);
     for (const light of worldData?.lights || []) {
       if (light.type === "ambient") {
-        content.add(new THREE.AmbientLight(colorOrDefault(light.color, "#ffffff"), num(light.intensity, 0)));
+        const ambient = new THREE.AmbientLight(colorOrDefault(light.color, "#ffffff"), num(light.intensity, 0) * daylightLevel);
+        ambient.userData.baseIntensity = num(light.intensity, 0);
+        ambientLights.push(ambient);
+        content.add(ambient);
         runtimeStats.sceneObjects += 1;
       } else if (light.type === "directional") {
-        const directional = new THREE.DirectionalLight(colorOrDefault(light.color, "#ffffff"), num(light.intensity, 0));
+        const directional = new THREE.DirectionalLight(colorOrDefault(light.color, "#ffffff"), num(light.intensity, 0) * daylightLevel);
+        directional.userData.baseIntensity = num(light.intensity, 0);
         directional.position.set(num(light.position?.x, 0), num(light.position?.y, 0), num(light.position?.z, 0));
         directional.userData.shadowBasePosition = directional.position.clone();
         directional.userData.shadowBaseTarget = new THREE.Vector3(0, 0, 0);
@@ -14761,6 +14965,10 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function resolveClipNameForState(root, clips, stateName, assetMetadata) {
+    // Werkbank Fase 10 (Kevin 16-11): "clip:<naam>" = precies die animatie (bijv. op een routepunt); onbekend = stilstaan.
+    if (String(stateName || "").startsWith("clip:")) {
+      return findClipName(clips, String(stateName).slice(5)) || resolveClipNameForState(root, clips, "idle", assetMetadata);
+    }
     const state = String(stateName || "").trim().toLowerCase();
     const data = root?.userData || {};
     if (!Array.isArray(clips) || !clips.length) return null;
@@ -19101,6 +19309,7 @@ function resolveChunkDebugCenter(policy) {
     addZoneCanvasBounds(world);
     addLights(world);
     spawnPlayer(world);
+    buildFlyers(world);
     if (previousGamePlayerState && player.root) {
       setPlayerState(previousGamePlayerState, {
         immediate: true,
@@ -19273,6 +19482,11 @@ function resolveChunkDebugCenter(policy) {
       scene.remove(roadEditorOverlay);
       for (const child of Array.from(roadEditorOverlay.children)) disposeObject(child);
       roadEditorOverlay = null;
+    }
+    if (routeEditorOverlay) {
+      scene.remove(routeEditorOverlay);
+      for (const child of Array.from(routeEditorOverlay.children)) disposeObject(child);
+      routeEditorOverlay = null;
     }
     if (scatterEditorOverlay) {
       scene.remove(scatterEditorOverlay);
@@ -19508,7 +19722,24 @@ function resolveChunkDebugCenter(policy) {
     };
   }
 
+  // Werkbank Fase 10: hoe licht het is (0-1, 1 = dag) en de kleur van de lucht. Alleen bij een echte verandering
+  // (de game roept dit hooguit 1x per seconde aan; zuinig voor de oude laptop).
+  function setDaylight(level, skyColor) {
+    const next = Math.max(0.02, Math.min(1, Number(level) || 0));
+    const sky = colorOrDefault(skyColor, "");
+    if (Math.abs(next - daylightLevel) < 0.005 && (!sky || scene.background?.getHexString?.() === String(sky).replace("#", "").toLowerCase())) return;
+    daylightLevel = next;
+    for (const light of ambientLights) light.intensity = num(light.userData.baseIntensity, 0) * next;
+    for (const light of directionalLights) light.intensity = num(light.userData.baseIntensity, light.intensity) * next;
+    if (sky) {
+      if (scene.background?.isColor) scene.background.set(sky); else scene.background = new THREE.Color(sky);
+      if (scene.fog?.color) scene.fog.color.set(sky);
+    }
+    requestRender();
+  }
+
   return {
+    setDaylight: setDaylight,
     setWorld: setWorld,
     render: requestRender,
     setRenderPaused: setRenderPaused,
@@ -19567,6 +19798,9 @@ function resolveChunkDebugCenter(policy) {
     setTerrainEditorOverlay: setTerrainEditorOverlay,
     setRoadEditorOverlay: setRoadEditorOverlay,
     pickRoadEditor: pickRoadEditor,
+    setRouteEditorOverlay: setRouteEditorOverlay,
+    flyerSounds: flyerSounds,
+    pickRouteEditor: pickRouteEditor,
     clearTerrainEditorOverlay: clearTerrainEditorOverlay,
     setScatterEditorOverlay: setScatterEditorOverlay,
     clearScatterEditorOverlay: clearScatterEditorOverlay,

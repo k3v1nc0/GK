@@ -14,6 +14,8 @@ const color = (label, icon, def, helpText, extra = {}) => ({
   ui: ui(icon, "color", "instellingen", extra), default: def, help: helpText
 });
 
+const DAY_GROUP = "🌗 Dag en nacht";
+
 export const WORLD_KINDS = {
   world_settings: {
     label: "Wereld",
@@ -65,6 +67,18 @@ export const WORLD_KINDS = {
       lightStrength: num("Licht overal", "💡", 0.6, 0, 5, 0.05, "",
         help("Licht dat overal even sterk is (ook in de schaduw).", "0.4 tot 1 werkt meestal goed.", "Schaduwen pikzwart → hoger."),
         { more: true, range: [0, 2] }),
+      // Werkbank Fase 10 (keuze van Kevin 15-11): dag en nacht, standaard 1 uur dag en 1 uur nacht.
+      dayMinutes: num("Lengte van de dag", "☀️", 60, 1, 720, 1, "min",
+        help("Hoe lang het dag is. Daarna wordt het nacht, en zo steeds opnieuw. Iedereen heeft dezelfde tijd (de server telt).", "60 min dag en 60 min nacht: in twee uur spelen zie je beide.", "Spelers zien nooit de nacht → maak de dag korter."),
+        { group: DAY_GROUP, range: [5, 180] }),
+      nightMinutes: num("Lengte van de nacht", "🌙", 60, 0, 720, 1, "min",
+        help("Hoe lang het nacht is. 0 = altijd dag. 's Nachts is het donkerder en kan een winkel dicht zijn (bij de NPC: Open).", "60 min. Korter dan de dag als spelers de nacht vervelend vinden.", "Spelers klagen dat het te lang donker is → korter, of maak de nacht lichter."),
+        { group: DAY_GROUP, range: [0, 180] }),
+      nightLightPct: num("Hoe licht de nacht", "🔦", 35, 5, 100, 5, "%",
+        help("Hoeveel licht er 's nachts nog is, vergeleken met de dag. Het licht loopt in een paar minuten rustig over (schemer).", "30-45 %: duidelijk nacht, maar je ziet nog waar je loopt.", "Je ziet niets meer → hoger. Je merkt de nacht niet → lager."),
+        { group: DAY_GROUP }),
+      nightSkyColor: color("Kleur van de lucht 's nachts", "🌌", "#0e1a33",
+        help("De achtergrondkleur 's nachts. Overdag is het de Kleur van de lucht.", "Donkerblauw, bijv. #0e1a33.", "De nacht ziet er grijs uit → kies een donkerder blauw."), { group: DAY_GROUP }),
       // Terugbouw zonder nodes: muziek voor de hele wereld (een gebied of deelgebied met eigen muziek gaat voor).
       musicAssetId: { type: "asset", assetType: "audio", required: false, maxLength: 160, audience: "client", label: "Muziek",
         ui: ui("🎵", "asset", "instellingen", { more: true }), default: null,

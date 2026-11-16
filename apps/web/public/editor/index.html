@@ -6,7 +6,7 @@
     <title>GK Game Editor</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <link rel="stylesheet" href="./styles.css?v=20261110-namen1">
-    <link rel="stylesheet" href="./werkbank-docs.css?v=20261111-fase8">
+    <link rel="stylesheet" href="./werkbank-docs.css?v=20261116-route1">
     <link rel="stylesheet" href="./mini-asset-picker.css?v=20261028-picker1">
     <script type="importmap">
       {
@@ -25,6 +25,7 @@
         <button id="workbenchModeButton" type="button" class="editorModeTab active" aria-pressed="true">Werkbank</button>
         <button id="terrainModeButton" type="button" class="editorModeTab" aria-pressed="false" title="Alles van de grond: hoogte, stempels, verf en instellingen">Terrein</button>
         <button id="gameModeButton" type="button" class="editorModeTab" aria-pressed="false" title="Speel de game hier, zonder apart tabblad">Game</button>
+        <button id="bibleModeButton" type="button" class="editorModeTab" aria-pressed="false" title="De Game Bible: het verhaal, met wat al in de game zit">📖 Bijbel</button>
         <details class="oldModeMenu" id="oldModeMenu" style="display:none" aria-hidden="true">
           <summary title="Oude schermen (verdwijnen in Fase 5)">oud</summary>
           <div class="oldModeMenuBody">
@@ -47,6 +48,7 @@
       </div>
     </header>
     <section id="gameTabPanel" class="gameTabPanel" hidden aria-label="Game"></section>
+    <section id="bibleTabPanel" class="gameTabPanel" hidden aria-label="Bijbel"></section>
 
     <div class="mobilePanelTabs" id="mobilePanelTabs" aria-label="Editor panelen">
       <button type="button" class="active" data-mobile-panel="all">All</button>
@@ -280,6 +282,6 @@
       <div id="allLayoutRoot" class="allLayoutRoot"></div>
       <div id="allLayoutOverflow" hidden></div>
     </main>
-    <script type="module" src="./editor.js?v=20261115-focuscenter1"></script>
+    <script type="module" src="./editor.js?v=20261116-route1"></script>
   </body>
 </html>

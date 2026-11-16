@@ -1,12 +1,14 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261111-fase6";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261116-route1";
 import { nextPlayerRouteWaypoint } from "../shared/player-path-client.js?v=20261108-roads9";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20261106-perf1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
 import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../shared/protocol-v1.js?v=20261025-f2-client1";
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
-import { createActorPresentation } from "./actor-presentation.js?v=20261110-fase5b";
-import { createGkHud } from "./hud/gk-hud.js?v=20261115-bagmulti1";
+import { createWorldSounds } from "./world-sounds.js?v=20261116-route1";
+import { createActorPresentation } from "./actor-presentation.js?v=20261116-route1";
+import { createGkHud } from "./hud/gk-hud.js?v=20261116-route1";
+import { dayNightState, mixColor } from "../shared/day-night.js?v=20261115-fase10";
 import { node05ActionBody, node05OperationId } from "./node05-request.js?v=20261113-fase8d";
 import {
   worldToMinimapPoint,
@@ -611,7 +613,11 @@ const state = {
   },
   // MMO stap 2 (3-11): wie je blokkeerde (van de server). De berichten zelf bewaart de HUD (laatste 60).
   chat: {
-    blocks: []
+    blocks: [],
+    // Werkbank Fase 10: wie je dempte, je vrienden (met verzoeken) en welke verhalen je las (📚 kennisboek).
+    mutes: [],
+    friends: [],
+    loreReads: null
   },
   playerDefeated: false,
   lastAnimationState: "idle",
@@ -4349,6 +4355,16 @@ function remoteSampleArrivalEpochMs(sample) {
   if (Number.isFinite(Number(sample.serverTimeMs))) return num(sample.serverTimeMs, 0);
   if (Number.isFinite(Number(sample.receivedAt))) return epochNow(sample.receivedAt);
   return 0;
+}
+
+// Werkbank Fase 10 (keuze van Kevin 15-11): dag en nacht op de klok van de server; de HUD toont zon of maan.
+function updateDayNight() {
+  const cfg = state.gameWorld?.dayNight;
+  if (!cfg || !state.runtime || typeof state.runtime.setDaylight !== "function") return;
+  const clock = dayNightState(estimateServerEpochNow(), cfg);
+  const k = clock.nightLight >= 1 ? 0 : (1 - clock.light) / (1 - clock.nightLight);
+  state.runtime.setDaylight(clock.light, mixColor(cfg.daySkyColor || "#8fb8de", cfg.nightSkyColor || "#0e1a33", k));
+  state.dayNight = { isDay: clock.isDay, msToSwitch: clock.msToSwitch, always: !Number(cfg.nightMinutes) };
 }
 
 function estimateServerEpochNow(now = performance.now()) {
@@ -8104,8 +8120,29 @@ function node04ClientDistance(target) {
   return Math.hypot(num(position.x, 0) - num(target.x, 0), num(position.z, 0) - num(target.z, 0));
 }
 
+// Werkbank Fase 10: een NPC die rondloopt. Zijn praat-, winkel- en werkplekdoel lopen met hem mee.
+function withWalkingNpc(target) {
+  const entityId = String(target?.entityRef || target?.linkedEntityId || target?.linkedEntity?.entityId || target?.visualEntityId || "");
+  if (!entityId.startsWith("npc_entity.")) return target;
+  const pose = actorPresentation.walkerPose(entityId.slice("npc_entity.".length));
+  return pose ? Object.assign({}, target, { x: pose.x, y: pose.y, z: pose.z }) : target;
+}
+
+// Klik of E op een NPC die rondloopt: hetzelfde als op een NPC die stilstaat (gesprek, Handelen en Maken samen in de HUD).
+function walkingNpcServiceTarget(npcId) {
+  const entityId = "npc_entity." + npcId;
+  const linked = function (target) {
+    return [target?.entityRef, target?.linkedEntityId, target?.visualEntityId, target?.linkedEntity?.entityId].some(function (id) { return String(id || "") === entityId; });
+  };
+  const services = node04RuntimeTargetsForScene().concat(state.node05.snapshot ? node05RuntimeTargetsForScene() : []).filter(linked);
+  return services.find(function (target) { return String(target.action || "") === "node04:start_dialogue"; })
+    || services.find(function (target) { return String(target.action || "") === "node05:focus_service"; })
+    || services[0] || null;
+}
+
 function node04TargetWithClientRange(target) {
   if (!target) return null;
+  target = withWalkingNpc(target);
   const distance = node04ClientDistance(target);
   if (distance === null) return target;
   const range = Math.max(0, num(target.range, 0));
@@ -8141,7 +8178,13 @@ function node04RuntimeTargetsForScene() {
 // Een NPC (gesprek of winkel/werkplaats) gaat via de HUD: daar komen gesprek, Handelen en Maken samen.
 function activateRuntimeTarget(target) {
   const action = String(target?.action || "");
+  if (action === "npc_walker") {
+    const service = walkingNpcServiceTarget(target.npcId);
+    if (service) activateRuntimeTarget(service);
+    return;
+  }
   if (action === "portal_map") { if (gkHud) gkHud.openPortalMap(target.portalId || String(target.instanceId).replace(/^portal_target\./, "")); return; }
+  if (action === "lore_read") { activateLoreTarget(target); return; }
   if (gkHud && (action === "node04:start_dialogue" || action === "node05:focus_service")) {
     gkHud.talkTo(target);
     return;
@@ -8152,7 +8195,9 @@ function activateRuntimeTarget(target) {
 function activateRuntimeTargetDirect(target) {
   if (!target?.instanceId || !target.action) return;
   const action = String(target.action);
+  if (action === "npc_walker") { activateRuntimeTarget(target); return; }
   if (action === "portal_map") { if (gkHud) gkHud.openPortalMap(target.portalId || String(target.instanceId).replace(/^portal_target\./, "")); return; }
+  if (action === "lore_read") { activateLoreTarget(target); return; }
   if (action.startsWith("node04:")) {
     runNode04Action(action, target.instanceId, { questId: target.questId || null, dialogueId: target.dialogueId || null });
   } else if (action.startsWith("node05:")) {
@@ -8191,7 +8236,79 @@ function collectRuntimeTargets() {
   if (state.node04.snapshot) addTargets(node04RuntimeTargetsForScene());
   if (state.node05.snapshot) addTargets(node05RuntimeTargetsForScene());
   addTargets(portalRuntimeTargets());
+  addTargets(loreRuntimeTargets());
   return withoutEscortedNpcs(Array.from(byId.values()));
+}
+
+// Werkbank Fase 10 (10b): een model met een 📕 Verhaal (grafsteen, boek, bord) is aanklikbaar: "Lezen".
+function loreRuntimeTargets() {
+  const list = Array.isArray(state.gameWorld?.readables) ? state.gameWorld.readables : [];
+  const lore = state.gameWorld?.lore || {};
+  const read = new Set((Array.isArray(state.chat.loreReads) ? state.chat.loreReads : []).map(function (row) { return row.loreId; }));
+  return list.filter(function (entry) { return entry && entry.id && lore[entry.loreId]; }).map(function (entry) {
+    const entityId = entry.entityId || "placed." + entry.id;
+    return {
+      instanceId: "lore_target." + entry.id, readableId: entry.id, loreId: entry.loreId, entityKind: "lore", targetKind: "lore",
+      action: "lore_read", prompt: read.has(entry.loreId) ? "Nog eens lezen" : "Lezen", displayName: lore[entry.loreId].title || entry.displayName || "Verhaal",
+      x: num(entry.x, 0), y: num(entry.y, 0), z: num(entry.z, 0), radius: Math.max(0.6, num(entry.reach, 1)), range: 4, available: true,
+      // Met afstand doet hij mee met de knop "doen" (E) als je ervoor staat (zonder eigen plek: geen afstand).
+      distance: Number.isFinite(loreDistance(entry)) ? Math.round(loreDistance(entry) * 100) / 100 : undefined,
+      visualEntityId: entityId, linkedEntityId: entityId, entityRef: entityId, linkedEntity: { entityId: entityId, nodeId: entityId },
+      // Net als een portal: geen blauw blokje; het model zelf is het klikvlak.
+      renderBody: false
+    };
+  });
+}
+
+// Dichtbij: meteen lezen. Verder weg: eerst erheen lopen; daarna leest hij vanzelf (zie maybeReadPendingLore).
+const lorePending = { target: null, at: 0, busy: false };
+function loreDistance(target) {
+  const here = state.predictedPosition;
+  return here ? Math.hypot(num(here.x, 0) - num(target.x, 0), num(here.z, 0) - num(target.z, 0)) : Infinity;
+}
+function activateLoreTarget(target) {
+  if (!target?.readableId) return;
+  if (loreDistance(target) > num(target.range, 4) + num(target.radius, 0) - 0.3) {
+    lorePending.target = target;
+    lorePending.at = performance.now();
+    startClickToMoveTarget(num(target.x, 0), num(target.z, 0), "lore-target", { arrivalRadius: targetArrivalRadius(target, true) });
+    return;
+  }
+  lorePending.target = null;
+  readLoreTarget(target);
+}
+function maybeReadPendingLore(now = performance.now()) {
+  const target = lorePending.target;
+  if (!target) return;
+  if (now - lorePending.at > 20000 || (!isWalkingToTarget(target) && hasMovementInput())) { lorePending.target = null; return; }
+  if (loreDistance(target) <= num(target.range, 4) + num(target.radius, 0) - 0.3) { lorePending.target = null; readLoreTarget(target); }
+}
+async function readLoreTarget(target) {
+  if (lorePending.busy) return;
+  lorePending.busy = true;
+  try {
+    const result = await gkHudJson("/api/game/lore/read", { readableId: target.readableId });
+    state.chat.loreReads = Array.isArray(result.reads) ? result.reads : state.chat.loreReads;
+    if (gkHud?.readLore) gkHud.readLore(result.loreId || target.loreId, { first: result.first === true });
+    syncRuntimeTargets();
+  } catch (error) {
+    if (gkHud) gkHud.toast(error?.message || "Lezen lukte niet.", { tone: "error", icon: "book-cover" });
+  } finally {
+    lorePending.busy = false;
+  }
+}
+// Het 📚 kennisboek vraagt op wat je al las (één keer; daarna houdt lezen de lijst bij).
+async function loadLoreReads(force = false) {
+  if (Array.isArray(state.chat.loreReads) && !force) return state.chat.loreReads;
+  try {
+    const result = await gkHudJson("/api/game/lore");
+    state.chat.loreReads = Array.isArray(result.reads) ? result.reads : [];
+  } catch (error) {
+    if (!Array.isArray(state.chat.loreReads)) state.chat.loreReads = [];
+    if (gkHud) gkHud.toast("Kennisboek laden lukte niet: " + (error?.message || "geen verbinding") + ".", { tone: "error", icon: "open-book" });
+  }
+  if (gkHud) gkHud.render();
+  return state.chat.loreReads;
 }
 
 // Kevin 8-11: een portal in de wereld is aanklikbaar; een klik opent de grote kaart om te kiezen waarheen.
@@ -8215,6 +8332,8 @@ function portalRuntimeTargets() {
 function withoutEscortedNpcs(list) {
   const escortHiddenEntities = withoutEscortedNpcs.hidden || (withoutEscortedNpcs.hidden = new Set());
   const hidden = new Set(Array.from(actorPresentation.escortNpcIds(), function (npcId) { return "npc_entity." + npcId; }));
+  // Werkbank Fase 10: een NPC die rondloopt staat niet ook nog op zijn vaste plek (zijn gesprek en winkel lopen met hem mee).
+  const walking = new Set(Array.from(actorPresentation.walkerNpcIds(), function (npcId) { return "npc_entity." + npcId; }));
   // Stap 9: NPC's en modellen die er voor jou (door een vlag van een quest) niet zijn: weg, en je loopt er doorheen.
   const flagHidden = Array.isArray(state.node04.snapshot?.world?.hidden) ? state.node04.snapshot.world.hidden : [];
   for (const id of flagHidden) hidden.add(String(id));
@@ -8222,8 +8341,9 @@ function withoutEscortedNpcs(list) {
   // Kevin 8-11: en over een loopvlak (brug) met een vlag loop je alleen als die vlag voor jou klopt.
   if (state.runtime && typeof state.runtime.setPlayerFlags === "function" && state.node04.snapshot?.world) state.runtime.setPlayerFlags(state.node04.snapshot.world.flags || []);
   if (state.runtime && typeof state.runtime.setEntityHidden === "function") {
-    for (const id of Array.from(escortHiddenEntities)) if (!hidden.has(id)) { state.runtime.setEntityHidden(id, false); escortHiddenEntities.delete(id); }
+    for (const id of Array.from(escortHiddenEntities)) if (!hidden.has(id) && !walking.has(id)) { state.runtime.setEntityHidden(id, false); escortHiddenEntities.delete(id); }
     for (const id of hidden) { state.runtime.setEntityHidden(id, true); escortHiddenEntities.add(id); }
+    for (const id of walking) { state.runtime.setEntityHidden(id, true); escortHiddenEntities.add(id); }
   }
   if (!hidden.size) return list;
   return list.filter(function (target) {
@@ -8753,6 +8873,7 @@ function node05ClientDistance(target) {
 
 function node05TargetWithClientRange(target) {
   if (!target) return null;
+  target = withWalkingNpc(target);
   const distance = node05ClientDistance(target);
   if (distance === null) return target;
   const range = Math.max(0, num(target.range, 0));
@@ -9395,6 +9516,59 @@ function refreshGameplayClientRanges(now = performance.now()) {
   const node05Due = refreshNode05ClientRanges(now, options) === true;
   if (node03Due || node04Due || node05Due) syncRuntimeTargets();
   maybeRunPendingNode03TargetAction("gameplay-range");
+  maybeReadPendingLore(now);
+  maybeNpcChatter(now);
+  maybeWorldSounds(now);
+}
+
+// Werkbank Fase 10: een NPC zegt soms een praatje (ballon boven zijn hoofd) als je binnen 12 m bent, om de 25-50 s.
+// Niet tijdens een gesprek of in de winkel. Alleen in je eigen game (geen serverwerk).
+const npcChatterState = { checkAt: 0, next: new Map() };
+// Werkbank Fase 10 (Kevin 16-11): geluid van lopende NPC's en vliegers, 4× per seconde bijgewerkt. Uit met Muziek en geluid.
+var worldSoundsPlayer = null;
+var worldSoundsAt = 0;
+function worldSounds() {
+  if (!worldSoundsPlayer) worldSoundsPlayer = createWorldSounds({ maxPlaying: 4, range: 25, volume: 0.5, muted: worldSpatial.musicMuted === true });
+  return worldSoundsPlayer;
+}
+function maybeWorldSounds(now = performance.now()) {
+  if (now < worldSoundsAt) return;
+  worldSoundsAt = now + 250;
+  const here = state.predictedPosition;
+  const flyers = state.runtime && typeof state.runtime.flyerSounds === "function" ? state.runtime.flyerSounds() : [];
+  worldSounds().update(actorPresentation.walkerSounds(now).concat(flyers), here ? { x: Number(here.x) || 0, y: Number(here.y) || 0, z: Number(here.z) || 0 } : null);
+}
+
+function maybeNpcChatter(now = performance.now()) {
+  if (!gkHud || now < npcChatterState.checkAt) return;
+  npcChatterState.checkAt = now + 2000;
+  const list = actorPresentation.npcChatter();
+  const here = state.predictedPosition;
+  if (!list.length || !here || state.node04.dialogue) return;
+  const hidden = new Set(Array.isArray(state.node04.snapshot?.world?.hidden) ? state.node04.snapshot.world.hidden.map(String) : []);
+  let anchors = null;
+  for (const npc of list) {
+    const entityId = "npc_entity." + npc.npcId;
+    if (hidden.has(entityId)) continue;
+    const pose = actorPresentation.walkerPose(npc.npcId, now);
+    const entity = pose ? null : (state.gameWorld?.entities || []).find(function (entry) { return entry.id === entityId; });
+    const at = pose || entity?.transform?.position || null;
+    if (!at) continue;
+    const distance = Math.hypot(num(here.x, 0) - num(at.x, 0), num(here.z, 0) - num(at.z, 0));
+    const next = npcChatterState.next.get(npc.npcId);
+    if (distance > 12) { if (next && next < now) npcChatterState.next.delete(npc.npcId); continue; }
+    // Net binnen: eerst even wachten (5-15 s), daarna om de 25-50 s.
+    if (!next) { npcChatterState.next.set(npc.npcId, now + 5000 + Math.random() * 10000); continue; }
+    if (now < next) continue;
+    npcChatterState.next.set(npc.npcId, now + 25000 + Math.random() * 25000);
+    if (!anchors) anchors = state.runtime?.getRuntimeTargetLabelAnchors?.() || [];
+    // De ballon hangt aan de naam boven zijn hoofd (dezelfde naam en ongeveer even ver weg).
+    const anchor = anchors.filter(function (entry) { return entry.name === String(npc.name).slice(0, 34); })
+      .sort(function (a, b) { return Math.abs(a.distance - distance) - Math.abs(b.distance - distance); })[0];
+    if (!anchor || Math.abs(anchor.distance - distance) > 3) continue;
+    const line = npc.lines[Math.floor(Math.random() * npc.lines.length)];
+    gkHud.npcSay(anchor.id, line, npc.name, true);
+  }
 }
 
 async function runNode05Action(action, payload = {}) {
@@ -12720,6 +12894,24 @@ function handleSocketMessage(raw) {
     if (gkHud) gkHud.render();
     return;
   }
+  // Werkbank Fase 10: dempen en de vriendenlijst (de server stuurt de hele lijst bij elke verandering).
+  if (message.type === "chat:mutes") {
+    state.chat.mutes = Array.isArray(message.mutes) ? message.mutes : [];
+    if (gkHud) gkHud.render();
+    return;
+  }
+  if (message.type === "friends:list") {
+    state.chat.friends = Array.isArray(message.friends) ? message.friends : [];
+    if (gkHud) gkHud.render();
+    return;
+  }
+  if (message.type === "friends:notice") {
+    if (gkHud && message.text) {
+      gkHud.toast(String(message.text), { icon: "three-friends", tone: message.tone === "error" ? "error" : "info", ms: 4000 });
+      gkHud.chatNotice(String(message.text), message.tone === "error" ? "error" : "", true);
+    }
+    return;
+  }
   // Healing (2-11): een speler geneest een ander: groen getal boven die speler.
   if (message.type === "fx") {
     // Fase 6: iemand gaat een level omhoog: gouden ringen om die speler (jijzelf of een ander in de buurt).
@@ -14081,7 +14273,10 @@ function applyWorldMembership(message) {
   if (message.musicUrl || worldSpatial.music) ensureWorldMusic().setTrack(message.musicUrl || null);
   refreshWorldRegionLabel();
   if (changed && state.minimapHud) state.minimapHud.dirty = true;
-  if (areaChanged && worldSpatial.label) showCanonicalBanner("Je bent nu in " + worldSpatial.label, false);
+  // Werkbank Fase 10: de naam groot in beeld met de zin uit de editor (📜 Zin bij binnenkomst) eronder.
+  const areaText = String(message.areaText || "").trim();
+  if (areaChanged && worldSpatial.label && gkHud?.areaTitle) gkHud.areaTitle(worldSpatial.label, areaText);
+  else if (areaChanged && worldSpatial.label) showCanonicalBanner("Je bent nu in " + worldSpatial.label + (areaText ? ": " + areaText : ""), false);
 }
 
 async function checkCanonicalBuild() {
@@ -14197,6 +14392,12 @@ function ensureGkHud() {
         partyInvites: state.party.invites,
         selfId: state.player?.id || null,
         chatBlocks: state.chat.blocks,
+        chatMutes: state.chat.mutes,
+        friends: state.chat.friends,
+        lore: state.gameWorld?.lore || {},
+        loreReads: state.chat.loreReads,
+        // Werkbank Fase 10: dag of nacht (en hoe lang nog).
+        dayNight: state.dayNight || null,
         healthDefaults: {
           ping: network.showHealthPing,
           tps: network.showHealthTps,
@@ -14255,6 +14456,13 @@ function ensureGkHud() {
     chatRules: chatRules,
     chatSend: function (payload) { return sendChatSocket("chat:send", payload || {}); },
     chatBlock: function (playerId, on) { return sendChatSocket("chat:block", { playerId: String(playerId || ""), on: on !== false }); },
+    // Werkbank Fase 10: dempen, melden bij de maker en de vriendenlijst.
+    chatMute: function (playerId, on) { return sendChatSocket("chat:mute", { playerId: String(playerId || ""), on: on !== false }); },
+    chatReport: function (playerId, reason) { return sendChatSocket("chat:report", { playerId: String(playerId || ""), reason: String(reason || "other") }); },
+    friendAdd: function (who) { return sendChatSocket("friend:add", who && who.playerId ? { playerId: String(who.playerId) } : { name: String(who?.name || "").trim() }); },
+    friendAccept: function (playerId) { return sendChatSocket("friend:accept", { playerId: String(playerId || "") }); },
+    friendRemove: function (playerId) { return sendChatSocket("friend:remove", { playerId: String(playerId || "") }); },
+    loreBook: loadLoreReads,
     playerPosition: partyPlayerPosition,
     activate: activateRuntimeTargetDirect,
     walkTo: function (x, z, target) { return startClickToMoveTarget(num(x, 0), num(z, 0), "hud-talk", { arrivalRadius: targetArrivalRadius(target) }); },
@@ -14286,6 +14494,7 @@ function ensureGkHud() {
     setMusic: function (on) {
       worldSpatial.musicMuted = on === false;
       if (worldSpatial.music && typeof worldSpatial.music.setMuted === "function") worldSpatial.music.setMuted(worldSpatial.musicMuted);
+      worldSounds().setMuted(worldSpatial.musicMuted);
     },
     setDebug: function (on, slot) {
       if (gkHudDebug.on === on && gkHudDebug.slot === slot) return;
@@ -14402,6 +14611,9 @@ async function start() {
   }
   state.sync.startupComplete = true;
   window.setInterval(pollVersion, 2500);
+  // Werkbank Fase 10: dag en nacht, 1x per seconde (het licht verandert alleen in de schemer echt).
+  updateDayNight();
+  window.setInterval(updateDayNight, 1000);
   await loadCanonicalClientBuild();
   window.setInterval(checkCanonicalBuild, 30000);
 }

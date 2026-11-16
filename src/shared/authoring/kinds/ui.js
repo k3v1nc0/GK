@@ -17,12 +17,14 @@
 // questSpawns: wat de quest laat verschijnen (vijanden met naam, voor wie, wanneer weg); in de Quest Builder (tab 👾 Verschijnen).
 // ui.when.key mag een pad zijn (bijv. "start.mode"); ui.when.fallback = de waarde als dat leeg is.
 // ui.optionsFrom: keuzes komen uit de werkruimte (zones, respawnPolicies, equipmentSlots, clips:<veld>).
+// ui.when.also: nog een voorwaarde ({ key, is }) die ook moet kloppen.
+// route: punten { x, z, h?, waitS?, clip? } in meter (NPC-route, vliegroute); tekenen in de 3D-view, per punt in het paneel.
 
 export const help = (waarvoor, goed, probleem) => Object.freeze({ waarvoor, goed, probleem });
 
 export const ui = (icon, control, place, extra = {}) => Object.freeze(Object.assign({ icon, control, place }, extra));
 
-export const FIELD_CONTROLS = Object.freeze(["text", "id", "slider", "toggle", "select", "asset", "assetList", "ref", "refList", "tags", "loot", "points", "areaSettings", "color", "terrain", "terrainPaint", "questSteps", "questStart", "questSpawns", "curve"]);
+export const FIELD_CONTROLS = Object.freeze(["text", "id", "slider", "toggle", "select", "asset", "assetList", "ref", "refList", "tags", "loot", "points", "areaSettings", "color", "terrain", "terrainPaint", "questSteps", "questStart", "questSpawns", "curve", "route"]);
 export const FIELD_PLACES = Object.freeze(["werkbank", "instellingen", "terrein", "viewport", "relaties", "questbuilder"]);
 export const KIND_PLACES = Object.freeze(["werkbank", "instellingen", "terrein"]);
 
@@ -48,7 +50,8 @@ export const CONTROL_FOR_TYPE = Object.freeze({
   terrainPaint: ["terrainPaint"],
   questSteps: ["questSteps"],
   questStart: ["questStart"],
-  questSpawns: ["questSpawns"]
+  questSpawns: ["questSpawns"],
+  route: ["route"]
 });
 
 // Veelgebruikte hulpteksten.

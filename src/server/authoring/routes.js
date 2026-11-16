@@ -9,6 +9,8 @@ import { BuildService, compileCanonical } from "./build-service.js";
 import { knownEquipmentSlotIds, knownRespawnPolicyIds, zoneSummaries } from "./runtime-overlay.js";
 import { equipmentSlotsFrom, respawnPoliciesFrom } from "../../shared/authoring/kinds/balance.js";
 import { balanceReport, legacyNodeCounts, moneyPerDay, tradeLog } from "./balance-report.js";
+import { BibleService } from "./bible-service.js";
+import { bibleGameIndex } from "../../../apps/web/public/shared/bible-links.js";
 import { NODE_TYPES } from "../../shared/node-types.js";
 import { baseRuntimeWorld, buildRuntimeWorld } from "./world-builder.js";
 import { previewMembership } from "../preview/preview-service.js";
@@ -29,8 +31,10 @@ function forbidden(message) {
 
 export class AuthoringRoutes {
   // currentGraphWorld(): wereld gebouwd uit de huidige graph (draft); assetService: voor assetcontrole bij publish.
-  constructor({ db, authService, repository, mmoService, buildsRoot, sendJson, readJson, currentGraphWorld = null, assetService = null }) {
+  constructor({ db, authService, repository, mmoService, buildsRoot, sendJson, readJson, currentGraphWorld = null, assetService = null, rootDir = process.cwd() }) {
     this.db = db;
+    // Werkbank Fase 10: de Game Bible (tab 📖 Bijbel).
+    this.bible = new BibleService(db, { rootDir });
     this.currentGraphWorld = currentGraphWorld;
     this.assetService = assetService;
     this.authService = authService;
@@ -212,6 +216,11 @@ export class AuthoringRoutes {
     };
   }
 
+  // Werkbank Fase 10: het bord voor ⚖️ Balans (kapot of leeg = geen bijbelblok, nooit een fout).
+  bibleBoardForBalance() {
+    try { return this.bible.read().board; } catch { return null; }
+  }
+
   requireAdmin(req) {
     const user = this.authService.requireEditor(req);
     if (user.role !== "admin") throw forbidden("Alleen een admin mag dit.");
@@ -253,6 +262,22 @@ export class AuthoringRoutes {
 
     const user = this.authService.requireEditor(req);
 
+    // Werkbank Fase 10 (keuze van Kevin 15-11): de Game Bible. Lezen mag elke editor, opslaan alleen de admin.
+    // index = wat er in de editor staat (NPC's, items, quests, ...), zodat de bijbel ziet wat al in de game zit.
+    if (path === "/api/authoring/bible" && (method === "GET" || method === "PUT")) {
+      if (method === "GET") {
+        const index = bibleGameIndex(this.documents.allDocuments());
+        // ?only=index: de bijbel staat al open en wil alleen weten wat er nu in de editor staat (na een SAVE in de editor).
+        if (url.searchParams.get("only") === "index") return this.sendJson(res, 200, { ok: true, index, revision: this.bible.revision() });
+        const bible = this.bible.read();
+        return this.sendJson(res, 200, Object.assign({ ok: true, csrfToken: this.authService.csrfTokenForRequest(req), canSave: user.role === "admin", user: user.username }, bible, { index }));
+      }
+      if (user.role !== "admin") throw forbidden("Alleen de admin mag de bijbel opslaan.");
+      const body = await this.readJson(req);
+      const saved = this.bible.save(body?.board, body?.revision, user);
+      return this.sendJson(res, 200, Object.assign({ ok: true }, saved, { index: bibleGameIndex(this.documents.allDocuments()) }));
+    }
+
     if (method === "GET" && path === "/api/authoring/workspace") {
       const kind = url.searchParams.get("kind") || null;
       const world = this.validationWorld();
@@ -290,7 +315,7 @@ export class AuthoringRoutes {
       try { graph = this.repository && typeof this.repository.getGraph === "function" ? this.repository.getGraph() : null; } catch { graph = null; }
       return this.sendJson(res, 200, {
         ok: true,
-        report: balanceReport(docs, { buildErrors }),
+        report: balanceReport(docs, { buildErrors, bible: this.bibleBoardForBalance() }),
         legacy: legacyNodeCounts(graph, (type) => NODE_TYPES[type]?.label || type),
         // Fase 8: geld erin en eruit per dag (uit het grootboek) en het handelslogboek.
         money: moneyPerDay(this.db),

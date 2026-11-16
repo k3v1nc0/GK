@@ -191,6 +191,12 @@
 .gkQuestBannerText small { font-size: 12px; color: var(--gk-gold); opacity: 0.9; }
 .gkQuestBannerText b { font-size: 17px; font-weight: 800; color: #fff3d6; text-shadow: 0 1px 3px #000; overflow-wrap: anywhere; }
 @keyframes gkQuestBanner { 0% { opacity: 0; transform: translate(-50%, 10px); } 8% { opacity: 1; transform: translate(-50%, 0); } 85% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%, -10px); } }
+/* Werkbank Fase 10: naam van het deelgebied groot in beeld bij binnenkomst, met één zin eronder (zoals ESO). */
+.gkAreaTitle { position: absolute; top: 11%; left: 50%; transform: translateX(-50%); display: grid; justify-items: center; gap: 4px; width: max-content;
+  max-width: min(640px, calc(100vw - 32px)); text-align: center; pointer-events: none; animation: gkAreaTitle 6s ease-out forwards; }
+.gkAreaTitle b { font-size: 30px; font-weight: 800; letter-spacing: 0.04em; color: #fff3d6; text-shadow: 0 2px 6px #000, 0 0 18px rgba(0, 0, 0, 0.6); overflow-wrap: anywhere; }
+.gkAreaTitle span { font-size: 15px; font-style: italic; color: #f1e6c8; text-shadow: 0 1px 4px #000; overflow-wrap: anywhere; }
+@keyframes gkAreaTitle { 0% { opacity: 0; } 10% { opacity: 1; } 80% { opacity: 1; } 100% { opacity: 0; } }
 
 /* knoppen onderin */
 .gkActions { right: var(--gk-edge); bottom: var(--gk-edge); display: flex; align-items: flex-end; gap: 10px; pointer-events: none; }
@@ -307,8 +313,10 @@
 .gkStoryHead em { display: flex; align-items: center; gap: 5px; font-style: normal; font-size: 12px; color: var(--gk-good); }
 .gkStoryHead em .gkIco { width: 14px; height: 14px; }
 .gkStoryText { grid-column: 1 / -1; white-space: pre-line; line-height: 1.5; font-size: 14px; }
-.gkStory--item .gkStoryText { padding: 12px 14px; border-radius: 6px; background: #efe2bf; color: #3b2a12; font-family: Georgia, "Times New Roman", serif; font-size: 15px;
+.gkStory--item .gkStoryText, .gkStory--lore .gkStoryText { padding: 12px 14px; border-radius: 6px; background: #efe2bf; color: #3b2a12; font-family: Georgia, "Times New Roman", serif; font-size: 15px;
   box-shadow: inset 0 0 24px rgba(120, 80, 20, 0.25); }
+/* Werkbank Fase 10 (10b): een verhaal kan een hele bladzijde zijn: dan scrollt de tekst. */
+.gkStory--lore .gkStoryText { max-height: 42vh; overflow: auto; overscroll-behavior: contain; }
 .gkStoryGoals { grid-column: 1 / -1; display: grid; gap: 3px; font-size: 13px; }
 .gkStoryGoals b { color: var(--gk-gold); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
 .gkStoryGoals span::before { content: "• "; color: var(--gk-gold); }
@@ -630,6 +638,9 @@
 
 /* kleine ronde knoppen naast de minimap: kaart groot/klein/uit en volledig scherm */
 .gkMapTools { position: absolute; top: 0; right: calc(100% + 8px); display: grid; gap: 8px; pointer-events: none; }
+/* Werkbank Fase 10: zon of maan linksboven op de minimap. */
+.gkShopClosed { border-color: rgba(120, 150, 255, 0.6); color: #cfd8ff; }
+.gkMapSky { position: absolute; left: 4px; top: 3px; font-size: 15px; line-height: 1; filter: drop-shadow(0 1px 2px #000); pointer-events: none; }
 .gkMini { position: relative; width: calc(38px * var(--gk-scale)); height: calc(38px * var(--gk-scale)); padding: 7px; border-radius: 50%; border: 2px solid #b99446;
   background: radial-gradient(circle at 50% 35%, #33415e, #121a2c 72%); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6); pointer-events: auto; }
 .gkMini .gkKey { top: -6px; left: -6px; }
@@ -1083,3 +1094,20 @@
 .gkMoneySwap > .gkIco { width: 22px; height: 22px; flex: none; }
 .gkPostFoot { margin-top: 8px; font-size: 11px; color: var(--gk-muted); text-align: center; }
 .gkHud[data-orient="port"] .gkMktField > span:first-child { flex-basis: 76px; }
+
+/* Werkbank Fase 10: 👥 vrienden en het 📚 kennisboek. */
+.gkFriendAdd { display: flex; gap: 8px; margin-bottom: 10px; }
+.gkFriendName { flex: 1; min-width: 0; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--gk-line2); background: rgba(0, 0, 0, 0.35); color: inherit; font: inherit; }
+.gkFriend { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 6px 10px; padding: 8px 10px; border-radius: 10px; background: rgba(255, 255, 255, 0.05); border: 1px solid transparent; }
+.gkFriend--in { border-color: var(--gk-gold); }
+.gkFriendDot { width: 10px; height: 10px; border-radius: 50%; background: #6b7280; }
+.gkFriendDot.gkOn { background: #4ade80; box-shadow: 0 0 6px #4ade80; }
+.gkFriendText { display: grid; min-width: 0; }
+.gkFriendText b { overflow-wrap: anywhere; }
+.gkFriendText small { opacity: 0.7; font-size: 12px; }
+.gkFriendBtns { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+.gkLoreCount { font-size: 12px; opacity: 0.8; margin-bottom: 8px; }
+.gkLoreHead { margin: 12px 0 6px; font-size: 13px; color: var(--gk-gold); text-transform: uppercase; letter-spacing: 0.06em; }
+.gkLoreRow { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--gk-line2);
+  background: rgba(239, 226, 191, 0.08); color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.gkLoreRow .gkIco { width: 20px; height: 20px; flex: none; }

@@ -263,6 +263,9 @@ export function baseRuntimeWorld(data = {}, options = {}) {
     player: { id: "player", modelAssetId: settings.playerModelAssetId || null, moveSpeed: Number(settings.playerSpeed), sprintMultiplier: 1.6,
       turnSpeed: 540, collisionRadius: 0.5, scale: Number(settings.playerScale), showNameplate: true },
     spawn: { spawnId: WORLD_SPAWN_ID, role: "zone_default", zoneRef: WORLD_ZONE_ID, x: spawnPoint.x, y: 0, z: spawnPoint.z, facing: spawnPoint.facing },
+    // Werkbank Fase 10: dag en nacht (de game rekent het licht uit de tijd van de server; shared/day-night.js).
+    dayNight: { dayMinutes: Number(settings.dayMinutes), nightMinutes: Number(settings.nightMinutes), nightLightPct: Number(settings.nightLightPct),
+      daySkyColor: sky, nightSkyColor: settings.nightSkyColor },
     lights: [
       { id: "ambient_light", type: "ambient", color: "#ffffff", intensity: Number(settings.lightStrength) },
       { id: "sun_light", type: "directional", color: "#ffffff", intensity: Number(settings.sunStrength), position: { x: 12, y: 20, z: 8 } }
@@ -281,7 +284,9 @@ export function baseRuntimeWorld(data = {}, options = {}) {
     gameProject: {
       schemaVersion: WORLD_FORMAT_VERSION, project, chunkGrid: clone(CHUNK_GRID), camera: clone(camera), catalogs: catalogs(data?.game || null), zones,
       campaigns: campaigns(), playerRules: { id: "player_rules.main", policies: [], byType: {} },
-      ui: { id: "ui.main", ui: [], modules: [], minimap: [], layouts: [] }, runtime: { activeZoneId: WORLD_ZONE_ID, startSpawnId: WORLD_SPAWN_ID }
+      ui: { id: "ui.main", ui: [], modules: [], minimap: [], layouts: [] }, runtime: { activeZoneId: WORLD_ZONE_ID, startSpawnId: WORLD_SPAWN_ID },
+      // Werkbank Fase 10: de server weet of het dag of nacht is (winkel open of dicht).
+      dayNight: { dayMinutes: Number(settings.dayMinutes), nightMinutes: Number(settings.nightMinutes), nightLightPct: Number(settings.nightLightPct) }
     },
     activeZoneId: WORLD_ZONE_ID,
     zonePackage,
@@ -721,11 +726,11 @@ function withGame(world, source, options) {
     const id = npcEntityId(npc.npcId, editor);
     const scale = scaleFromBp(npc.modelScaleBp);
     entities.push(modelEntity({ id, label: npc.displayName, modelAssetId: npc.modelAssetId, x: npc.x, y: npc.y, z: npc.z, rotationY: npc.rotationY,
-      scale, solid: true, collisionRadius: 0.6, idleClip: npc.idleClip, flagId: editor ? null : npc.flagId, flagOn: npc.flagOn }));
+      scale, solid: !(npc.walks && !editor), collisionRadius: 0.6, idleClip: npc.idleClip, flagId: editor ? null : npc.flagId, flagOn: npc.flagOn }));
     if (!editor && npc.flagId) flagGates.push({ entityId: id, npcId: npc.npcId, flagId: npc.flagId, on: npc.flagOn !== false });
     const components = [{ nodeType: "npc_component", componentId: "npc." + npc.npcId, npcRef: npc.npcId, linkedEntityId: id }];
     if (npc.shopOffers.length) components.push({ nodeType: "vendor_component", componentId: "vendor." + npc.npcId, linkedEntityId: id, vendorId: "vendor." + npc.npcId,
-      vendorCatalogRef: "vendor_catalog." + npc.npcId, interactionPrompt: "Handelen", range: talkRangeOf(npc) + 0.5 });
+      vendorCatalogRef: "vendor_catalog." + npc.npcId, interactionPrompt: "Handelen", range: talkRangeOf(npc) + 0.5, openHours: npc.openHours || "always" });
     if (npc.crafting) components.push({ nodeType: "crafting_station_component", componentId: "station." + npc.npcId, linkedEntityId: id, stationId: "station." + npc.npcId,
       stationType: stationTypeFor(npc.craftProfessionId), professionId: npc.craftProfessionId || null, recipeRefs: [], range: talkRangeOf(npc) + 0.5, interactionPrompt: "Maken" });
     // Fase 8 herstel: een NPC kan een markt zijn (spelers verkopen hier aan elkaar).
@@ -738,11 +743,27 @@ function withGame(world, source, options) {
       linkedEntity: { entityId: id, nodeId: id, label: npc.displayName, x: npc.x, y: npc.y, z: npc.z } });
   }
   // Losse modellen.
+  // Werkbank Fase 10: vogels of een draak die rondjes vliegen. In de game vliegen ze (zie world-runtime); in de editor
+  // staat het model gewoon op het midden van het rondje, zodat je het kunt slepen.
+  const flyers = [];
+  // Werkbank Fase 10 (10b): modellen met een verhaal (grafsteen, boek, bord): klik en lees; de server bewaart het in het kennisboek.
+  const readables = [];
   for (const model of game?.placedModels || []) {
+    if (model.fly && !editor) {
+      if (model.modelAssetId && !model.flagId) flyers.push({ id: "flyer." + model.placedModelId, modelAssetId: model.modelAssetId, scale: model.scale, idleClip: model.idleClip || null,
+        x: model.x, y: model.y, z: model.z, rotationY: model.rotationY || 0, count: model.fly.count, radius: model.fly.radius, height: model.fly.height, speed: model.fly.speed,
+        ...(model.fly.route ? { route: model.fly.route, loop: model.fly.loop !== false } : {}), ...(model.fly.soundAssetId ? { soundAssetId: model.fly.soundAssetId } : {}) });
+      continue;
+    }
     entities.push(modelEntity({ id: editor ? EDITOR_DOC_PREFIX + "placed_model:" + model.placedModelId : "placed." + model.placedModelId, label: model.displayName,
       modelAssetId: model.modelAssetId, x: model.x, y: model.y, z: model.z, rotationX: model.rotationX, rotationY: model.rotationY, rotationZ: model.rotationZ, scale: model.scale,
       solid: model.solid, collisionRadius: model.collisionRadius, idleClip: model.idleClip, flagId: editor ? null : model.flagId, flagOn: model.flagOn }));
     if (!editor && model.flagId) flagGates.push({ entityId: "placed." + model.placedModelId, npcId: null, flagId: model.flagId, on: model.flagOn !== false });
+    if (!editor && model.loreId) {
+      readables.push(Object.assign({ id: model.placedModelId, entityId: "placed." + model.placedModelId, loreId: model.loreId, displayName: model.displayName,
+        x: Number(model.x) || 0, y: Number(model.y) || 0, z: Number(model.z) || 0, reach: Math.max(0.5, Number(model.collisionRadius) || 1) },
+      model.flagId ? { flag: { id: model.flagId, on: model.flagOn !== false } } : {}));
+    }
     // Fase 9: een model als werkplek (aambeeld, oven): loop erheen en druk E.
     if (!editor && model.crafting) {
       const id = "placed." + model.placedModelId;
@@ -935,6 +956,8 @@ function withGame(world, source, options) {
   // een toevallige placed_model-instantie met hetzelfde GLB; anders wordt hij een placeholder
   // zodra die losse wereldplaatsing verdwijnt.
   const modelIds = Array.from(new Set(entities.map((entity) => entity.modelAssetId)
+    .concat(flyers.map((flyer) => flyer.modelAssetId))
+    .concat(flyers.map((flyer) => flyer.soundAssetId))
     .concat(Object.values(items).map((item) => item?.worldModelAssetId))
     // Stap 4 (HUD): eigen iconen van items en valuta (plaatjes in de tas).
     .concat(Object.values(items).map((item) => item?.iconAssetId))
@@ -963,6 +986,10 @@ function withGame(world, source, options) {
     worldMusic: worldMusic && worldMusic.url ? { assetId: worldMusic.assetId, url: worldMusic.url } : null,
     // Portals (8-11): plekken en regels (Instellingen > Portals). Zonder portals: lege lijst en de standaardregels.
     portals,
+    flyers,
+    // Werkbank Fase 10 (10b): verhalen (titel, tekst, kopje) en de modellen waarop je ze leest.
+    lore: Object.fromEntries((game?.lore || []).map((entry) => [entry.loreId, { title: entry.title, text: entry.text, category: entry.category }])),
+    readables,
     portalRules: game?.portalRules || null,
     // Verbinding (3-11): Instellingen > Verbinding (MMO). Zonder kaart: null = de standaard van game en server.
     mmo: Object.assign({}, world.mmo || {}, { network: game?.network || null }),

@@ -71,6 +71,8 @@ export function createActorPresentation(options = {}) {
         changed = true;
       }
       if (record.hp !== entry.hp || record.s !== entry.s || record.hm !== entry.hm) changed = true;
+      // Kevin 16-11: de animatie van een NPC die op een routepunt wacht.
+      record.c = typeof entry.c === "string" ? entry.c : "";
       // Fase 5: een sterkere (el) en zijn schild (sh).
       const st = Number(entry.st) || 100;
       if (record.el !== (entry.el === 1) || record.sh !== (entry.sh === 1) || record.st !== st) { record.el = entry.el === 1; record.sh = entry.sh === 1; record.st = st; changed = true; }
@@ -140,7 +142,8 @@ export function createActorPresentation(options = {}) {
 
   function animationOf(record, now) {
     // Stap 8: een begeleide NPC loopt of staat stil (hij vecht niet en valt zonder animatie weg).
-    if (record.k === "e") return record.s === "w" ? "walk" : "idle";
+    if (record.k === "n" && record.c && record.s !== "w") return "clip:" + record.c;
+    if (record.k === "e" || record.k === "n") return record.s === "w" ? "walk" : "idle";
     if (record.k !== "a") return "idle";
     if (record.s === "d") return "death";
     if (record.s === "a" || now < (record.attackUntil || 0)) return "attack";
@@ -172,6 +175,19 @@ export function createActorPresentation(options = {}) {
         instanceId: record.id, entityKind: "escort", targetKind: "escort", action: "", prompt: "", escort: true, npcId: record.d,
         displayName: npc.displayName, x: pose.x, y: pose.y, z: pose.z, range: 0, radius: 0.45,
         available: true, alive: true, status, healthCurrent: record.hp, healthMax: record.hm,
+        modelAssetId: npc.modelAssetId || "", modelScale: npc.modelScaleBp ? npc.modelScaleBp / 10000 : 1,
+        actorClips: { idle: npc.idleClip || "", walk: npc.walkClip || "", attack: "", death: "" },
+        actorTarget: true
+      };
+    }
+    // Werkbank Fase 10: een NPC die rondloopt. Klikken of E = praten (de game zoekt zijn gesprek, winkel of werkplek erbij).
+    if (record.k === "n") {
+      const npc = defs.npcs?.[record.d];
+      if (!npc) return null;
+      return {
+        instanceId: record.id, entityKind: "npc_walker", targetKind: "npc_walker", action: "npc_walker", prompt: "Praten", walker: true, npcId: record.d,
+        displayName: npc.displayName, x: pose.x, y: pose.y, z: pose.z, range: Number(npc.talkRange) || 2.5, radius: 0.45,
+        available: true, alive: true, status: "alive",
         modelAssetId: npc.modelAssetId || "", modelScale: npc.modelScaleBp ? npc.modelScaleBp / 10000 : 1,
         actorClips: { idle: npc.idleClip || "", walk: npc.walkClip || "", attack: "", death: "" },
         actorTarget: true
@@ -247,11 +263,49 @@ export function createActorPresentation(options = {}) {
     return ids;
   }
 
+  // Werkbank Fase 10: NPC's die rondlopen (die staan dan niet ook op hun vaste plek) en waar zo'n NPC nu is.
+  function walkerNpcIds() {
+    const ids = new Set();
+    for (const record of records.values()) if (record.k === "n") ids.add(String(record.d));
+    return ids;
+  }
+
+  function walkerPose(npcId, now = performance.now()) {
+    for (const record of records.values()) {
+      if (record.k !== "n" || String(record.d) !== String(npcId)) continue;
+      const pose = currentPose(record, now);
+      return pose ? { id: record.id, x: pose.x, y: pose.y, z: pose.z, r: pose.r } : null;
+    }
+    return null;
+  }
+
+  // Werkbank Fase 10: NPC's met praatjes (uit de editor): [{ npcId, name, lines }].
+  function npcChatter() {
+    const out = [];
+    for (const [npcId, npc] of Object.entries(defs?.npcs || {})) {
+      if (Array.isArray(npc?.chatter) && npc.chatter.length) out.push({ npcId, name: npc.displayName || npcId, lines: npc.chatter });
+    }
+    return out;
+  }
+
+  // Kevin 16-11: geluid van lopende NPC's (alleen terwijl ze lopen): [{ key, url, x, y, z }].
+  function walkerSounds(now = performance.now()) {
+    const out = [];
+    for (const record of records.values()) {
+      if (record.k !== "n" || record.s !== "w") continue;
+      const npc = defs?.npcs?.[record.d];
+      const url = npc?.walkSound ? defs.assets?.[npc.walkSound]?.url : null;
+      const pose = url ? currentPose(record, now) : null;
+      if (pose) out.push({ key: record.id, url, x: pose.x, y: pose.y, z: pose.z });
+    }
+    return out;
+  }
+
   function nameOf(id) {
     const record = records.get(String(id || ""));
     if (!record || !defs) return "";
-    return (record.k === "e" ? defs.npcs?.[record.d] : record.k === "r" ? defs.resources?.[record.d] : defs.archetypes?.[record.d])?.displayName || "";
+    return (record.k === "e" || record.k === "n" ? defs.npcs?.[record.d] : record.k === "r" ? defs.resources?.[record.d] : defs.archetypes?.[record.d])?.displayName || "";
   }
 
-  return { applySnapshot, applyEvent, targets, targetById, frame, clear, escortNpcIds, nameOf, ability, debug: () => ({ buildId, records: records.size, hasDefinitions: Boolean(defs) }) };
+  return { applySnapshot, applyEvent, targets, targetById, frame, clear, escortNpcIds, walkerNpcIds, walkerPose, npcChatter, walkerSounds, nameOf, ability, debug: () => ({ buildId, records: records.size, hasDefinitions: Boolean(defs) }) };
 }

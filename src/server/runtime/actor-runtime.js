@@ -17,6 +17,8 @@ import { createNavigator } from "./navigation.js";
 import { playerAbilityFromSection } from "../authoring/actor-compiler.js";
 import { lineOfSightBlocked } from "./line-of-sight.js";
 import { scaledRespawnMs } from "./player-effects.js";
+import { buildRoadGraph, nearestRoadPoints } from "../../../apps/web/public/shared/road-network.js";
+import { setNpcLivePositions } from "./npc-live-positions.js";
 
 export const ACTOR_INSTANCE_PREFIX = "actor:";
 export const RESOURCE_INSTANCE_PREFIX = "res:";
@@ -34,6 +36,17 @@ const PATH_RETRY_MS = 1000;
 const REPATH_DISTANCE_M = 1.5;
 const PATH_FAILS_BEFORE_RETURN = 3;
 const PATROL_PAUSE_MS = 2000;
+// Werkbank Fase 10 (Kevin 15-11): rondwandelen, wilde dieren (rennen weg) en NPC's die rondlopen.
+const WANDER_PAUSE_MIN_MS = 2500;
+const WANDER_PAUSE_MAX_MS = 7000;
+const WANDER_GIVE_UP_MS = 30000;  // niet aangekomen (vast): even wachten en een andere plek kiezen
+const FLEE_SPEED = 1.6;           // een wild dier rent harder weg dan hij loopt
+const FLEE_MS = 5000;             // zo lang blijft hij bang voor wie hem sloeg
+const FLEE_REPICK_MS = 1500;
+const WALKER_PREFIX = "npcw:";
+// Werkbank Fase 10 (plan 10a): hooguit zoveel lopende NPC's per vak van 64 m; de rest blijft staan (dan blijft de server licht).
+const WALKER_CELL_M = 64;
+const MAX_WALKERS_PER_CELL = 16;
 const HOME_REACHED_M = 0.6;
 const PLAYER_RADIUS_MM = 500;
 const RANGE_SLACK_MM = 300;
@@ -48,6 +61,15 @@ function hashText(text) {
   let hash = 0;
   for (let i = 0; i < text.length; i += 1) hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
   return hash;
+}
+// Werkbank Fase 10: elke vijand of NPC heeft zijn eigen reeks "toevalsgetallen" (vast per plek: herhaalbaar in tests).
+function nextRandom(entry) {
+  let x = (entry.seed >>> 0) || 0x9e3779b9;
+  x ^= x << 13; x >>>= 0;
+  x ^= x >>> 17;
+  x ^= x << 5; x >>>= 0;
+  entry.seed = x;
+  return x / 4294967296;
 }
 const ATTACK_ANIM_MS = 600;
 const REGEN_STEP_MS = 1000;
@@ -107,6 +129,8 @@ export class ActorRuntime {
     this.navigationRevision = null;
     this.actors = new Map(); // instance-id zonder occurrence (spawnKey) -> actor
     this.resources = new Map();
+    this.walkers = new Map(); // Werkbank Fase 10: NPC's die rondlopen ("npcw:<npcId>")
+    this.roadGraph = null;
     this.navigators = new Map();
     this.pending = new Map();
     this.playerAttackAtMs = new Map();
@@ -149,8 +173,12 @@ export class ActorRuntime {
       this.worldContextRef = worldContext;
       this.navigationRevision = navigationRevision;
       this.navigators.clear();
+      this.roadGraph = null;
       for (const actor of this.actors.values()) {
         actor.path = []; actor.pathGoal = null; actor.nextPathAtMs = 0;
+      }
+      for (const walker of this.walkers.values()) {
+        walker.path = []; walker.pathGoal = null; walker.nextPathAtMs = 0;
       }
     }
     if (buildId === this.buildId && this.worldId === (worldContext?.worldId || null)) return this.section;
@@ -190,9 +218,11 @@ export class ActorRuntime {
     const section = this.section;
     const previousActors = this.actors;
     const previousResources = this.resources;
+    const previousWalkers = this.walkers;
     this.actors = new Map();
     this.resources = new Map();
-    if (!section || !this.worldId) return;
+    this.walkers = new Map();
+    if (!section || !this.worldId) { if (this.worldId) setNpcLivePositions(this.worldId, null); return; }
     const persisted = this.persistedStates();
     for (const spawn of section.spawns || []) {
       const def = section.archetypes?.[spawn.actorId];
@@ -231,6 +261,28 @@ export class ActorRuntime {
       }
       this.resources.set(spawnKey, resource);
     }
+    // Werkbank Fase 10: NPC's die rondlopen. Winkel en quest-gesprek rekenen vanaf waar ze nu staan.
+    const live = new Map();
+    for (const spec of section.npcWalkers || []) {
+      if (!spec?.npcId || !Number.isFinite(spec.x) || !Number.isFinite(spec.z)) continue;
+      const key = WALKER_PREFIX + spec.npcId;
+      const old = previousWalkers.get(key);
+      const walker = old || {
+        kind: "npc", spawnKey: key, id: key, npcId: spec.npcId, x: spec.x, z: spec.z, y: 0, ry: homeAngle(spec.rotationY),
+        state: "idle", anim: "idle", path: [], pathGoal: null, pathFails: 0, pauseUntilMs: 0, stuck: 0, rev: 1, seed: hashText(key)
+      };
+      // Werkbank Fase 10 (Kevin 16-11): een andere route = opnieuw beginnen bij punt 1.
+      if (old && JSON.stringify(old.spec?.route || null) !== JSON.stringify(spec.route || null)) {
+        walker.routeIndex = null; walker.segFrom = null; walker.waitClip = null; walker.pauseUntilMs = 0; walker.rev += 1;
+      }
+      walker.spec = spec;
+      walker.home = { x: spec.x, z: spec.z };
+      walker.def = { radiusMm: 500, moveSpeedMmPerS: Number(spec.speedMmPerS) || 1200 };
+      if (walker !== old) walker.y = this.groundYAt(walker.x, walker.z);
+      this.walkers.set(key, walker);
+      live.set("npc_entity." + spec.npcId, walker);
+    }
+    setNpcLivePositions(this.worldId, live);
     // Stap 5: quest-vijanden blijven bij een nieuwe build; na een herstart komen ze uit de database.
     if (this.questGroupsWorld !== this.worldId) {
       this.questGroupsWorld = this.worldId;
@@ -410,6 +462,16 @@ export class ActorRuntime {
       if (actor.state !== "return" && actor.state !== "engage" && !near(actor.x, actor.z, WAKE_M) && !near(actor.home.x, actor.home.z, WAKE_M)) continue;
       this.stepActor(actor, nowMs, players, playerList, budget, escorts);
     }
+    // Werkbank Fase 10: NPC's die rondlopen (alleen als er iemand in de buurt is: anders kost het niets).
+    const walkersPerCell = new Map();
+    for (const walker of this.walkers.values()) {
+      if (!near(walker.x, walker.z, WAKE_M) && !near(walker.home.x, walker.home.z, WAKE_M)) continue;
+      const cell = Math.floor(walker.home.x / WALKER_CELL_M) + ":" + Math.floor(walker.home.z / WALKER_CELL_M);
+      const count = (walkersPerCell.get(cell) || 0) + 1;
+      walkersPerCell.set(cell, count);
+      if (count > MAX_WALKERS_PER_CELL) continue;
+      this.stepWalker(walker, nowMs, playerList, budget);
+    }
     this.separateActors(players);
     this.flushEscortNews();
   }
@@ -556,6 +618,8 @@ export class ActorRuntime {
   stepActor(actor, nowMs, players, playerList, budget, escorts = []) {
     const def = actor.def;
     if (actor.anim === "attack" && nowMs >= actor.animUntilMs) this.setAnim(actor, "idle");
+    // Werkbank Fase 10: een wild dier valt nooit aan; het rent weg.
+    if (def.behavior === "flee") { this.stepAnimal(actor, nowMs, players, playerList, budget); return; }
     if (actor.state !== "return" && this.tryHeal(actor, nowMs)) return;
     if (actor.state === "idle" || actor.state === "patrol") {
       if (def.behavior === "aggressive" && def.aggroRangeMm > 0) {
@@ -578,9 +642,7 @@ export class ActorRuntime {
         if (best) this.engage(actor, bestEscort ? best.spawnKey : best.id, bestEscort);
       }
       if (actor.state !== "engage") {
-        if (actor.patrol.length >= 2) this.stepPatrol(actor, nowMs, budget);
-        else if (Math.hypot(actor.x - actor.home.x, actor.z - actor.home.z) > HOME_REACHED_M) this.moveTowards(actor, actor.home, budget, false);
-        else this.setAnim(actor, "idle");
+        this.stepCalm(actor, nowMs, budget);
         return;
       }
     }
@@ -627,6 +689,179 @@ export class ActorRuntime {
         }
       }
     }
+  }
+
+  // Niet aan het vechten: de looproute, rondwandelen rond zijn plek, of (weggelopen) terug naar zijn plek.
+  stepCalm(actor, nowMs, budget) {
+    const wander = meters(actor.spawn?.wanderRadiusMm || 0);
+    if (actor.patrol.length >= 2) this.stepPatrol(actor, nowMs, budget);
+    else if (wander > 0) { actor.state = "patrol"; this.stepWander(actor, nowMs, budget, wander, false); }
+    else if (Math.hypot(actor.x - actor.home.x, actor.z - actor.home.z) > HOME_REACHED_M) this.moveTowards(actor, actor.home, budget, false);
+    else this.setAnim(actor, "idle");
+  }
+
+  // Werkbank Fase 10: een plek om naartoe te wandelen, binnen de straal rond zijn plek. roads: liever een plek op de 🛣️ Weg.
+  pickWanderPoint(entry, radiusM, roads) {
+    if (roads) {
+      const graph = this.roadGraphFor();
+      if (graph && graph.nodes.length) {
+        const options = graph.nodes.filter((node) => Math.hypot(node.x - entry.home.x, node.z - entry.home.z) <= radiusM)
+          .concat(nearestRoadPoints(graph, entry.home.x, entry.home.z, radiusM, 8));
+        if (options.length) {
+          const pick = options[Math.floor(nextRandom(entry) * options.length) % options.length];
+          return { x: pick.x, z: pick.z };
+        }
+      }
+    }
+    const angle = nextRandom(entry) * Math.PI * 2;
+    const distance = Math.sqrt(nextRandom(entry)) * radiusM;
+    return { x: entry.home.x + Math.cos(angle) * distance, z: entry.home.z + Math.sin(angle) * distance };
+  }
+
+  stepWander(entry, nowMs, budget, radiusM, roads) {
+    if (nowMs < entry.pauseUntilMs) { this.setAnim(entry, "idle"); return; }
+    if (!entry.wanderGoal) {
+      entry.wanderGoal = this.pickWanderPoint(entry, radiusM, roads);
+      entry.wanderUntilMs = nowMs + WANDER_GIVE_UP_MS;
+      entry.path = []; entry.pathGoal = null;
+    }
+    const goal = entry.wanderGoal;
+    if (Math.hypot(entry.x - goal.x, entry.z - goal.z) <= HOME_REACHED_M || nowMs >= entry.wanderUntilMs) {
+      entry.wanderGoal = null;
+      entry.path = []; entry.pathGoal = null;
+      entry.pauseUntilMs = nowMs + WANDER_PAUSE_MIN_MS + nextRandom(entry) * (WANDER_PAUSE_MAX_MS - WANDER_PAUSE_MIN_MS);
+      this.setAnim(entry, "idle");
+      return;
+    }
+    if (!this.moveTowards(entry, goal, budget, false, roads)) { entry.wanderGoal = null; entry.pauseUntilMs = nowMs + 1500; }
+  }
+
+  // Werkbank Fase 10: een wild dier. Komt een speler dichterbij dan "Ziet je op", of slaat iemand hem: wegrennen.
+  stepAnimal(actor, nowMs, players, playerList, budget) {
+    const sight = meters(actor.def.aggroRangeMm || 0);
+    let threat = null;
+    if (actor.fleeFromId && nowMs < (actor.fleeUntilMs || 0)) threat = players.get(actor.fleeFromId) || null;
+    if (!threat && sight > 0) {
+      let best = Infinity;
+      for (const player of playerList) {
+        if (!player || player.defeated) continue;
+        const distance = Math.hypot(player.x - actor.x, player.z - actor.z);
+        if (distance <= sight && distance < best) { best = distance; threat = player; }
+      }
+    }
+    if (threat) {
+      const goal = actor.fleeGoal;
+      if (actor.state !== "flee" || !goal || nowMs >= (actor.fleeRepickAtMs || 0) || Math.hypot(actor.x - goal.x, actor.z - goal.z) <= HOME_REACHED_M) {
+        actor.state = "flee";
+        actor.fleeGoal = this.fleePoint(actor, threat);
+        actor.fleeRepickAtMs = nowMs + FLEE_REPICK_MS;
+        actor.path = []; actor.pathGoal = null; actor.nextPathAtMs = 0;
+        actor.rev += 1;
+      }
+      if (!this.moveTowards(actor, actor.fleeGoal, budget, false)) actor.fleeGoal = null;
+      return;
+    }
+    if (actor.state === "flee" || actor.state === "engage" || actor.state === "return") {
+      actor.state = "idle";
+      actor.fleeGoal = null; actor.wanderGoal = null; actor.path = []; actor.pathGoal = null;
+      actor.pauseUntilMs = nowMs + WANDER_PAUSE_MIN_MS;
+      actor.rev += 1;
+    }
+    this.stepCalm(actor, nowMs, budget);
+  }
+
+  // Weg van de speler (6-10 m, niet altijd precies recht weg), maar niet verder dan "Max. van huis".
+  fleePoint(actor, threat) {
+    const away = Math.atan2(actor.z - threat.z, actor.x - threat.x) + (nextRandom(actor) - 0.5) * 1.2;
+    const distance = 6 + nextRandom(actor) * 4;
+    let x = actor.x + Math.cos(away) * distance;
+    let z = actor.z + Math.sin(away) * distance;
+    const leash = Math.max(2, meters(actor.def.leashRangeMm || 20000) * 0.9);
+    const fromHome = Math.hypot(x - actor.home.x, z - actor.home.z);
+    if (fromHome > leash) {
+      x = actor.home.x + ((x - actor.home.x) / fromHome) * leash;
+      z = actor.home.z + ((z - actor.home.z) / fromHome) * leash;
+    }
+    return { x, z };
+  }
+
+  // Werkbank Fase 10: een NPC die rondloopt. Staat er een speler bij hem (om te praten of te handelen), dan blijft hij staan
+  // en kijkt hem aan; anders wandelt hij rond zijn plek (over de 🛣️ Weg als die er ligt).
+  stepWalker(walker, nowMs, playerList, budget) {
+    let close = null;
+    let best = Infinity;
+    for (const player of playerList) {
+      if (!player || player.defeated) continue;
+      const distance = Math.hypot(player.x - walker.x, player.z - walker.z);
+      if (distance <= walker.spec.stopM && distance < best) { best = distance; close = player; }
+    }
+    if (close) {
+      walker.path = []; walker.pathGoal = null; walker.wanderGoal = null;
+      walker.pauseUntilMs = Math.max(walker.pauseUntilMs || 0, nowMs + WANDER_PAUSE_MIN_MS);
+      const facing = Math.atan2(close.x - walker.x, close.z - walker.z);
+      if (Math.abs(facing - walker.ry) > 0.05) { walker.ry = facing; walker.rev += 1; }
+      if (walker.waitClip) { walker.waitClip = null; walker.rev += 1; }
+      this.setAnim(walker, "idle");
+      return;
+    }
+    if (Array.isArray(walker.spec.route) && walker.spec.route.length) this.stepRoute(walker, nowMs);
+    else this.stepWander(walker, nowMs, budget, walker.spec.radiusM, true);
+  }
+
+  // Werkbank Fase 10 (Kevin 16-11): een getekende route, punt voor punt in een rechte lijn (de maker tekent om muren heen).
+  // Per punt: hoogte boven de grond (h), wachten (waitS) met een animatie (clip). Aan het eind: rondje of omkeren.
+  stepRoute(walker, nowMs) {
+    const route = walker.spec.route;
+    if (nowMs < (walker.pauseUntilMs || 0)) { this.setAnim(walker, "idle"); return; }
+    if (walker.waitClip) { walker.waitClip = null; walker.rev += 1; }
+    if (!Number.isInteger(walker.routeIndex) || walker.routeIndex >= route.length) { walker.routeIndex = 0; walker.routeDir = 1; walker.segFrom = null; }
+    const point = route[walker.routeIndex];
+    if (!walker.segFrom) walker.segFrom = { x: walker.x, z: walker.z, h: Math.max(0, walker.y - this.groundYAt(walker.x, walker.z)) };
+    const dx = point.x - walker.x; const dz = point.z - walker.z;
+    const distance = Math.hypot(dx, dz);
+    const step = (Math.max(0, walker.def.moveSpeedMmPerS) / 1000) * (AI_STEP_MS / 1000);
+    const toH = Number(point.h) || 0;
+    if (distance <= Math.max(step, 0.01)) {
+      walker.x = point.x; walker.z = point.z;
+      walker.y = this.groundYAt(point.x, point.z) + toH;
+      walker.segFrom = { x: point.x, z: point.z, h: toH };
+      if (route.length > 1) {
+        if (walker.spec.routeLoop !== false) walker.routeIndex = (walker.routeIndex + 1) % route.length;
+        else {
+          if (walker.routeIndex + walker.routeDir < 0 || walker.routeIndex + walker.routeDir >= route.length) walker.routeDir = -walker.routeDir;
+          walker.routeIndex += walker.routeDir;
+        }
+      }
+      if (Number(point.waitS) > 0 || route.length === 1) {
+        walker.pauseUntilMs = nowMs + (Number(point.waitS) > 0 ? Number(point.waitS) * 1000 : WANDER_PAUSE_MAX_MS);
+        walker.waitClip = point.clip || null;
+        this.setAnim(walker, "idle");
+      }
+      walker.rev += 1;
+      return;
+    }
+    walker.x += (dx / distance) * step;
+    walker.z += (dz / distance) * step;
+    const from = walker.segFrom;
+    const length = Math.hypot(point.x - from.x, point.z - from.z);
+    const t = length > 0 ? Math.max(0, Math.min(1, 1 - (distance - step) / length)) : 1;
+    walker.y = this.groundYAt(walker.x, walker.z) + from.h + (toH - from.h) * t;
+    walker.ry = Math.atan2(dx, dz);
+    this.setAnim(walker, "walk");
+    walker.rev += 1;
+  }
+
+  roadGraphFor() {
+    if (this.roadGraph) return this.roadGraph;
+    const roads = this.worldContextRef?.walkabilityIndex?.roads;
+    this.roadGraph = buildRoadGraph(Array.isArray(roads) ? roads : []);
+    return this.roadGraph;
+  }
+
+  // Waar een lopende NPC nu staat (null = hij loopt niet).
+  npcLivePosition(npcId) {
+    const walker = this.walkers.get(WALKER_PREFIX + npcId);
+    return walker ? { x: walker.x, z: walker.z } : null;
   }
 
   stepPatrol(actor, nowMs, budget) {
@@ -689,7 +924,7 @@ export class ActorRuntime {
   }
 
   // Loopt een stap richting goal. Alleen een mislukte zoekopdracht telt als routefout.
-  moveTowards(actor, goal, budget, chasing) {
+  moveTowards(actor, goal, budget, chasing, roads = false) {
     const now = this.lastStepAtMs;
     const needPath = !actor.path.length || !actor.pathGoal || Math.hypot(actor.pathGoal.x - goal.x, actor.pathGoal.z - goal.z) > (chasing ? REPATH_DISTANCE_M : 0.1);
     if (needPath && now >= (actor.nextPathAtMs || 0)) {
@@ -697,7 +932,7 @@ export class ActorRuntime {
         budget.left -= 1;
         this.perf.pathQueries += 1;
         const result = this.navigatorFor(actor.def.radiusMm).findPath({ x: actor.x, y: actor.y, z: actor.z }, { x: goal.x, z: goal.z }, {
-          maxExpanded: PATH_MAX_EXPANDED, maxChecks: Math.min(PATH_CHECKS_PER_QUERY, budget.checks ?? PATH_CHECKS_PER_QUERY)
+          maxExpanded: PATH_MAX_EXPANDED, maxChecks: Math.min(PATH_CHECKS_PER_QUERY, budget.checks ?? PATH_CHECKS_PER_QUERY), ...(roads ? { roads: true } : {})
         });
         budget.checks = Math.max(0, (budget.checks ?? PATH_CHECKS_PER_QUERY) - result.checks);
         actor.nextPathAtMs = now + (result.ok ? REPATH_INTERVAL_MS : PATH_RETRY_MS);
@@ -728,7 +963,7 @@ export class ActorRuntime {
 
   followPath(actor) {
     const context = this.worldContextRef;
-    let remaining = (Math.max(0, actor.def.moveSpeedMmPerS) / 1000) * (AI_STEP_MS / 1000);
+    let remaining = (Math.max(0, actor.def.moveSpeedMmPerS) / 1000) * (AI_STEP_MS / 1000) * (actor.state === "flee" ? FLEE_SPEED : 1);
     if (remaining <= 0) return false;
     const radius = meters(actor.def.radiusMm);
     let movedAny = false;
@@ -1139,6 +1374,11 @@ export class ActorRuntime {
     }
     this.emitEvent(Object.assign({ e: "hit", id: actor.id, by: plan.playerId, amount: plan.damage, hp: actor.hp, ab: plan.abilityId, sk: plan.auto === false ? 1 : 0,
       sh: plan.shieldUp && !plan.shieldBreak ? 1 : 0, sb: plan.shieldBreak ? 1 : 0 }, splash ? { sp: 1 } : null), actor.x, actor.z, actor);
+    // Werkbank Fase 10: een wild dier slaat niet terug maar rent weg van wie hem sloeg.
+    if (actor.def.behavior === "flee") {
+      actor.fleeFromId = plan.playerId; actor.fleeUntilMs = nowMs + FLEE_MS; actor.fleeRepickAtMs = 0;
+      return;
+    }
     // Stap 8: wie een vijand slaat die de begeleide NPC aanvalt, trekt hem naar zich toe (zo bescherm je hem).
     if (actor.state !== "return" && (actor.state !== "engage" || actor.targetEscort)) this.engage(actor, plan.playerId);
   }
@@ -1160,6 +1400,9 @@ export class ActorRuntime {
       return out;
     }
     const s = entry.state === "dead" ? "d" : entry.anim === "attack" ? "a" : entry.anim === "walk" ? "w" : "i";
+    // Werkbank Fase 10: een NPC die rondloopt (d = NPC-ID; de game toont hem hier en niet op zijn vaste plek).
+    // Kevin 16-11: c = de animatie die hij speelt terwijl hij op een routepunt wacht.
+    if (entry.kind === "npc") return { id: entry.id, k: "n", d: entry.npcId, x: r2(entry.x), y: r2(entry.y), z: r2(entry.z), r: Math.round(entry.ry * 100) / 100, s, ...(entry.waitClip && s === "i" ? { c: entry.waitClip } : {}) };
     // Stap 8: een begeleide NPC (d = NPC-ID; de game toont zijn eigen model en verbergt hem op zijn vaste plek).
     if (entry.escort) return { id: entry.id, k: "e", d: entry.npcId, x: r2(entry.x), y: r2(entry.y), z: r2(entry.z), r: Math.round(entry.ry * 100) / 100, hp: entry.hp, hm: entry.hpMax, s };
     const out = { id: entry.id, k: "a", d: entry.def.actorId, x: r2(entry.x), y: r2(entry.y), z: r2(entry.z), r: Math.round(entry.ry * 100) / 100, hp: entry.hp, hm: entry.hpMax, s };
@@ -1180,7 +1423,7 @@ export class ActorRuntime {
     for (const state of this.host.playerStates(this.worldId)) {
       if (state?.player_id) positions.set(state.player_id, state);
     }
-    const all = Array.from(this.actors.values()).concat(Array.from(this.resources.values()));
+    const all = Array.from(this.actors.values()).concat(Array.from(this.resources.values()), Array.from(this.walkers.values()));
     const liveIds = new Set();
     for (const connection of connections) {
       liveIds.add(connection.id);

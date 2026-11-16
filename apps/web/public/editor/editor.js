@@ -1,4 +1,4 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261115-focuscenter1";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261116-route1";
 import { edgeBetweenPoints, editClosedEdges } from "./walkable-edge-tools.js?v=20261031-randen1";
 import { createTerrainEditor } from "./terrain-editor.js?v=20261102-terrein10";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261106-perf1";
@@ -11,11 +11,12 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261106-perf1";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261106-perf1";
-import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261112-fase8c";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261116-route1";
 import { createAssetPicker } from "./mini-asset-picker.js?v=20261106-thumbs150";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
 import { createDocDrop, docKeyFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261108-portals1";
 import { createRoadEditor } from "./road-editor.js?v=20261108-roads7";
+import { createRouteEditor } from "./route-editor.js?v=20261116-route1";
 import { AREA_EDITOR_PREFIX, AREA_SOORTEN, AREA_SOORT_ORDER, areaBodyFromNodePatch, areaCirclePointsMm, areaNodeValues, areaSoort } from "../shared/area-soorten.js?v=20261108-roads7";
 import { removeVisualObjects, visualModelsForRelation, visualObjectRelations } from "./visual-object-relations.js?v=20261106-perf1";
 import { FIELD_HELP_STATUSES, createSemanticFieldHelpRegistry, formatSemanticFieldHelp, semanticFieldHelpEntry } from "./semantic-field-help.js?v=20261012-semantic-help1";
@@ -521,6 +522,8 @@ const el = {
   terrainLibraryPanel: document.querySelector("#terrainLibraryPanel"),
   gamePanePanel: document.querySelector("#gamePanePanel"),
   gameTabPanel: document.querySelector("#gameTabPanel"),
+  bibleModeButton: document.querySelector("#bibleModeButton"),
+  bibleTabPanel: document.querySelector("#bibleTabPanel"),
   settingsModeButton: document.querySelector("#settingsModeButton"),
   oldModeMenu: document.querySelector("#oldModeMenu"),
   settingsMenuPanel: document.querySelector("#settingsMenuPanel"),
@@ -914,10 +917,13 @@ const docBench = createDocBench({
   settingsCardExtra: function (kind, host) { settingsCardExtra(kind, host); },
   // Fase 7: klikken op een melding of een plek in ⚖️ Balans opent die kaart in de Werkbank.
   openDoc: function (docKey) { openDocFromBalance(docKey); },
+  // Werkbank Fase 10: ⚖️ Balans > 📖 Bijbel > Open de bijbel.
+  openBible: function () { setBibleTabOpen(true); },
   onChanged: function () {
     updateDocPendingBadge();
     // 🛣️ De Weg staat niet in de 3D-wereld zelf (alleen de punten en lijnen erover): niet de hele wereld opnieuw laden.
-    if (roadSaving) roadEditor.sync(); else { refreshViewportForDocs(); roadEditor.sync(); }
+    if (roadSaving || routeSaving) roadEditor.sync(); else { refreshViewportForDocs(); roadEditor.sync(); }
+    routeEditor.sync();
     if (state.editorMode === "workbench") renderWorkbenchLibrary(workbenchContext());
     if (state.editorMode === "settings" && el.settingsMenuPanel) docBench.renderSettingsMenu(el.settingsMenuPanel, renderSettingsCardOnly);
     if (state.editorMode === "terrain") terrainEditor.render();
@@ -943,6 +949,41 @@ const roadEditor = createRoadEditor({
   canvasTarget: function (event) { return terrainCanvasTarget(event); },
   entityAtPointer: function () { return runtimeEntityIdAtLastPointer(); }
 });
+
+// Werkbank Fase 10 (Kevin 16-11): de route van een NPC (Loopt een route) of een vliegend model (Vliegt: een route),
+// te tekenen in de 3D-view zoals de Weg (route-editor.js). Een route verandert de editorwereld niet: niet alles opnieuw laden.
+let routeSaving = false;
+function routeTarget() {
+  if (state.selectedNodeIds.length || selectedPlacedDocKeys().length !== 1) return null;
+  const doc = docBench.doc(focusedPlacedDocKey());
+  if (!doc) return null;
+  if (doc.kind === "npc" && doc.body?.walkMode === "route") return { doc: doc, kind: "npc", key: "route", loop: doc.body.routeEnd !== "back", label: "NPC-route" };
+  if (doc.kind === "placed_model" && doc.body?.fly === true && doc.body?.flyMode === "route") return { doc: doc, kind: "placed_model", key: "flyRoute", loop: doc.body.flyEnd !== "back", label: "Vliegroute" };
+  return null;
+}
+const routeEditor = createRouteEditor({
+  runtime: function () { return runtime; },
+  target: routeTarget,
+  save: async function (doc, body, label) {
+    routeSaving = true;
+    try { return await docBench.saveDoc(doc.kind, doc, body, label); } finally { routeSaving = false; }
+  },
+  setStatus: function (message, kind) { setStatus(message, kind); },
+  groundAt: function (clientX, clientY) { return terrainGroundPointFromClient(clientX, clientY); },
+  lastPointer: function () { return terrainLastPointer; },
+  suppressClick: function () { suppressNextViewportRuntimeClick(); },
+  canvasTarget: function (event) { return terrainCanvasTarget(event); },
+  highlight: function (index) {
+    for (const row of document.querySelectorAll(".wbdRouteRow")) {
+      const on = Number(row.dataset.routeIndex) === index;
+      if (row.classList.contains("active") === on) continue;
+      row.classList.toggle("active", on);
+      if (on && typeof row.scrollIntoView === "function") row.scrollIntoView({ block: "nearest" });
+    }
+  }
+});
+// Een rij in het paneel aanklikken kiest dat punt in de 3D-view.
+docBench.onRoutePick = function (index) { routeEditor.selectPoint(index); };
 
 // Wereld tekenen: de tab Terrein (hoogte, stempels, verf en grond; opslaan bij Opslaan of de tab verlaten).
 const terrainEditor = createTerrainEditor({
@@ -1053,6 +1094,7 @@ function selectPlacedDoc(docKey) {
   syncRuntimeSelection();
   const doc = docBench.doc(docKey);
   setStatus(placedDocLabel(docKey) + " gekozen. " + placedDocHint(doc?.kind) + ".", "");
+  if (routeTarget()) routeEditor.hint();
 }
 
 async function commitDocTransform(docKey, transform) {
@@ -5764,6 +5806,7 @@ function syncRuntimeSelection() {
   } else {
     runtime.deselect();
   }
+  routeEditor.sync();
 }
 
 function breadcrumbForGroup(groupId) {
@@ -6021,6 +6064,7 @@ async function boot() {
     // De Weg zit niet in de gewone werelddata. Vul zijn eigen overlay meteen
     // zodra de documenten er zijn, dus ook na een verse pagina/serverstart.
     roadEditor.sync();
+    routeEditor.sync();
     if (state.editorMode === "workbench") renderWorkbench();
     if (state.editorMode === "settings") void renderSettingsTab();
   }).catch(function (error) { console.warn("Documenten konden niet laden:", error?.message || error); });
@@ -16798,6 +16842,7 @@ function setGameTabOpen(open) {
   const wasOpen = !panel.hidden;
   if (open === wasOpen) return;
   if (open) {
+    setBibleTabOpen(false);
     const header = document.querySelector(".topbar");
     panel.style.top = (header ? header.getBoundingClientRect().bottom : 0) + "px";
     let frame = panel.querySelector("iframe");
@@ -16833,6 +16878,76 @@ function setGameTabOpen(open) {
   // Tab open: het paneel Game stopt (één game tegelijk). Tab dicht: het paneel komt terug.
   syncGamePane(collectUsedAllViews(state.allLayoutTree));
 }
+
+// Werkbank Fase 10 (keuze van Kevin 15-11): tab 📖 Bijbel. De Game Bible in een frame boven de editor, net als de tab Game.
+// De editor-3D tekent dan niets (oude laptop). De bijbel praat met de editor via postMessage (zelfde site).
+function setBibleTabOpen(open) {
+  const panel = el.bibleTabPanel;
+  if (!panel || !el.bibleModeButton) return;
+  const wasOpen = !panel.hidden;
+  if (open === wasOpen) return;
+  if (open) {
+    setGameTabOpen(false);
+    const header = document.querySelector(".topbar");
+    panel.style.top = (header ? header.getBoundingClientRect().bottom : 0) + "px";
+    let frame = panel.querySelector("iframe");
+    if (!frame) {
+      frame = document.createElement("iframe");
+      frame.title = "Bijbel";
+      frame.src = "./bible.html?v=20261115-fase10";
+      panel.appendChild(frame);
+    } else {
+      // Terug in de bijbel: opnieuw kijken wat er in de editor staat (de kaarten zelf blijven staan).
+      frame.contentWindow?.postMessage({ type: "gk-bible-refresh" }, location.origin);
+    }
+    panel.hidden = false;
+    if (runtime && typeof runtime.setRenderPaused === "function") runtime.setRenderPaused(true);
+  } else {
+    panel.hidden = true;
+    if (runtime && typeof runtime.setRenderPaused === "function" && el.gameTabPanel?.hidden !== false) runtime.setRenderPaused(false);
+    requestAnimationFrame(function () { window.dispatchEvent(new Event("resize")); });
+  }
+  el.bibleModeButton.classList.toggle("active", Boolean(open));
+  el.bibleModeButton.setAttribute("aria-pressed", open ? "true" : "false");
+  for (const button of [el.workbenchModeButton, el.settingsModeButton, el.terrainModeButton]) {
+    if (!button) continue;
+    const mine = button === el.workbenchModeButton ? state.editorMode === "workbench"
+      : button === el.terrainModeButton ? state.editorMode === "terrain" : state.editorMode === "settings";
+    button.classList.toggle("active", !open && mine);
+  }
+  if (state.editorMode === "terrain") {
+    if (open) terrainEditor.deactivate(); else terrainEditor.activate();
+  }
+}
+
+// Vanuit de bijbel: een kaart openen, of een nieuwe kaart maken met de naam uit de bijbel.
+function newDocFromBible(kind, name, text = "") {
+  const spec = docBench.spec(kind);
+  if (!spec) return;
+  setEditorMode("workbench");
+  const body = {};
+  for (const [key, field] of Object.entries(spec.fields)) {
+    if (field.default !== null && field.default !== undefined && field.default !== "") body[key] = JSON.parse(JSON.stringify(field.default));
+  }
+  if (spec.fields.displayName && name) body.displayName = String(name).slice(0, Number(spec.fields.displayName.maxLength) || 80);
+  // Werkbank Fase 10 (10b): een 📕 Verhaal neemt de tekst van de bijbelkaart over (daarna pas je hem aan).
+  if (kind === "lore_entry" && text && spec.fields.text) body.text = String(text).trim().slice(0, Number(spec.fields.text.maxLength) || 2000);
+  docBench.draft = { kind, body, idTouched: false };
+  focusDoc(null, kind);
+}
+window.addEventListener("message", function (event) {
+  if (event.origin !== location.origin || !event.data || typeof event.data !== "object") return;
+  const bibleFrame = el.bibleTabPanel?.querySelector("iframe");
+  if (!bibleFrame || event.source !== bibleFrame.contentWindow) return;
+  const message = event.data;
+  if (message.type === "gk-bible-open" && message.docKey) {
+    setBibleTabOpen(false);
+    Promise.resolve(docBench.workspace ? null : docBench.load()).then(function () { openDocFromBalance(String(message.docKey)); });
+  } else if (message.type === "gk-bible-new" && message.kind) {
+    setBibleTabOpen(false);
+    Promise.resolve(docBench.workspace ? null : docBench.load()).then(function () { newDocFromBible(String(message.kind), String(message.name || ""), String(message.text || "")); });
+  }
+});
 
 function setEditorMode(mode, persist = true) {
   const nextMode = EDITOR_MODES.includes(mode) ? mode : "workbench";
@@ -32622,6 +32737,7 @@ function beginPointMarqueeSession(event, options) {
 function deselectViewportClick() {
   clearPointLongPress();
   if (focusedPlacedDocKey() || selectedAreaDocNode()) { clearDocFocus(); renderWorkbench(); renderViewportControls(); }
+  routeEditor.sync();
   state.authoringRouteId = null;
   state.storedAuthoringRouteId = null;
   state.authoringMenuOpen = false;
@@ -32731,6 +32847,7 @@ function handleTerrainPointerDown(event) {
   if (runtimeTransformActive()) return;
   terrainRememberPointer(event);
   if (roadEditor.handlePointerDown(event)) return;
+  if (routeEditor.handlePointerDown(event)) return;
   if (handleScatterPointerDown(event)) return;
   if (terrainHasActiveSession() && isPrimaryPointerAction(event) && terrainCanvasTarget(event)) {
     event.preventDefault();
@@ -33269,6 +33386,7 @@ function handleTerrainPointerMove(event) {
     return;
   }
   if (roadEditor.handlePointerMove(event)) return;
+  if (routeEditor.handlePointerMove(event)) return;
   if (handleScatterPointerMove(event)) return;
   const isKeyboardSession = terrainHasActiveSession() && state.terrainTool.dragPointerId === null;
   const isPointerSession = state.terrainTool.dragPointerId !== null && event.pointerId === state.terrainTool.dragPointerId;
@@ -33323,6 +33441,7 @@ function handleTerrainPointerUp(event) {
     return;
   }
   if (roadEditor.handlePointerUp(event)) return;
+  if (routeEditor.handlePointerUp(event)) return;
   if (handleScatterPointerUp(event)) return;
   if (state.terrainTool.dragPointerId === null || event.pointerId !== state.terrainTool.dragPointerId) return;
   event.preventDefault();
@@ -33452,6 +33571,7 @@ function handleEditorKeyDown(event) {
   const meta = event.ctrlKey || event.metaKey;
   if (isEditableTarget(event.target)) return;
   if (roadEditor.handleKeyDown(event)) return;
+  if (routeEditor.handleKeyDown(event)) return;
   const shortcutLabel = viewportShortcutDebugLabel(event);
   if (shortcutLabel) setViewportShortcutDebug(shortcutLabel);
   const scatterNode = selectedScatterNode();
@@ -33880,10 +34000,11 @@ document.addEventListener("visibilitychange", function () {
 });
 
 if (el.nodesModeButton) el.nodesModeButton.addEventListener("click", function () { if (el.oldModeMenu) el.oldModeMenu.open = false; setEditorMode("nodes"); });
-if (el.workbenchModeButton) el.workbenchModeButton.addEventListener("click", function () { setGameTabOpen(false); setEditorMode("workbench"); });
-if (el.settingsModeButton) el.settingsModeButton.addEventListener("click", function () { setGameTabOpen(false); setEditorMode("settings"); });
+if (el.workbenchModeButton) el.workbenchModeButton.addEventListener("click", function () { setGameTabOpen(false); setBibleTabOpen(false); setEditorMode("workbench"); });
+if (el.settingsModeButton) el.settingsModeButton.addEventListener("click", function () { setGameTabOpen(false); setBibleTabOpen(false); setEditorMode("settings"); });
 if (el.gameModeButton) el.gameModeButton.addEventListener("click", function () { setGameTabOpen(true); });
-if (el.terrainModeButton) el.terrainModeButton.addEventListener("click", function () { setGameTabOpen(false); setEditorMode("terrain"); });
+if (el.bibleModeButton) el.bibleModeButton.addEventListener("click", function () { setBibleTabOpen(true); });
+if (el.terrainModeButton) el.terrainModeButton.addEventListener("click", function () { setGameTabOpen(false); setBibleTabOpen(false); setEditorMode("terrain"); });
 
 initMobileControls();
 setEditorMode(state.editorMode, false);

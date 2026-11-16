@@ -8,6 +8,7 @@ import { ActorRuntime } from "./runtime/actor-runtime.js";
 import { VitalsRuntime } from "./runtime/vitals-runtime.js";
 import { PartyRuntime } from "./runtime/party-runtime.js";
 import { ChatRuntime } from "./runtime/chat-runtime.js";
+import { FriendsRuntime } from "./runtime/friends-runtime.js";
 import { CharacterService } from "./character-service.js";
 import { JoinTickets } from "./runtime/join-tickets.js";
 import { createPositionCheckpointer } from "./persistence/position-checkpoint.js";
@@ -924,7 +925,16 @@ export class MmoService {
       playerStates: (worldId) => this.getWorldPlayerStates(worldId),
       connectionFor: (playerId) => this.getConnectionForPlayer(playerId, null),
       sendToPlayer: (playerId, payload) => this.sendToPlayer(playerId, payload),
-      partyMemberIds: (playerId) => this.partyRuntime.memberIds(playerId)
+      partyMemberIds: (playerId) => this.partyRuntime.memberIds(playerId),
+      // Werkbank Fase 10: blokkeren haalt de vriendschap weg.
+      onBlock: (playerId, otherId) => this.friendsRuntime.remove(playerId, otherId, true)
+    });
+    // Werkbank Fase 10: vriendenlijst (per account), met wie er online is.
+    this.friendsRuntime = new FriendsRuntime({
+      db: this.db,
+      connectionFor: (playerId) => this.getConnectionForPlayer(playerId, null),
+      sendToPlayer: (playerId, payload) => this.sendToPlayer(playerId, payload),
+      hasBlocked: (playerId, otherId) => this.chatRuntime.hasBlocked(playerId, otherId)
     });
     this.worldClock = createWorldClock({ tickMs: WORLD_TICK_MS, maxCatchUpTicks: 3, maxLagMs: 1000, overrunLimit: 5 });
     this.startWorldTickLoop();
@@ -1107,6 +1117,7 @@ export class MmoService {
       regionName: region?.displayName || null,
       areaId: area?.areaId || null,
       areaName: area?.displayName || null,
+      areaText: area?.enterText || null,
       musicAssetId,
       musicUrl: musicAssetId ? (spatial.world?.audio?.[musicAssetId] || (musicAssetId === worldMusic?.assetId ? worldMusic.url : null) || null) : null
     };
@@ -3523,10 +3534,15 @@ export class MmoService {
       this.sendInitialWorldSnapshot(connection, worldContext);
       try { this.partyRuntime.sendTo(connection.player.id); } catch (error) { console.error("[groep] versturen mislukt:", error.message); }
       try { this.chatRuntime.sendTo(connection.player.id); } catch (error) { console.error("[chat] versturen mislukt:", error.message); }
+      try { this.friendsRuntime.sendTo(connection.player.id); this.friendsRuntime.presenceChanged(connection.player.id, true); } catch (error) { console.error("[vrienden] versturen mislukt:", error.message); }
       return;
     }
-    if (message.type === "chat:send" || message.type === "chat:block") {
+    if (message.type === "chat:send" || message.type === "chat:block" || message.type === "chat:mute" || message.type === "chat:report") {
       try { this.chatRuntime.handle(connection, message); } catch (error) { console.error("[chat] mislukt:", error.message); }
+      return;
+    }
+    if (message.type === "friend:add" || message.type === "friend:accept" || message.type === "friend:remove") {
+      try { this.friendsRuntime.handle(connection, message); } catch (error) { console.error("[vrienden] mislukt:", error.message); }
       return;
     }
     if (message.type !== "player:move_intent" && message.type !== "player:position_intent" && message.type !== "player:input_state") {
@@ -3745,6 +3761,8 @@ export class MmoService {
       }
       if (playerRemaining === 0) {
         this.discardQueuedRemoteBroadcast(playerId);
+        // Werkbank Fase 10: vrienden zien meteen dat je offline bent.
+        try { this.friendsRuntime?.presenceChanged(playerId, false); } catch (error) { console.error("[vrienden] offline mislukt:", error.message); }
         const immediateDeparture = code === 4001 || code === 4002 || reason === "logout" || reason === "idle_timeout" || PLAYER_DISCONNECT_GRACE_MS === 0;
         if (immediateDeparture) {
           this.finalizePendingPlayerDisconnect({

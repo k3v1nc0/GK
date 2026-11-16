@@ -4,6 +4,7 @@
 import { cellKeyForPointMm, rectContains } from "../../../apps/web/public/shared/spatial.js";
 import { LEGACY_PLAYER_ATTACK, MAX_LOOT_DEPTH } from "../../../apps/web/public/shared/combat-math.js";
 import { splitByAudience } from "../../shared/authoring/kinds.js";
+import { routePointsOf } from "../../shared/authoring/route-points.js";
 
 export const ACTOR_SECTION_VERSION = "gk-actors-1";
 export const ACTOR_DOC_KINDS = Object.freeze(["ability", "loot_table", "resource_definition", "resource_spawn", "actor_archetype", "actor_spawn"]);
@@ -72,7 +73,8 @@ export function actorSpawnIssues(docs) {
 export function compileActorSection(documents, options = {}) {
   const active = documents.filter((doc) => !doc.archived);
   const actorDocs = active.filter((doc) => ACTOR_DOC_KINDS.includes(doc.kind)).sort((a, b) => a.docKey.localeCompare(b.docKey));
-  if (!actorDocs.length) return null;
+  // Werkbank Fase 10: ook zonder vijanden laat de server NPC's rondlopen (dan is er een sectie met alleen npcWalkers).
+  if (!actorDocs.length && !active.some((doc) => doc.kind === "npc" && (npcWalkerOf(doc.body) || npcChatterOf(doc.body).length))) return null;
   const errors = [];
   const byKey = new Map(active.map((doc) => [doc.docKey, doc]));
   const of = (kind) => actorDocs.filter((doc) => doc.kind === kind);
@@ -186,12 +188,30 @@ export function compileActorSection(documents, options = {}) {
 
   // Stap 8: een NPC die je begeleidt loopt als quest-NPC mee; de game heeft zijn naam, model en animaties nodig.
   const npcs = {};
+  // Werkbank Fase 10 (Kevin 15-11): NPC's die rondlopen (de server laat ze lopen, alleen als er spelers in de buurt zijn).
+  const npcWalkers = [];
   for (const doc of active.filter((item) => item.kind === "npc").sort((a, b) => a.docKey.localeCompare(b.docKey))) {
     // Fouten in het model meldt de NPC-kaart zelf al (game-compiler); hier alleen het pad voor de game.
     const info = doc.body.modelAssetId && assetInfo ? assetInfo.get(doc.body.modelAssetId) : null;
     if (info && info.assetType === "model" && info.sourcePath) assets[doc.body.modelAssetId] = { assetType: "model", url: info.sourcePath };
     npcs[doc.body.npcId] = { displayName: doc.body.displayName || doc.body.npcId, modelAssetId: doc.body.modelAssetId || null,
       modelScaleBp: doc.body.modelScaleBp || 10000, idleClip: doc.body.idleClip || null, walkClip: doc.body.walkClip || null };
+    const chatter = npcChatterOf(doc.body);
+    if (chatter.length) npcs[doc.body.npcId].chatter = chatter;
+    // Alleen een lopende NPC heeft zijn praatafstand in de game nodig (zijn klikvak loopt met hem mee).
+    const walker = npcWalkerOf(doc.body);
+    if (walker) {
+      npcWalkers.push(walker);
+      Object.assign(npcs[doc.body.npcId], { walks: true, talkRange: Number(doc.body.talkRange) > 0 ? Number(doc.body.talkRange) : 2.5 });
+      // Werkbank Fase 10 (Kevin 16-11): geluid tijdens het lopen (alleen een bestaand geluidsbestand).
+      const sound = doc.body.walkSound && assetInfo ? assetInfo.get(doc.body.walkSound) : null;
+      if (doc.body.walkSound && assetInfo && !sound) errors.push({ code: "ASSET_UNKNOWN", docKey: doc.docKey, message: "NPC " + doc.body.displayName + " gebruikt onbekend geluid " + doc.body.walkSound });
+      else if (sound && sound.assetType !== "audio") errors.push({ code: "ASSET_TYPE", docKey: doc.docKey, message: "NPC " + doc.body.displayName + ": " + doc.body.walkSound + " is geen geluid" });
+      else if (sound?.sourcePath) {
+        assets[doc.body.walkSound] = { assetType: "audio", url: sound.sourcePath };
+        npcs[doc.body.npcId].walkSound = doc.body.walkSound;
+      }
+    }
   }
 
   errors.push(...actorSpawnIssues(active).map(({ code, docKey, message }) => ({ code, docKey, message })));
@@ -200,6 +220,7 @@ export function compileActorSection(documents, options = {}) {
     needRef(doc, doc.body.archetypeRef, "actor_archetype", "Vijand-plek " + doc.body.spawnId);
     const spawn = { spawnId: doc.body.spawnId, actorId: idFromRef(doc.body.archetypeRef), regionId: doc.body.regionRef ? idFromRef(doc.body.regionRef) : null, xMm: doc.body.xMm, zMm: doc.body.zMm, cellKey: cellKeyForPointMm(doc.body.xMm, doc.body.zMm) };
     if (Array.isArray(doc.body.patrolPointsMm) && doc.body.patrolPointsMm.length) spawn.patrolPointsMm = doc.body.patrolPointsMm;
+    if (Number(doc.body.wanderRadiusMm) > 0) spawn.wanderRadiusMm = Math.round(Number(doc.body.wanderRadiusMm));
     if (Number(doc.body.rotationY)) spawn.rotationY = Number(doc.body.rotationY);
     // Fase 5: af en toe een sterkere (leeg = de standaard van het schema: 10 % kans, 200 % sterk).
     const chance = Number.isInteger(doc.body.eliteChancePct) ? doc.body.eliteChancePct : ELITE_DEFAULTS.chancePct;
@@ -233,11 +254,33 @@ export function compileActorSection(documents, options = {}) {
     if (list.length) classSkills[doc.body.classId] = list;
   }
   return {
-    server: { schema: ACTOR_SECTION_VERSION, classAbilityIds, classSkills, abilities: abilities.server, lootTables, resources: resources.server, archetypes: archetypes.server, spawns, resourceSpawns },
+    server: { schema: ACTOR_SECTION_VERSION, classAbilityIds, classSkills, abilities: abilities.server, lootTables, resources: resources.server, archetypes: archetypes.server, spawns, resourceSpawns,
+      ...(npcWalkers.length ? { npcWalkers } : {}) },
     client: { schema: ACTOR_SECTION_VERSION, classAbilityIds, classSkills, abilities: abilities.client, resources: resources.client, archetypes: archetypes.client, assets,
       ...(Object.keys(npcs).length ? { npcs } : {}) },
     errors
   };
+}
+
+// Werkbank Fase 10: een NPC die rondloopt (Lopen = Loopt rond). Met "Alleen als vlag" blijft hij staan: niet iedereen ziet hem.
+export const NPC_WALK_SPEED_MM = 1200;
+// Werkbank Fase 10: de praatjes van een NPC (één per regel, hooguit 8 van 120 tekens). Een NPC met een vlag zegt niets.
+export function npcChatterOf(body) {
+  if (!body || body.flagRef) return [];
+  return String(body.chatter || "").split(/\r?\n/).map((line) => line.trim().slice(0, 120)).filter(Boolean).slice(0, 8);
+}
+// Werkbank Fase 10: een NPC die rondloopt of (Kevin 16-11) een getekende route loopt, met zijn eigen snelheid.
+// Een route zonder punten = hij blijft staan.
+export function npcWalkerOf(body) {
+  if (!body || (body.walkMode !== "wander" && body.walkMode !== "route") || body.flagRef) return null;
+  const x = Number(body.x); const z = Number(body.z);
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+  const route = body.walkMode === "route" ? routePointsOf(body.route) : null;
+  if (route && !route.length) return null;
+  const talkRange = Number(body.talkRange) > 0 ? Number(body.talkRange) : 2.5;
+  const speed = Number(body.walkSpeed) > 0 ? Math.max(0.3, Math.min(8, Number(body.walkSpeed))) : NPC_WALK_SPEED_MM / 1000;
+  return { npcId: body.npcId, x, z, rotationY: Number(body.rotationY) || 0, radiusM: Math.max(1, Math.min(60, Number(body.walkRadius) || 8)),
+    speedMmPerS: Math.round(speed * 1000), stopM: talkRange + 1, ...(route ? { route, routeLoop: body.routeEnd !== "back" } : {}) };
 }
 
 // Fase 5: de vaardigheden van een klasse voor vak 2 en 3 (ability-ID's op volgorde). Een oudere build had alleen een

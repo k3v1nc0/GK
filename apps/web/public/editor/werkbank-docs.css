@@ -314,3 +314,13 @@
 .wbdFinding .wbdGhost { justify-self: start; }
 .wbdFinding .wbdNote { margin: 0; }
 .wbdFindingText { color: var(--wbd-text); font-size: 12px; line-height: 1.45; }
+/* Werkbank Fase 10 (Kevin 16-11): de punten van een route (NPC of vlieger). */
+.wbdRoute { display: grid; gap: 4px; }
+.wbdRouteRow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 3px 4px; border-radius: 6px; border: 1px solid transparent; }
+.wbdRouteRow.active { border-color: #f8fafc; background: rgba(248, 250, 252, 0.08); }
+.wbdRouteNum { min-width: 26px; height: 24px; border-radius: 12px; border: 0; background: #ffb347; color: #111; font-weight: 700; cursor: pointer; }
+.wbdRouteRow.active .wbdRouteNum { background: #fff; }
+.wbdRouteCell { display: inline-flex; align-items: center; gap: 3px; }
+.wbdRoute .wbdRouteH, .wbdRoute .wbdRouteWait { width: 56px; }
+.wbdRoute .wbdRouteClip { flex: 1 1 110px; min-width: 90px; }
+.wbdRoute .wbdRouteDel { padding: 2px 8px; }

@@ -1,0 +1,529 @@
+{
+  "schema": "gamebible-node-system-v6.23",
+  "title": "Het boek: The Staff of Eldoria",
+  "note": "Wordt één keer in de bijbel gezet (de eerste keer dat de tab 📖 Bijbel opent). Daarna staat alles in de database.",
+  "categories": [
+    {
+      "id": "col-book",
+      "title": "📚 Het boek",
+      "body": "The Staff of Eldoria: 12 hoofdstukken, kort samengevat. Het hele boek staat in README/The Staff of Eldoria.md. De lijnen lopen naar de bijbelkaarten die erbij horen.",
+      "x": 0,
+      "y": 0,
+      "width": 490,
+      "height": 5310
+    }
+  ],
+  "nodes": [
+    {
+      "id": "node-book-ch01",
+      "title": "Hoofdstuk 1: The Apprentice in the Shadow of Thorne's Workshop",
+      "body": "Deel 1: The Awakening of the Conduit\n\n@{Protagonist} faalt weer bij een simpele spreuk en breekt een houten staf. @{Mentor} laat haar de @{Item Core Relic} zien en zegt dat zij de uitverkorene is. De staf reageert warm op haar angst en empathie. Thorne waarschuwt dat @{Main Villain} haar nu zal zoeken, en Arlen vertrekt naar de @{Zone Peaks}.\n\nGoed voor de game: Tutorial in de werkplaats met een mislukte eerste spreuk en een mentor-NPC. Hier start de hoofdquest.",
+      "x": 24,
+      "y": 90,
+      "width": 440,
+      "categoryId": "col-book",
+      "sourceTaskId": "",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-book-ch02",
+      "title": "Hoofdstuk 2: A Burden Placed upon Humble Shoulders",
+      "body": "Deel 1: The Awakening of the Conduit\n\n@{Main Curse} bereikt het huis en de wards falen. Thorne zegt dat Arlen magie niet moet bevelen maar moet voelen. Hij toont de profetie van het Eldorian Heart en geeft haar de staf. Arlen voelt het lijden van het land en ziet de Obsidian Citadel. Haar doelen: @{Item Sunstone}, @{Item Moonpetal} en @{Item Earthsong}.\n\nGoed voor de game: Een overzichtskaart met drie hoofddoelen en een verhaalfilmpje over de profetie. De blight groeit als bedreiging.",
+      "x": 24,
+      "y": 520,
+      "width": 440,
+      "categoryId": "col-book",
+      "sourceTaskId": "",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-book-ch03",
+      "title": "Hoofdstuk 3: The Call to Traverse the Perilous Eldoria",
+      "body": "Deel 1: The Awakening of the Conduit\n\nThorne zegt dat de staf ook een baken is voor Valerius. Arlen is bang maar gaat toch. Buiten verslaat ze een shadow-skitter (@{Enemy Shadow-Skitters}) met een golf aardlicht. Ze vindt een oud heiligdom, kampeert daar en besluit een beschermer te zijn.\n\nGoed voor de game: Eerste gevecht tegen een kleine blight-vijand en een kampvuur als veilige plek (respawn of opslaan).",
+      "x": 24,
+      "y": 950,
+      "width": 440,
+      "categoryId": "col-book",
+      "sourceTaskId": "",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-book-ch04",
+      "title": "Hoofdstuk 4: Into the Labyrinth of the Whispering Peaks",
+      "body": "Deel 1: The Awakening of the Conduit\n\nThorne geeft Arlen een kompas en een kaart. In de @{Zone Peaks} verschuift het pad en spotten stemmen met haar. In het @{Zone Slyph Labyrinth} plagen de Slyphs haar met illusies. Arlen voelt dat ze bang zijn om vergeten te worden en praat met hen. De Slyphs geven de @{Item Sunstone}; een berghaas rent weg.\n\nGoed voor de game: Een labyrint met verschuivende paden en een baas waar je praat in plaats van vecht. Dieren als de berghaas zijn sfeer.",
+      "x": 24,
+      "y": 1380,
+      "width": 440,
+      "categoryId": "col-book",
+      "sourceTaskId": "",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-book-ch05",
+      "title": "Hoofdstuk 5: The Trial of the Ethereal Slyphs",
+      "body": "Deel 1: The Awakening of the Conduit\n\nOp een plateau stelen de Slyphs (@{Faction Slyph Court}) Arlens spullen en duwen haar bijna van een klif. Ze tonen valse beelden van Thorne en Valerius. Arlen zegt eerlijk dat ze bang is en blijft staan. De Slyphs zegenen haar staf; de @{Item Sunstone} zit nu vast in de staf.\n\nGoed voor de game: Een proef-quest met een eerlijke keuze in de dialoog, zonder vechten. De Slyphs kunnen een eigen factie zijn.",
+      "x": 24,
+      "y": 1810,
+      "width": 440,
+      "categoryId": "col-book",
+      "sourceTaskId": "",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-book-ch06",
+      "title": "Hoofdstuk 6: A Flicker of Light in the Gnarled Wood",
+      "body": "Deel 1: The Awakening of the Conduit\n\nDe Sunstone is dof en Arlen twijfelt of ze genoeg is. Een schaduwwezen sluipt naar haar toe. Ze put kracht uit empathie en laat het licht uitbarsten. Het wezen lost op en er groeit een groen sprietje. Arlen loopt verder naar de @{Zone Shadowfen}.\n\nGoed voor de game: Een lichtaanval die het land herstelt: grond genezen kan een kernmechaniek zijn.",
+      "x": 24,
+      "y": 2240,
+      "width": 440,
+      "categoryId": "col-book",
+      "sourceTaskId": "",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-book-ch07",
+      "title": "Hoofdstuk 7: Navigating the Treacherous Mists of Shadowfen",
+      "body": "Deel 2: The Path of the Ascendant Mage\n\nIn de @{Zone Shadowfen} toont de mist Arlen haar angsten. Een bog-horror (@{Enemy Bog-Horrors}) valt aan en de staf wijst haar de weg. Ze volgt de trilling van de staf door het moeras en vindt in een verborgen kuil de @{Item Moonpetal}. De bloem lost op in de staf, die donkerder wordt met zilveren aders.\n\nGoed voor de game: Een moeras waar je op een kompas vertrouwt in plaats van op de kaart. De bog-horror is een goede eerste miniboss.",
+      "x": 24,
+      "y": 2670,
+      "width": 440,
+      "categoryId": "col-book",
+      "sourceTaskId": "",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-book-ch08",
+      "title": "Hoofdstuk 8: Warding Off the Beasts of the Gloom",
+      "body": "Deel 2: The Path of the Ascendant Mage\n\nDe Sunstone werkt slecht in de mist en er verschijnt een valse Thorne (Mist-Thorne). Arlen luistert naar het moeras in plaats van te vechten. Moeraswezens vallen aan en @{NPC Lyra} komt haar helpen. Arlen gebruikt aardkracht en de wezens lossen op.\n\nGoed voor de game: Lyra als eerste companion (scout) en een groepsgevecht tegen golven moerasmonsters. Aardkracht als nieuwe vaardigheid.",
+      "x": 24,
+      "y": 3100,
+      "width": 440,
+      "categoryId": "col-book",
+      "sourceTaskId": "",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-book-ch09",
+      "title": "Hoofdstuk 9: Discovery of the Iridescent Moonpetal Bloom",
+      "body": "Deel 2: The Path of the Ascendant Mage\n\nMist-Thorne zegt dat Arlen faalt; ze wint met haar eigen angst. Ze vlucht voor een moeraswezen en vindt een schone open plek met de @{Item Moonpetal}. De bloem gebruikt het donker als brandstof en gaat in de staf. Lyra vindt haar en samen kiezen ze de weg naar de Geode.\n\nGoed voor de game: Een veilige plek midden in gevaarlijk gebied. Het moerasdeel eindigt met een beloning en een nieuwe vaardigheid.",
+      "x": 24,
+      "y": 3530,
+      "width": 440,
+      "categoryId": "col-book",
+      "sourceTaskId": "",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-book-ch10",
+      "title": "Hoofdstuk 10: The Convergence of Ancient Power and Resolve",
+      "body": "Deel 2: The Path of the Ascendant Mage\n\nIn de @{Zone Sunken Forest} breekt de tijd en het bos toont Arlen en Lyra hun ergste herinneringen. Lyra vertelt over haar vernietigde buitenpost. Ze helpen elkaar en vinden de @{Item Earthsong}. Valerius ziet het licht en ze vluchten naar de @{Zone Ash Plains}.\n\nGoed voor de game: Een bos met een tijdsmechaniek en een companion-quest over Lyra's verleden. De Geode is een puzzel-baas.",
+      "x": 24,
+      "y": 3960,
+      "width": 440,
+      "categoryId": "col-book",
+      "sourceTaskId": "",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-book-ch11",
+      "title": "Hoofdstuk 11: Shedding the Doubts of the Clumsy Apprentice",
+      "body": "Deel 2: The Path of the Ascendant Mage\n\nArlen ziet weer Thornes werkplaats en een duister beeld van zichzelf (Shadow-Arlen). Lyra roept haar terug. Arlen aanvaardt haar angst en vernietigt de schaduw. Valerius stuurt constructs (@{Faction Citadel Constructs}); Arlen en Lyra vechten samen en lopen de @{Zone Ash Plains} in.\n\nGoed voor de game: Een baas van het innerlijke type en een groot vluchtgevecht tegen constructs.",
+      "x": 24,
+      "y": 4390,
+      "width": 440,
+      "categoryId": "col-book",
+      "sourceTaskId": "",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-book-ch12",
+      "title": "Hoofdstuk 12: Preparing for the Final Confrontation with Valerius",
+      "body": "Deel 2: The Path of the Ascendant Mage\n\nThorne en Lyra helpen Arlen in het heiligdom de Geode bij de staf te zetten. Het licht verraadt hen en Valerius stuurt schaduwen. Thorne blijft achter om het heiligdom te bewaken. Met een aardkrachttruc breken Arlen en Lyra door de verdediging. Het boek eindigt op de trap van de Obsidian Citadel (@{Zone Citadel Gates}).\n\nGoed voor de game: Een sluip-quest naar de Citadel met patrouilles en een poortgevecht: de opmaat naar de eindbaas.",
+      "x": 24,
+      "y": 4820,
+      "width": 440,
+      "categoryId": "col-book",
+      "sourceTaskId": "",
+      "mentionMode": "value"
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-book-ch01-1",
+      "from": "node-book-ch01",
+      "to": "node-npc-thorne",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch01-2",
+      "from": "node-book-ch01",
+      "to": "node-zone-workshop",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch01-3",
+      "from": "node-book-ch01",
+      "to": "node-item-core-staff",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch01-4",
+      "from": "node-book-ch01",
+      "to": "node-mq00",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-1-2",
+      "from": "node-book-ch01",
+      "to": "node-book-ch02",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch02-1",
+      "from": "node-book-ch02",
+      "to": "node-story-premise",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch02-2",
+      "from": "node-book-ch02",
+      "to": "node-mq01",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch02-3",
+      "from": "node-book-ch02",
+      "to": "node-npc-valerius",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-2-3",
+      "from": "node-book-ch02",
+      "to": "node-book-ch03",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch03-1",
+      "from": "node-book-ch03",
+      "to": "node-boss-skitter-pack",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch03-2",
+      "from": "node-book-ch03",
+      "to": "node-zone-road",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch03-3",
+      "from": "node-book-ch03",
+      "to": "node-story-act1",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-3-4",
+      "from": "node-book-ch03",
+      "to": "node-book-ch04",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch04-1",
+      "from": "node-book-ch04",
+      "to": "node-zone-peaks",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch04-2",
+      "from": "node-book-ch04",
+      "to": "node-zone-slyph-lab",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch04-3",
+      "from": "node-book-ch04",
+      "to": "node-mq03",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-4-5",
+      "from": "node-book-ch04",
+      "to": "node-book-ch05",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch05-1",
+      "from": "node-book-ch05",
+      "to": "node-boss-slyph-trial",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch05-2",
+      "from": "node-book-ch05",
+      "to": "node-mq04",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch05-3",
+      "from": "node-book-ch05",
+      "to": "node-item-sunstone",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-5-6",
+      "from": "node-book-ch05",
+      "to": "node-book-ch06",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch06-1",
+      "from": "node-book-ch06",
+      "to": "node-unlock-sunflare",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch06-2",
+      "from": "node-book-ch06",
+      "to": "node-story-act2",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-6-7",
+      "from": "node-book-ch06",
+      "to": "node-book-ch07",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch07-1",
+      "from": "node-book-ch07",
+      "to": "node-zone-shadowfen",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch07-2",
+      "from": "node-book-ch07",
+      "to": "node-mq05",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch07-3",
+      "from": "node-book-ch07",
+      "to": "node-story-act3",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-7-8",
+      "from": "node-book-ch07",
+      "to": "node-book-ch08",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch08-1",
+      "from": "node-book-ch08",
+      "to": "node-npc-lyra",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch08-2",
+      "from": "node-book-ch08",
+      "to": "node-boss-mire-reflection",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch08-3",
+      "from": "node-book-ch08",
+      "to": "node-unlock-mist-listening",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-8-9",
+      "from": "node-book-ch08",
+      "to": "node-book-ch09",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch09-1",
+      "from": "node-book-ch09",
+      "to": "node-item-moonpetal",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch09-2",
+      "from": "node-book-ch09",
+      "to": "node-zone-moonpetal",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch09-3",
+      "from": "node-book-ch09",
+      "to": "node-mq07",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-9-10",
+      "from": "node-book-ch09",
+      "to": "node-book-ch10",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch10-1",
+      "from": "node-book-ch10",
+      "to": "node-zone-sunken-forest",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch10-2",
+      "from": "node-book-ch10",
+      "to": "node-item-earthsong",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch10-3",
+      "from": "node-book-ch10",
+      "to": "node-side-lyra",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-10-11",
+      "from": "node-book-ch10",
+      "to": "node-book-ch11",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch11-1",
+      "from": "node-book-ch11",
+      "to": "node-boss-mirror-doubt",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch11-2",
+      "from": "node-book-ch11",
+      "to": "node-mq11",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch11-3",
+      "from": "node-book-ch11",
+      "to": "node-story-act4",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-11-12",
+      "from": "node-book-ch11",
+      "to": "node-book-ch12",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch12-1",
+      "from": "node-book-ch12",
+      "to": "node-zone-citadel-gates",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch12-2",
+      "from": "node-book-ch12",
+      "to": "node-mq12",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    },
+    {
+      "id": "edge-book-ch12-3",
+      "from": "node-book-ch12",
+      "to": "node-npc-valerius",
+      "fromSide": "out",
+      "toSide": "in",
+      "label": ""
+    }
+  ],
+  "tags": []
+}

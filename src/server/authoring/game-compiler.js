@@ -12,9 +12,10 @@ import { portalSettingsValues } from "../../shared/authoring/kinds/portal.js";
 import { chatValues } from "../../shared/authoring/kinds/chat.js";
 import { hasOwnSteps, questGraphIssues, questStartIssues, questRepeatOf, questStartMode, questSteps, worldEventEvery, worldEventLasts } from "../../../apps/web/public/shared/quest-graph.js";
 import { areaPointsMeters, areaSoort } from "../../shared/authoring/kinds/area.js";
+import { routePointsOf } from "../../shared/authoring/route-points.js";
 
 export const GAME_SECTION_VERSION = "gk-game-1";
-export const GAME_DOC_KINDS = Object.freeze(["currency", "player_class", "hud_settings", "minimap_settings", "combat_settings", "network_settings", "water_walk_settings", "party_settings", "chat_settings", "balance_settings", "respawn_settings", "equipment_settings", "economy_settings", "trade_settings", "npc", "quest", "recipe", "profession", "placed_model", "world_flag", "portal", "portal_settings"]);
+export const GAME_DOC_KINDS = Object.freeze(["currency", "player_class", "hud_settings", "minimap_settings", "combat_settings", "network_settings", "water_walk_settings", "party_settings", "chat_settings", "balance_settings", "respawn_settings", "equipment_settings", "economy_settings", "trade_settings", "npc", "quest", "recipe", "profession", "placed_model", "world_flag", "portal", "portal_settings", "lore_entry"]);
 
 const idFromRef = (ref) => String(ref || "").replace(/^[a-z_]+:/, "");
 const kindOfRef = (ref) => String(ref || "").split(":")[0];
@@ -149,6 +150,9 @@ export function compileGameSection(documents, options = {}) {
       modelScaleBp: doc.body.modelScaleBp || 10000, idleClip: doc.body.idleClip || null, greeting: doc.body.greeting || "",
       x: doc.body.x, y: Number(doc.body.y) || 0, z: doc.body.z, rotationY: Number(doc.body.rotationY) || 0,
       crafting: doc.body.crafting === true, market: doc.body.market === true, talkRange: Number(doc.body.talkRange) > 0 ? Number(doc.body.talkRange) : 2.5,
+      openHours: ["day", "night"].includes(doc.body.openHours) ? doc.body.openHours : "always",
+      // Werkbank Fase 10: loopt hij rond (de actor-runtime laat hem lopen), dan staat hij niet als blok op zijn plek.
+      walks: doc.body.walkMode === "wander" && !doc.body.flagRef,
       craftProfessionId: doc.body.crafting === true ? professionIdOf(doc, doc.body.craftProfessionRef, label + " (werkplek voor)") : null,
       shopCurrencyId: doc.body.shopCurrencyRef ? idFromRef(doc.body.shopCurrencyRef) : null,
       // Fase 9 herstel: een recept in de winkel (kopen = leren).
@@ -293,8 +297,24 @@ export function compileGameSection(documents, options = {}) {
       learn, learnPrice: Number.isInteger(doc.body.learnPrice) ? doc.body.learnPrice : 50
     };
   });
+  const flyOf = (body) => {
+    const clamp = (value, fallback, min, max) => Math.min(max, Math.max(min, Number.isFinite(Number(value)) ? Number(value) : fallback));
+    const fly = { count: Math.round(clamp(body.flyCount, 3, 1, 12)), radius: clamp(body.flyRadius, 20, 3, 150), height: clamp(body.flyHeight, 25, 2, 200), speed: clamp(body.flySpeed, 6, 1, 60) };
+    // Werkbank Fase 10 (Kevin 16-11): een getekende vliegroute (minstens 2 punten, anders rondjes) en een geluid.
+    const route = body.flyMode === "route" ? routePointsOf(body.flyRoute) : [];
+    if (route.length >= 2) Object.assign(fly, { route, loop: body.flyEnd !== "back" });
+    if (body.flySound) fly.soundAssetId = body.flySound;
+    return fly;
+  };
+  // Werkbank Fase 10 (10b): het verhaal op een model, alleen als die kaart bestaat (een vliegend model lees je niet).
+  const loreOf = (doc) => {
+    if (!doc.body.loreRef || doc.body.fly === true) return null;
+    return byKey.get(doc.body.loreRef)?.kind === "lore_entry" ? idFromRef(doc.body.loreRef) : null;
+  };
+  for (const doc of of("placed_model")) if (doc.body.loreRef) needRef(doc, doc.body.loreRef, "Model " + doc.body.displayName + " (verhaal om te lezen)");
   const placedModels = of("placed_model").map((doc) => {
     needAsset(doc, doc.body.modelAssetId, ["model"], "Model " + doc.body.displayName);
+    if (doc.body.fly === true && doc.body.flySound) needAsset(doc, doc.body.flySound, ["audio"], "Model " + doc.body.displayName + " (geluid bij vliegen)");
     return {
       placedModelId: doc.body.placedModelId, displayName: doc.body.displayName, modelAssetId: doc.body.modelAssetId,
       scale: Number(doc.body.scale) || 1, rotationY: Number(doc.body.rotationY) || 0, solid: doc.body.solid === true,
@@ -303,9 +323,16 @@ export function compileGameSection(documents, options = {}) {
       // Fase 9: een model als werkplek (aambeeld, oven).
       crafting: doc.body.crafting === true,
       craftProfessionId: doc.body.crafting === true ? professionIdOf(doc, doc.body.craftProfessionRef, "Model " + doc.body.displayName + " (werkplek voor)") : null,
-      x: doc.body.x, y: Number(doc.body.y) || 0, z: doc.body.z, ...flagGateOf(doc.body)
+      x: doc.body.x, y: Number(doc.body.y) || 0, z: doc.body.z, ...flagGateOf(doc.body),
+      // Werkbank Fase 10: vliegt rondjes (vogels, draak). Alleen om naar te kijken.
+      ...(doc.body.fly === true ? { fly: flyOf(doc.body) } : {}),
+      // Werkbank Fase 10 (10b): een verhaal om te lezen (een vliegend model lees je niet).
+      ...(loreOf(doc) ? { loreId: loreOf(doc) } : {})
     };
   });
+  // Werkbank Fase 10 (10b): verhalen (📚 kennisboek). De tekst gaat naar de game; de server kent ze om het lezen te bewaren.
+  const lore = of("lore_entry").map((doc) => ({ loreId: doc.body.loreId, title: doc.body.displayName, text: String(doc.body.text || ""),
+    category: String(doc.body.category || "").trim() || "Verhalen" }));
   // Portals (8-11): plekken om naartoe te reizen (zelfde wereld) en om na doodgaan terug te komen.
   const portals = of("portal").map((doc) => {
     const label = "Portal " + doc.body.displayName;
@@ -356,6 +383,7 @@ export function compileGameSection(documents, options = {}) {
     server: Object.assign({ schema: GAME_SECTION_VERSION, currencies, player, hud, minimap, combat, network, waterWalk, party, chat, npcs, quests, recipes, placedModels },
       professions.length ? { professions } : {},
       questAreas.length ? { questAreas } : {}, flags.length ? { flags } : {}, portals.length || portalDoc ? { portals, portalRules } : {},
+      lore.length ? { lore } : {},
       balanceDoc ? { balance: balanceValues(balanceDoc.body) } : {},
       respawnDoc ? { respawn: settingsValues("respawn_settings", respawnDoc.body) } : {},
       equipmentDoc ? { equipment: settingsValues("equipment_settings", equipmentDoc.body) } : {},

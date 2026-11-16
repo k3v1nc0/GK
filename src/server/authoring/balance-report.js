@@ -10,6 +10,7 @@ import { economyValues, shopBuyPrice, shopSellPrice } from "../../shared/authori
 import { cleanXpCurve, statAtLevel, xpCostAt } from "../../../apps/web/public/shared/level-math.js";
 import { computeDamage } from "../../../apps/web/public/shared/combat-math.js";
 import { questRepeatOf, questStartMode, questSteps } from "../../../apps/web/public/shared/quest-graph.js";
+import { BIBLE_KIND_LABELS, bibleGameIndex, bibleLinks } from "../../../apps/web/public/shared/bible-links.js";
 
 // Aannames voor "per uur" (staan ook in het rapport, zodat Kevin ze kan lezen).
 export const FIGHT_SECONDS = 15;
@@ -23,7 +24,7 @@ const idOfRef = (ref) => String(ref || "").replace(/^[a-z_]+:/, "");
 const round1 = (value) => Math.round(value * 10) / 10;
 const int = (value, fallback = 0) => (Number.isFinite(Number(value)) ? Math.round(Number(value)) : fallback);
 
-export function balanceReport(documents, { buildErrors = [] } = {}) {
+export function balanceReport(documents, { buildErrors = [], bible = null } = {}) {
   const active = (Array.isArray(documents) ? documents : []).filter((doc) => doc && !doc.archived && CANONICAL_KINDS[doc.kind]);
   const byKey = new Map(active.map((doc) => [doc.docKey, doc]));
   const of = (kind) => active.filter((doc) => doc.kind === kind);
@@ -470,7 +471,21 @@ export function balanceReport(documents, { buildErrors = [] } = {}) {
     counts: { red: findings.filter((finding) => finding.severity === "red").length, orange: findings.filter((finding) => finding.severity === "orange").length },
     xpByArea, strength, classes: classRows.map((cls) => ({ docKey: cls.docKey, name: cls.name })),
     professions: professionsReport, ingredientSources, gearByLevel,
-    balance, economy, maxLevel, assumption: BALANCE_ASSUMPTION
+    balance, economy, maxLevel, assumption: BALANCE_ASSUMPTION,
+    bible: bibleSummary(bible, documents)
+  };
+}
+
+// Werkbank Fase 10: wat de Game Bible nog mist in de game (en andersom). Geen rood of oranje: de bijbel loopt
+// vaak voor op de game. Alleen een blok in Balans met aantallen en de eerste namen.
+export function bibleSummary(board, documents) {
+  if (!board || !Array.isArray(board.nodes) || !board.nodes.length) return null;
+  const links = bibleLinks(board, bibleGameIndex(documents));
+  const label = (kinds) => (kinds || []).map((kind) => BIBLE_KIND_LABELS[kind] || kind).join("/");
+  return {
+    counts: links.counts,
+    missing: links.missing.slice(0, 40).map((entry) => ({ name: entry.name, kind: label(entry.kinds), lost: entry.lost })),
+    extra: links.extra.slice(0, 40).map((entry) => ({ docKey: entry.docKey, name: entry.name, kind: label([entry.kind]) }))
   };
 }
 

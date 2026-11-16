@@ -5,6 +5,8 @@ import { partyRulesFromProject } from "./runtime/party-runtime.js";
 import { economyValues, shopBuyPrice, shopSellPrice } from "../shared/authoring/kinds/economy.js";
 import { tradeValues } from "../shared/authoring/kinds/trade.js";
 import { professionText } from "./node03-runtime-service.js";
+import { dayNightState } from "../../apps/web/public/shared/day-night.js";
+import { npcLivePosition } from "./runtime/npc-live-positions.js";
 
 function now() {
   return new Date().toISOString();
@@ -221,9 +223,11 @@ function linkedEntityForComponent(zonePackage, component) {
 function positionedComponent(ctx, component) {
   const entity = linkedEntityForComponent(ctx.zonePackage, component);
   const entityPosition = entity?.transform?.position || {};
-  const x = safeNumber(entityPosition.x ?? entity?.x ?? component?.x, safeNumber(ctx.position?.x, 0));
+  // Werkbank Fase 10: een NPC die rondloopt: de afstand telt vanaf waar hij nu staat.
+  const live = npcLivePosition(ctx.worldId, entity?.entityId || component?.linkedEntityId);
+  const x = live ? live.x : safeNumber(entityPosition.x ?? entity?.x ?? component?.x, safeNumber(ctx.position?.x, 0));
   const y = safeNumber(entityPosition.y ?? entity?.y ?? component?.y, 0);
-  const z = safeNumber(entityPosition.z ?? entity?.z ?? component?.z, safeNumber(ctx.position?.z, 0));
+  const z = live ? live.z : safeNumber(entityPosition.z ?? entity?.z ?? component?.z, safeNumber(ctx.position?.z, 0));
   const distance = positionDistance(ctx.position, { x, z });
   const range = Math.max(1, safeNumber(component?.range || component?.distance || 5, 5));
   return Object.assign({}, component, {
@@ -655,8 +659,11 @@ export class Node05EconomyRuntimeService {
     const catalogs = this.vendorCatalogs(ctx);
     const vendors = this.vendors(ctx).map((vendor) => {
       const catalog = catalogs[vendor.vendorCatalogRef] || {};
-      const offers = (Array.isArray(catalog.offers) ? catalog.offers : []).map((offer) => this.vendorOfferSummary(ctx, vendor, offer));
+      const closed = this.vendorClosedText(ctx, vendor);
+      const offers = (Array.isArray(catalog.offers) ? catalog.offers : []).map((offer) => this.vendorOfferSummary(ctx, vendor, offer))
+        .map((offer) => (closed ? Object.assign(offer, { canBuy: false, canSell: false }) : offer));
       return Object.assign({}, vendor, {
+        closed: closed || null,
         displayName: vendor.linkedEntity?.label || catalog.displayName || vendor.vendorId,
         catalogId: catalog.id || vendor.vendorCatalogRef || null,
         currencyRef: vendorCurrency(ctx.catalogs, catalog, null),
@@ -664,7 +671,7 @@ export class Node05EconomyRuntimeService {
         // Fase 8: wat jij hier verkocht en voor dezelfde prijs kunt terugkopen.
         buyBack: this.buyBackRows(ctx, vendor),
         // Fase 8 herstel: wat deze winkel jou betaalt voor wat er in je tas zit (alleen als je bij de winkel staat).
-        sells: vendor.inRange === true ? this.bagSellList(ctx, vendor) : []
+        sells: vendor.inRange === true && !closed ? this.bagSellList(ctx, vendor) : []
       });
     });
     return {
@@ -672,6 +679,18 @@ export class Node05EconomyRuntimeService {
       economy: economyRules(ctx.project),
       vendors
     };
+  }
+
+  // Werkbank Fase 10 (keuze van Kevin 15-11): een winkel kan alleen overdag of alleen 's nachts open zijn. "" = open.
+  vendorClosedText(ctx, vendor) {
+    const hours = vendor?.openHours || "always";
+    const cfg = ctx.project?.dayNight;
+    if (hours === "always" || !cfg) return "";
+    if (!Number(cfg.nightMinutes)) return hours === "night" ? "Deze winkel is alleen 's nachts open, maar het wordt nooit nacht (Instellingen > Wereld)." : "";
+    const clock = dayNightState(Date.now(), cfg);
+    if (hours === "day" ? clock.isDay : !clock.isDay) return "";
+    const minutes = Math.max(1, Math.ceil(clock.msToSwitch / 60000));
+    return "De winkel is dicht. Hij gaat open als het " + (hours === "day" ? "dag" : "nacht") + " wordt (over " + minutes + " min).";
   }
 
   vendorOfferSummary(ctx, vendor, offer) {
@@ -1139,6 +1158,8 @@ export class Node05EconomyRuntimeService {
       throw error;
     }
     this.assertInRange(vendor, "Vendor");
+    const closed = this.vendorClosedText(ctx, vendor);
+    if (closed) throw httpError(409, closed);
     const catalog = this.vendorCatalogs(ctx)[vendor.vendorCatalogRef] || {};
     const offer = (Array.isArray(catalog.offers) ? catalog.offers : []).find(function (entry) {
       return entry.offerId === safeString(payload.offerId || payload.offer_id, "");
@@ -1206,6 +1227,8 @@ export class Node05EconomyRuntimeService {
     const vendor = this.findVendor(ctx, payload.vendorId || payload.vendor_id);
     if (!vendor) throw httpError(404, "Vendor niet gevonden in deze zone.");
     this.assertInRange(vendor, "Vendor");
+    const closed = this.vendorClosedText(ctx, vendor);
+    if (closed) throw httpError(409, closed);
     // Je verkoopt wat er in je tas zit (itemId). Een oude knop stuurt nog een offerId: dan het item van die waar.
     let itemId = safeString(payload.itemId || payload.item_id, "");
     if (!itemId) {
@@ -1279,6 +1302,8 @@ export class Node05EconomyRuntimeService {
       throw error;
     }
     this.assertInRange(vendor, "Vendor");
+    const closed = this.vendorClosedText(ctx, vendor);
+    if (closed) throw httpError(409, closed);
     const entryId = safeString(payload.entryId || payload.entry_id, "");
     const row = this.db.prepare(`
       SELECT * FROM vendor_buyback
