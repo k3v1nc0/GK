@@ -13688,7 +13688,8 @@ function resolveChunkDebugCenter(policy) {
     const base = num(worldData?.ground?.y, 0);
     const pts = raw.map(function (p) {
       const h = Number.isFinite(Number(p?.h)) ? Number(p.h) : 0;
-      return { x: num(p?.x, 0), z: num(p?.z, 0), y: base + terrainLift(p?.x, p?.z) + h, air: h > 0.5, waitS: Math.max(0, num(p?.waitS, 0)), clip: String(p?.clip || "") };
+      return { x: num(p?.x, 0), z: num(p?.z, 0), y: base + terrainLift(p?.x, p?.z) + h, air: h > 0.5, waitS: Math.max(0, num(p?.waitS, 0)), clip: String(p?.clip || ""),
+        say: String(p?.say || ""), soundUrl: p?.sound ? assetById(worldData, p.sound)?.sourcePath || "" : "" };
     });
     const order = pts.map(function (_, i) { return i; });
     if (flyer.loop === false) for (let i = pts.length - 2; i >= 1; i -= 1) order.push(i);
@@ -13736,7 +13737,8 @@ function resolveChunkDebugCenter(policy) {
           // Vliegt het model achteruit of opzij? Dan draait Kevin het met Draaien bij.
           turn: num(flyer.rotationY, 0) * Math.PI / 180,
           plan: plan, lag: i * 1.2, dx: i ? (rand() - 0.5) * 3 : 0, dz: i ? (rand() - 0.5) * 3 : 0, dy: i ? rand() * 1.5 : 0, heading: 0, anim: "",
-          soundUrl: i === 0 ? soundUrl : null, soundKey: "flyer:" + String(flyer.id || flyerRoots.length)
+          soundUrl: i === 0 ? soundUrl : null, soundKey: "flyer:" + String(flyer.id || flyerRoots.length),
+          lead: i === 0, name: String(flyer.name || ""), legIndex: -1
         };
         content.add(root);
         flyerRoots.push(root);
@@ -13759,6 +13761,14 @@ function resolveChunkDebugCenter(policy) {
       if (f.plan) {
         const time = (((t - f.lag) % f.plan.period) + f.plan.period) % f.plan.period;
         const leg = f.plan.legs.find(function (entry) { return time < entry.end; }) || f.plan.legs[f.plan.legs.length - 1];
+        // Kevin 16-11: aangekomen op een punt = zijn zin en zijn geluid (alleen de eerste van de groep; niet bij het eerste beeld).
+        const legIndex = f.plan.legs.indexOf(leg);
+        if (f.lead && legIndex !== f.legIndex) {
+          if (f.legIndex >= 0 && (leg.a.say || leg.a.soundUrl) && flyerEventQueue.length < 8) {
+            flyerEventQueue.push({ key: f.soundKey, name: f.name, say: leg.a.say, soundUrl: leg.a.soundUrl, x: leg.a.x, y: leg.a.y, z: leg.a.z });
+          }
+          f.legIndex = legIndex;
+        }
         if (time < leg.waitEnd) {
           root.position.set(leg.a.x + f.dx, leg.a.y + f.dy, leg.a.z + f.dz);
           flyerAnimation(root, f, leg.a.clip ? "clip:" + leg.a.clip : "idle");
@@ -13778,6 +13788,9 @@ function resolveChunkDebugCenter(policy) {
       root.rotation.y = angle + Math.PI + f.turn;
     }
   }
+  // Kevin 16-11: wat vliegers net op een routepunt deden (zin, geluid); de game haalt het op en leegt de lijst.
+  const flyerEventQueue = [];
+  function flyerEvents() { return flyerEventQueue.splice(0, flyerEventQueue.length); }
   // Kevin 16-11: waar vliegers met een geluid nu zijn (één geluid per groep): [{ key, url, x, y, z }].
   function flyerSounds() {
     const out = [];
@@ -16278,6 +16291,8 @@ function resolveChunkDebugCenter(policy) {
       // Een NPC kan tegelijk een praat-, winkel- en crafting-target zijn. Die
       // interacties blijven allemaal actief, maar dezelfde mesh krijgt één naam.
       const attachedEntityId = runtimeTargetAttachedEntityId(target);
+      // Kevin 16-11: een NPC die rondloopt is verborgen op zijn vaste plek; daar hoort dan ook geen naam (die loopt met hem mee).
+      if (attachedEntityId && escortHiddenEntityIds.has(attachedEntityId)) continue;
       const placeKey = "place:" + name.toLocaleLowerCase() + ":"
         + Math.round(num(root.position?.x, 0) * 5) + ":"
         + Math.round(num(root.position?.z, 0) * 5);
@@ -19800,6 +19815,7 @@ function resolveChunkDebugCenter(policy) {
     pickRoadEditor: pickRoadEditor,
     setRouteEditorOverlay: setRouteEditorOverlay,
     flyerSounds: flyerSounds,
+    flyerEvents: flyerEvents,
     pickRouteEditor: pickRouteEditor,
     clearTerrainEditorOverlay: clearTerrainEditorOverlay,
     setScatterEditorOverlay: setScatterEditorOverlay,

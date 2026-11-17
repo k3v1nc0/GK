@@ -173,7 +173,7 @@ import { ActorRuntime } from "../src/server/runtime/actor-runtime.js";
 import { compileActorSection, npcChatterOf, npcWalkerOf } from "../src/server/authoring/actor-compiler.js";
 import { npcLivePosition } from "../src/server/runtime/npc-live-positions.js";
 
-function walkHarness(playerAt, onlyWalkers = null) {
+function walkHarness(playerAt, onlyWalkers = null, sectionPatch = null) {
   const section = {
     abilities: { bite: { displayName: "Beet", abilityKind: "damage", baseDamage: 5, rangeMm: 1500, cooldownMs: 1500 } },
     archetypes: {
@@ -185,6 +185,7 @@ function walkHarness(playerAt, onlyWalkers = null) {
     npcWalkers: [{ npcId: "boer", x: 0, z: 40, rotationY: 0, radiusM: 6, speedMmPerS: 1200, stopM: 3.5 }]
   };
   if (onlyWalkers) Object.assign(section, { spawns: [], npcWalkers: onlyWalkers });
+  if (sectionPatch) Object.assign(section, sectionPatch);
   const db = new DatabaseSync(":memory:");
   db.exec(fs.readFileSync("db/migrations/015_actor_runtime_state.sql", "utf8").split("-- Verhuizen")[0]);
   const players = [{ player_id: "p1", world_id: "w", x: playerAt.x, z: playerAt.z, current_area_id: null }];
@@ -235,13 +236,26 @@ test("vijand rondwandelen: blijft binnen de straal; NPC loopt rond en blijft sta
   assert.ok(walkerMoved > 0.5, "de boer loopt");
   assert.ok(sent.some((message) => message.type === "actor:snapshot" && message.actors.some((entry) => entry.k === "n" && entry.d === "boer")), "de game krijgt de lopende NPC");
   assert.deepEqual(npcLivePosition("w", "npc_entity.boer"), { x: walker.x, z: walker.z }, "winkel en quest rekenen vanaf waar hij nu staat");
+  // Kevin 16-11: langslopen laat hem niet stilstaan, alleen praten (de client meldt "npc:talk" om de 2 s).
+  let passMoved = 0;
+  for (let i = 0; i < 200; i += 1) {
+    players[0].x = walker.x + 2; players[0].z = walker.z;
+    const before = { x: walker.x, z: walker.z };
+    now = ticks(runtime, now, 1);
+    passMoved += Math.hypot(walker.x - before.x, walker.z - before.z);
+  }
+  assert.ok(passMoved > 0.3, "speler loopt langs: hij loopt gewoon door");
   players[0].x = walker.x + 2; players[0].z = walker.z;
-  now = ticks(runtime, now, 3);
-  const standX = walker.x;
-  now = ticks(runtime, now, 50);
-  assert.equal(walker.x, standX, "speler bij hem: hij blijft staan");
+  assert.equal(runtime.setNpcTalk("p1", "boer", now), true);
+  assert.equal(runtime.setNpcTalk("p1", "bestaat-niet", now), false);
+  now = ticks(runtime, now, 1);
+  const stand = { x: walker.x, z: walker.z };
+  now = ticks(runtime, now, 40);
+  assert.deepEqual({ x: walker.x, z: walker.z }, stand, "speler praat met hem: hij blijft staan");
   assert.equal(walker.anim, "idle");
   assert.ok(Math.abs(walker.ry - Math.PI / 2) < 0.1, "en kijkt de speler aan");
+  now = ticks(runtime, now, 250);
+  assert.ok(Math.hypot(walker.x - stand.x, walker.z - stand.z) > 0.1, "klaar met praten: hij loopt verder");
 });
 
 test("lopen in de editor: NPC 'Loopt rond' (niet met vlag), vijand-plek rondwandelen, model dat rondjes vliegt", () => {
@@ -453,6 +467,8 @@ test("route lopen: NPC loopt de punten af met zijn snelheid, wacht met de animat
   let now = ticks(runtime, 8000000, 1);
   const walker = runtime.walkers.get("npcw:npc.w");
   assert.ok(walker, "de wachter loopt");
+  assert.ok(walker.pauseUntilMs > now - 100 && walker.pauseUntilMs <= now + 5000, "eerst een eigen wachttijd (niet allemaal tegelijk)");
+  walker.pauseUntilMs = 0;
   now = ticks(runtime, now, 31);
   assert.ok(Math.abs(walker.x - 6) < 0.01 && Math.abs(walker.y - 2) < 0.01, "6 m in 3 s (2 m/s), op 2 m hoogte");
   const waiting = sent.filter((message) => message.type === "actor:snapshot").flatMap((message) => message.actors).filter((entry) => entry.d === "npc.w").pop();
@@ -461,10 +477,11 @@ test("route lopen: NPC loopt de punten af met zijn snelheid, wacht met de animat
   assert.ok(walker.x < 6, "na het wachten loopt hij terug (omkeren)");
   assert.equal(walker.waitClip, null);
   players[0].x = walker.x + 1; players[0].z = walker.z;
+  assert.equal(runtime.setNpcTalk("p1", "npc.w", now), true);
   now = ticks(runtime, now, 2);
   const standX = walker.x;
   now = ticks(runtime, now, 10);
-  assert.equal(walker.x, standX, "speler bij hem: hij blijft staan");
+  assert.equal(walker.x, standX, "speler praat met hem: hij blijft staan");
 });
 
 test("vliegroute en geluid: route met hoogte per punt naar de game; geluid dichtbij harder, hooguit 4, uit = stil", () => {
@@ -487,4 +504,127 @@ test("vliegroute en geluid: route met hoogte per punt naar de game; geluid dicht
   assert.equal(sounds.playingCount(), 0, "Muziek en geluid uit = stil");
   const runtimeSrc = fs.readFileSync("apps/web/public/shared/world-runtime.js", "utf8");
   assert.ok(runtimeSrc.includes("function flyerRoutePlan") && runtimeSrc.includes("function pickRouteEditor"), "vliegers volgen de route; de editor tekent hem");
+});
+
+// ---- Herstelronde 16-11 (handtest A-I) ----
+import { validateClientMessage } from "../apps/web/public/shared/protocol-v1.js";
+
+test("herstel 16-11: vrienden, dempen, melden en 'ik praat met je' sluiten de verbinding niet meer", () => {
+  const ok = (message) => validateClientMessage(JSON.stringify(message)).ok;
+  assert.equal(ok({ type: "friend:add", payload: { name: "Kevin" } }), true, "vriend toevoegen op naam");
+  assert.equal(ok({ type: "friend:accept", payload: { playerId: "p2" } }), true);
+  assert.equal(ok({ type: "friend:remove", payload: { playerId: "p2" } }), true);
+  assert.equal(ok({ type: "friend:accept", payload: {} }), false, "goedkeuren zonder speler = fout");
+  assert.equal(ok({ type: "chat:mute", payload: { playerId: "p2" } }), true);
+  assert.equal(ok({ type: "chat:report", payload: { playerId: "p2", reason: "spam" } }), true);
+  assert.equal(ok({ type: "npc:talk", payload: { npcId: "npc.boer" } }), true);
+  assert.equal(ok({ type: "npc:talk", payload: {} }), false);
+  const mmo = fs.readFileSync("src/server/mmo-service.js", "utf8");
+  assert.match(mmo, /message\.type === "npc:talk"[\s\S]{0,120}setNpcTalk\(connection\.player\.id, message\.payload\.npcId/);
+});
+
+test("herstel 16-11 (A): winkel, markt en werkplek elk hun eigen openingstijd", () => {
+  const docs = [
+    doc("profession", { professionId: "prof.smid", displayName: "Smeden" }, "profession:prof.smid"),
+    doc("npc", { npcId: "npc.smid", displayName: "Smid", openHours: "day", marketHours: "night", craftHours: "always", crafting: true, market: true }, "npc:npc.smid")
+  ];
+  const section = compileGameSection(docs, {});
+  const npc = section.server.npcs.find((entry) => entry.npcId === "npc.smid");
+  assert.deepEqual([npc.openHours, npc.marketHours, npc.craftHours], ["day", "night", "always"]);
+  for (const key of ["marketHours", "craftHours"]) assert.deepEqual(CANONICAL_KINDS.npc.fields[key].options, ["always", "day", "night"]);
+  assert.deepEqual(CANONICAL_KINDS.placed_model.fields.craftHours.ui.when, { key: "crafting", is: [true] });
+  const svc = Object.create(Node05EconomyRuntimeService.prototype);
+  const isDayNow = dayNightState(Date.now(), { dayMinutes: 60, nightMinutes: 60 }).isDay;
+  const ctx = { project: { dayNight: { dayMinutes: 60, nightMinutes: 60, nightLightPct: 35 } } };
+  assert.match(svc.vendorClosedText(ctx, { openHours: isDayNow ? "night" : "day" }, "De markt"), /^De markt is dicht/);
+  const src = fs.readFileSync("src/server/node05-economy-runtime-service.js", "utf8");
+  assert.equal((src.match(/this\.vendorClosedText\(ctx, station, "De werkplek"\)/g) || []).length, 2, "recept leren en maken");
+  assert.equal((src.match(/this\.vendorClosedText\(ctx, access, "De markt"\)/g) || []).length, 2, "aanbieden en kopen op de markt");
+});
+
+test("herstel 16-11 (B, D): vijand loopt een route met hoogte, zegt iets en maakt geluid; groepje loopt mee, vecht samen, draak landt", () => {
+  const route = [{ x: 0, z: 0 }, { x: 40, z: 0, h: 20, waitS: 30, clip: "Roar", say: "Ik ga je afmaken!", sound: "asset.brul" }];
+  const docs = [
+    doc("actor_archetype", { actorId: "draak", displayName: "Draak", abilityRef: "ability:bite" }, "actor_archetype:draak"),
+    doc("actor_archetype", { actorId: "wolf", displayName: "Wolf", abilityRef: "ability:bite" }, "actor_archetype:wolf"),
+    doc("ability", { abilityId: "bite", displayName: "Beet" }, "ability:bite"),
+    doc("actor_spawn", { spawnId: "s.draak", archetypeRef: "actor_archetype:draak", xMm: 0, zMm: 0, walkMode: "route", route, routeEnd: "loop", walkSpeed: 10,
+      walkSound: "asset.vleugels", followers: [{ ref: "actor_archetype:wolf", count: 3 }] }, "actor_spawn:s.draak"),
+    doc("actor_spawn", { spawnId: "s.oud", archetypeRef: "actor_archetype:wolf", xMm: 90000, zMm: 0, wanderRadiusMm: 4000 }, "actor_spawn:s.oud"),
+    doc("actor_spawn", { spawnId: "s.stil", archetypeRef: "actor_archetype:wolf", xMm: 95000, zMm: 0, walkMode: "stand", wanderRadiusMm: 4000 }, "actor_spawn:s.stil")
+  ];
+  const assetInfo = new Map([["asset.brul", { assetType: "audio", sourcePath: "/a/brul.ogg" }], ["asset.vleugels", { assetType: "audio", sourcePath: "/a/vleugels.ogg" }]]);
+  const compiled = compileActorSection(docs, { assetInfo });
+  const spawns = compiled.server.spawns;
+  const lead = spawns.find((spawn) => spawn.spawnId === "s.draak");
+  assert.equal(lead.route.length, 2);
+  assert.equal(lead.route[1].say, "Ik ga je afmaken!");
+  assert.equal(lead.routeSpeedMmPerS, 10000);
+  assert.equal(lead.packLeader, true);
+  const pack = spawns.filter((spawn) => spawn.leaderSpawnId === "s.draak");
+  assert.equal(pack.length, 3, "3 wolven in het groepje");
+  assert.ok(pack.every((spawn) => spawn.actorId === "wolf" && Math.abs(Math.hypot(spawn.followMm[0], spawn.followMm[1]) - 2500) < 2), "in een kring van 2,5 m");
+  assert.equal(spawns.find((spawn) => spawn.spawnId === "s.oud").wanderRadiusMm, 4000, "een oudere plek met een straal wandelt nog steeds");
+  assert.equal(spawns.find((spawn) => spawn.spawnId === "s.stil").wanderRadiusMm, undefined, "Staat stil = staat stil");
+  assert.equal(compiled.client.assets["asset.brul"].url, "/a/brul.ogg");
+  assert.equal(compiled.client.spawnSounds["s.draak"], "asset.vleugels");
+  assert.deepEqual(CANONICAL_KINDS.actor_spawn.fields.walkMode.options, ["stand", "wander", "route"]);
+  assert.equal(validateDocument("actor_spawn", { spawnId: "s.x", archetypeRef: "actor_archetype:wolf", xMm: 0, zMm: 0, route }).valid !== false, true);
+
+  const def = (actorId) => ({ actorId, displayName: actorId, behavior: "defensive", aggroRangeMm: 8000, leashRangeMm: 60000, moveSpeedMmPerS: 3000, radiusMm: 500, healthMax: 50, attackPower: 5, armor: 0, abilityId: "bite", respawnMs: 30000 });
+  const { runtime, players, sent } = walkHarness({ x: 40, z: 50 }, null, { spawns: spawns.filter((spawn) => spawn.spawnId === "s.draak" || spawn.leaderSpawnId), archetypes: { draak: def("draak"), wolf: def("wolf") }, npcWalkers: [] });
+  let now = ticks(runtime, 9000000, 1);
+  const draak = runtime.actors.get("actor:s.draak");
+  now = ticks(runtime, now, 60);
+  assert.ok(Math.hypot(draak.x - 40, draak.z) < 0.01 && Math.abs(draak.y - 20) < 0.01, "op punt 2, 20 m hoog");
+  assert.equal(runtime.encode(draak).c, "Roar", "wacht met zijn eigen animatie");
+  assert.ok(sent.some((m) => m.type === "actor:event" && m.e === "say" && m.text === "Ik ga je afmaken!" && m.rt === 1), "zegt zijn zin");
+  assert.ok(sent.some((m) => m.type === "actor:event" && m.e === "sound" && m.snd === "asset.brul"), "en speelt zijn geluid");
+  const wolves = Array.from(runtime.actors.values()).filter((actor) => actor.leaderKey === "actor:s.draak");
+  assert.equal(wolves.length, 3);
+  now = ticks(runtime, now, 20);
+  for (const wolf of wolves) {
+    assert.ok(Math.hypot(wolf.x - (draak.x + wolf.followOffset.x), wolf.z - (draak.z + wolf.followOffset.z)) < 1, "het groepje blijft om hem heen");
+    assert.ok(Math.abs(wolf.y - 20) < 0.01, "en vliegt op dezelfde hoogte");
+  }
+  runtime.applyHit({ spawnKey: wolves[0].spawnKey, occurrence: wolves[0].occurrence, hpAfter: 45, playerId: "p1", damage: 5, abilityId: "bite" }, now, false);
+  assert.equal(draak.state, "engage", "raak je er één, dan komt de leider ook");
+  assert.ok(wolves.every((wolf) => wolf.state === "engage"), "en het hele groepje");
+  now = ticks(runtime, now, 20);
+  assert.ok(draak.y < 0.01, "de draak landt om te vechten");
+  const src = fs.readFileSync("apps/web/public/editor/editor.js", "utf8");
+  assert.match(src, /doc\.kind === "actor_spawn" && doc\.body\?\.walkMode === "route"/, "de route teken je net als bij een NPC");
+  assert.match(src, /if \(!routeBusy && roadEditor\.handlePointerDown\(event\)\) return;/, "tijdens een route is de Weg niet aan te klikken");
+});
+
+test("herstel 16-11 (C, D): routepunt met zin en geluid blijft bewaard; geluid één keer, dichtbij harder", () => {
+  assert.deepEqual(cleanRoutePoint({ x: 1.234, z: 2, say: "  Ik kom je zo helpen ", sound: "asset.hamer" }), { x: 1.23, z: 2, say: "Ik kom je zo helpen", sound: "asset.hamer" });
+  const played = [];
+  const sounds = createWorldSounds({ createAudio: (url) => { const audio = { url, volume: 1, play() { played.push(this); } }; return audio; } });
+  assert.equal(sounds.once("/a/brul.ogg", { x: 5, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, 40), true);
+  assert.equal(sounds.once("/a/brul.ogg", { x: 50, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, 40), false, "te ver weg = niets");
+  assert.equal(played.length, 1);
+  sounds.setMuted(true);
+  assert.equal(sounds.once("/a/brul.ogg", { x: 1, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, 40), false, "geluid uit = stil");
+  const game = fs.readFileSync("apps/web/public/game/game.js", "utf8");
+  assert.match(game, /sendChatSocket\("npc:talk", \{ npcId: walkerTalk\.npcId \}\)/, "de game meldt dat je praat");
+  assert.match(game, /message\.e === "sound"/);
+});
+
+
+test("herstel 16-11: zon en schaduw uit Instellingen; in de game geven alle modellen schaduw (net als de editor)", () => {
+  const fields = CANONICAL_KINDS.world_settings.fields;
+  assert.deepEqual([fields.sunAngle.ui.control, fields.sunHeight.ui.control, fields.shadowDistance.ui.control], ["slider", "slider", "slider"]);
+  assert.equal(fields.modelShadows.default, true);
+  const plain = baseRuntimeWorld({});
+  assert.equal(plain.world.performance.game.shadow.staticPropsCast, true, "standaard: modellen zonder animatie geven in de game ook schaduw");
+  assert.equal(plain.world.performance.game.shadow.mapSize, 512, "standaard licht genoeg voor de oude laptop");
+  const sun = plain.lights.find((light) => light.id === "sun_light").position;
+  assert.ok(Math.abs(sun.x - 12) < 0.5 && Math.abs(sun.y - 20) < 0.7 && Math.abs(sun.z - 8) < 0.5, "standaard dezelfde zon als eerst");
+  const set = baseRuntimeWorld({ worldSettings: { sunAngle: 90, sunHeight: 45, shadowSharpness: "medium", shadowDistance: 100, modelShadows: false } });
+  assert.deepEqual(set.lights.find((light) => light.id === "sun_light").position, { x: 16.97, y: 16.97, z: 0 });
+  assert.deepEqual([set.world.performance.game.shadow.mapSize, set.world.performance.game.shadow.cameraSize, set.world.performance.game.shadow.staticPropsCast], [1024, 100, false]);
+  assert.equal(set.world.performance.editor.shadow.mapSize, 1024, "de editor houdt zijn eigen beeld");
+  const off = baseRuntimeWorld({ worldSettings: { shadowsOn: false } });
+  assert.equal(off.world.performance.game.shadow.preset, "geen_schaduw");
 });

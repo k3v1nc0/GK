@@ -615,6 +615,8 @@ export class Node05EconomyRuntimeService {
     const station = this.findStation(ctx, payload.stationId || payload.station_id, recipe);
     if (!station) throw httpError(404, "Werkplek niet gevonden.");
     this.assertInRange(station, "De werkplek");
+    const stationClosed = this.vendorClosedText(ctx, station, "De werkplek");
+    if (stationClosed) throw httpError(409, stationClosed);
     if (!this.recipesForStation(ctx, station).some((candidate) => candidate.id === recipe.id)) throw httpError(400, "Dit recept leer je niet hier.");
     if (this.recipeKnown(ctx, recipe)) throw httpError(409, "Dit recept ken je al.");
     if (recipe.learn !== "buy") throw httpError(403, "Dit recept kun je niet kopen.");
@@ -682,15 +684,16 @@ export class Node05EconomyRuntimeService {
   }
 
   // Werkbank Fase 10 (keuze van Kevin 15-11): een winkel kan alleen overdag of alleen 's nachts open zijn. "" = open.
-  vendorClosedText(ctx, vendor) {
+  // Kevin 16-11: ook de markt en de werkplek hebben elk hun eigen openingstijd (what = "De winkel", "De markt", "De werkplek").
+  vendorClosedText(ctx, vendor, what = "De winkel") {
     const hours = vendor?.openHours || "always";
     const cfg = ctx.project?.dayNight;
     if (hours === "always" || !cfg) return "";
-    if (!Number(cfg.nightMinutes)) return hours === "night" ? "Deze winkel is alleen 's nachts open, maar het wordt nooit nacht (Instellingen > Wereld)." : "";
+    if (!Number(cfg.nightMinutes)) return hours === "night" ? what + " is alleen 's nachts open, maar het wordt nooit nacht (Instellingen > Wereld)." : "";
     const clock = dayNightState(Date.now(), cfg);
     if (hours === "day" ? clock.isDay : !clock.isDay) return "";
     const minutes = Math.max(1, Math.ceil(clock.msToSwitch / 60000));
-    return "De winkel is dicht. Hij gaat open als het " + (hours === "day" ? "dag" : "nacht") + " wordt (over " + minutes + " min).";
+    return what + " is dicht. Hij gaat open als het " + (hours === "day" ? "dag" : "nacht") + " wordt (over " + minutes + " min).";
   }
 
   vendorOfferSummary(ctx, vendor, offer) {
@@ -1037,6 +1040,8 @@ export class Node05EconomyRuntimeService {
     const station = this.findStation(ctx, payload.stationId || payload.station_id, recipe);
     if (!station) throw httpError(404, "Werkplek niet gevonden.");
     this.assertInRange(station, "De werkplek");
+    const stationClosed = this.vendorClosedText(ctx, station, "De werkplek");
+    if (stationClosed) throw httpError(409, stationClosed);
     if (!this.recipesForStation(ctx, station).some(function (candidate) { return candidate.id === recipe.id; })) {
       const profession = recipe.professionId ? catalogSection(ctx.catalogs, "professions")[recipe.professionId] : null;
       throw httpError(400, profession ? "Dit maak je niet hier: ga naar een werkplek voor " + (profession.displayName || recipe.professionId) + "." : "Dit maak je niet hier.");
@@ -1838,6 +1843,8 @@ export class Node05EconomyRuntimeService {
     const access = this.findMarketAccess(ctx, payload.marketId);
     if (!access) throw httpError(404, "Hier is geen markt. Zet bij een NPC 'Markt' aan.");
     if (access.remoteAccessAllowed !== true) this.assertInRange(access, "De markt");
+    const marketClosed = this.vendorClosedText(ctx, access, "De markt");
+    if (marketClosed) throw httpError(409, marketClosed);
     // Fase 8b: de marktregels komen uit Instellingen > 🤝 Handel.
     const rules = this.tradeRules(ctx);
     if (rules.marketOn === false) throw httpError(403, "De markt staat uit (Instellingen > 🤝 Handel).");
@@ -1879,6 +1886,8 @@ export class Node05EconomyRuntimeService {
     const access = this.findMarketAccess(ctx, payload.marketId);
     if (!access) throw httpError(404, "Hier is geen markt. Zet bij een NPC 'Markt' aan.");
     if (access.remoteAccessAllowed !== true) this.assertInRange(access, "De markt");
+    const marketClosed = this.vendorClosedText(ctx, access, "De markt");
+    if (marketClosed) throw httpError(409, marketClosed);
     const rules = this.tradeRules(ctx);
     if (rules.marketOn === false) throw httpError(403, "De markt staat uit (Instellingen > 🤝 Handel).");
     this.assertTradePace(ctx, rules);

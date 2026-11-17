@@ -13,6 +13,8 @@ import { chatValues } from "../../shared/authoring/kinds/chat.js";
 import { hasOwnSteps, questGraphIssues, questStartIssues, questRepeatOf, questStartMode, questSteps, worldEventEvery, worldEventLasts } from "../../../apps/web/public/shared/quest-graph.js";
 import { areaPointsMeters, areaSoort } from "../../shared/authoring/kinds/area.js";
 import { routePointsOf } from "../../shared/authoring/route-points.js";
+// Kevin 16-11: openingstijd van een winkel, markt of werkplek.
+const hoursOf = (value) => (value === "day" || value === "night" ? value : "always");
 
 export const GAME_SECTION_VERSION = "gk-game-1";
 export const GAME_DOC_KINDS = Object.freeze(["currency", "player_class", "hud_settings", "minimap_settings", "combat_settings", "network_settings", "water_walk_settings", "party_settings", "chat_settings", "balance_settings", "respawn_settings", "equipment_settings", "economy_settings", "trade_settings", "npc", "quest", "recipe", "profession", "placed_model", "world_flag", "portal", "portal_settings", "lore_entry"]);
@@ -150,9 +152,9 @@ export function compileGameSection(documents, options = {}) {
       modelScaleBp: doc.body.modelScaleBp || 10000, idleClip: doc.body.idleClip || null, greeting: doc.body.greeting || "",
       x: doc.body.x, y: Number(doc.body.y) || 0, z: doc.body.z, rotationY: Number(doc.body.rotationY) || 0,
       crafting: doc.body.crafting === true, market: doc.body.market === true, talkRange: Number(doc.body.talkRange) > 0 ? Number(doc.body.talkRange) : 2.5,
-      openHours: ["day", "night"].includes(doc.body.openHours) ? doc.body.openHours : "always",
-      // Werkbank Fase 10: loopt hij rond (de actor-runtime laat hem lopen), dan staat hij niet als blok op zijn plek.
-      walks: doc.body.walkMode === "wander" && !doc.body.flagRef,
+      openHours: hoursOf(doc.body.openHours), marketHours: hoursOf(doc.body.marketHours), craftHours: hoursOf(doc.body.craftHours),
+      // Werkbank Fase 10: loopt hij rond of een route (de actor-runtime laat hem lopen), dan staat hij niet als blok op zijn plek.
+      walks: (doc.body.walkMode === "wander" || (doc.body.walkMode === "route" && Array.isArray(doc.body.route) && doc.body.route.length > 0)) && !doc.body.flagRef,
       craftProfessionId: doc.body.crafting === true ? professionIdOf(doc, doc.body.craftProfessionRef, label + " (werkplek voor)") : null,
       shopCurrencyId: doc.body.shopCurrencyRef ? idFromRef(doc.body.shopCurrencyRef) : null,
       // Fase 9 herstel: een recept in de winkel (kopen = leren).
@@ -315,13 +317,15 @@ export function compileGameSection(documents, options = {}) {
   const placedModels = of("placed_model").map((doc) => {
     needAsset(doc, doc.body.modelAssetId, ["model"], "Model " + doc.body.displayName);
     if (doc.body.fly === true && doc.body.flySound) needAsset(doc, doc.body.flySound, ["audio"], "Model " + doc.body.displayName + " (geluid bij vliegen)");
+    // Kevin 16-11: een geluid per routepunt (bijv. de draak landt).
+    if (doc.body.fly === true && doc.body.flyMode === "route") for (const point of routePointsOf(doc.body.flyRoute)) if (point.sound) needAsset(doc, point.sound, ["audio"], "Model " + doc.body.displayName + " (geluid op de route)");
     return {
       placedModelId: doc.body.placedModelId, displayName: doc.body.displayName, modelAssetId: doc.body.modelAssetId,
       scale: Number(doc.body.scale) || 1, rotationY: Number(doc.body.rotationY) || 0, solid: doc.body.solid === true,
       rotationX: Number(doc.body.rotationX) || 0, rotationZ: Number(doc.body.rotationZ) || 0,
       collisionRadius: Number(doc.body.collisionRadius) || 1, idleClip: doc.body.idleClip || null,
       // Fase 9: een model als werkplek (aambeeld, oven).
-      crafting: doc.body.crafting === true,
+      crafting: doc.body.crafting === true, craftHours: hoursOf(doc.body.craftHours),
       craftProfessionId: doc.body.crafting === true ? professionIdOf(doc, doc.body.craftProfessionRef, "Model " + doc.body.displayName + " (werkplek voor)") : null,
       x: doc.body.x, y: Number(doc.body.y) || 0, z: doc.body.z, ...flagGateOf(doc.body),
       // Werkbank Fase 10: vliegt rondjes (vogels, draak). Alleen om naar te kijken.

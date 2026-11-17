@@ -36,7 +36,15 @@ export const CLIENT_MESSAGE_TYPES = Object.freeze([
   "player:input_state",
   // MMO stap 2 (3-11): chat en blokkeren.
   "chat:send",
-  "chat:block"
+  "chat:block",
+  // Werkbank Fase 10: dempen, melden en de vriendenlijst (zonder deze sloot de server de verbinding).
+  "chat:mute",
+  "chat:report",
+  "friend:add",
+  "friend:accept",
+  "friend:remove",
+  // Kevin 16-11: "ik praat met deze NPC" (een NPC die loopt blijft dan staan, alleen zolang je praat).
+  "npc:talk"
 ]);
 
 const CLIENT_TYPE_SET = new Set(CLIENT_MESSAGE_TYPES);
@@ -96,8 +104,22 @@ export function validateClientMessage(raw) {
       return { ok: false, code: CLOSE_CODES.BAD_MESSAGE, reason: "invalid_chat" };
     }
   }
-  if (message.type === "chat:block" && (typeof message.payload?.playerId !== "string" || message.payload.playerId.length > 128)) {
+  if ((message.type === "chat:block" || message.type === "chat:mute" || message.type === "chat:report") && (typeof message.payload?.playerId !== "string" || message.payload.playerId.length > 128)) {
     return { ok: false, code: CLOSE_CODES.BAD_MESSAGE, reason: "invalid_chat" };
+  }
+  if (message.type === "chat:report" && message.payload.reason !== undefined && (typeof message.payload.reason !== "string" || message.payload.reason.length > 40)) {
+    return { ok: false, code: CLOSE_CODES.BAD_MESSAGE, reason: "invalid_chat" };
+  }
+  if (message.type.startsWith("friend:")) {
+    const friend = message.payload || {};
+    const okId = friend.playerId === undefined || (typeof friend.playerId === "string" && friend.playerId.length <= 128);
+    const okName = friend.name === undefined || (typeof friend.name === "string" && friend.name.length <= 80);
+    if (!okId || !okName || (message.type !== "friend:add" && typeof friend.playerId !== "string")) {
+      return { ok: false, code: CLOSE_CODES.BAD_MESSAGE, reason: "invalid_friend" };
+    }
+  }
+  if (message.type === "npc:talk" && (typeof message.payload?.npcId !== "string" || message.payload.npcId.length > 160)) {
+    return { ok: false, code: CLOSE_CODES.BAD_MESSAGE, reason: "invalid_npc" };
   }
   return { ok: true, message };
 }

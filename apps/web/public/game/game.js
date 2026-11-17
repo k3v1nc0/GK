@@ -1,13 +1,13 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261116-route1";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261116-herstel1";
 import { nextPlayerRouteWaypoint } from "../shared/player-path-client.js?v=20261108-roads9";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20261106-perf1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
 import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../shared/protocol-v1.js?v=20261025-f2-client1";
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
-import { createWorldSounds } from "./world-sounds.js?v=20261116-route1";
-import { createActorPresentation } from "./actor-presentation.js?v=20261116-route1";
-import { createGkHud } from "./hud/gk-hud.js?v=20261116-route1";
+import { createWorldSounds } from "./world-sounds.js?v=20261116-herstel1";
+import { createActorPresentation } from "./actor-presentation.js?v=20261116-herstel1";
+import { createGkHud } from "./hud/gk-hud.js?v=20261116-herstel1";
 import { dayNightState, mixColor } from "../shared/day-night.js?v=20261115-fase10";
 import { node05ActionBody, node05OperationId } from "./node05-request.js?v=20261113-fase8d";
 import {
@@ -357,9 +357,13 @@ function handleActorMessage(message) {
   if (message.type !== "actor:event") return false;
   // Stap 8: een NPC die je begeleidt zegt iets (ballon boven zijn hoofd en een regel in de chat).
   if (message.e === "say") {
-    if (gkHud && typeof gkHud.npcSay === "function") gkHud.npcSay(String(message.id || ""), String(message.text || ""), String(message.name || "") || actorPresentation.nameOf(message.id));
+    // Kevin 16-11: een zin op een routepunt (rt) komt alleen in de chat als je dichtbij bent; het wolkje zie je altijd.
+    const here = state.predictedPosition;
+    const far = message.rt === 1 && (!here || Math.hypot(num(message.x, 0) - num(here.x, 0), num(message.z, 0) - num(here.z, 0)) > 25);
+    if (gkHud && typeof gkHud.npcSay === "function") gkHud.npcSay(String(message.id || ""), String(message.text || ""), String(message.name || "") || actorPresentation.nameOf(message.id), far);
     return true;
   }
+  if (message.e === "sound") { playActorPointSound(message); return true; }
   // Fase 6: de grote klap van een groepsbaas. Eerst de rode cirkel (slam), dan de klap (slamhit); verslagen = cirkel weg.
   if (message.e === "slam") {
     if (message.off === 1) state.runtime?.hideDangerZone?.(String(message.id), false);
@@ -8180,16 +8184,34 @@ function activateRuntimeTarget(target) {
   const action = String(target?.action || "");
   if (action === "npc_walker") {
     const service = walkingNpcServiceTarget(target.npcId);
-    if (service) activateRuntimeTarget(service);
+    if (service) { startWalkerTalk(target.npcId); activateRuntimeTarget(service); }
     return;
   }
   if (action === "portal_map") { if (gkHud) gkHud.openPortalMap(target.portalId || String(target.instanceId).replace(/^portal_target\./, "")); return; }
   if (action === "lore_read") { activateLoreTarget(target); return; }
   if (gkHud && (action === "node04:start_dialogue" || action === "node05:focus_service")) {
+    const entityId = String(target?.entityRef || target?.linkedEntityId || target?.linkedEntity?.entityId || target?.visualEntityId || "");
+    if (entityId.startsWith("npc_entity.") && actorPresentation.walkerPose(entityId.slice("npc_entity.".length))) startWalkerTalk(entityId.slice("npc_entity.".length));
     gkHud.talkTo(target);
     return;
   }
   activateRuntimeTargetDirect(target);
+}
+
+// Kevin 16-11: een NPC die loopt blijft alleen staan als je met hem praat. Zolang het gesprek (of winkel, werkplek, markt)
+// open is, meldt de game dat om de 2 s aan de server; daarna loopt hij verder.
+const walkerTalk = { npcId: "", since: 0, sentAt: 0 };
+function startWalkerTalk(npcId) {
+  walkerTalk.npcId = String(npcId || "");
+  walkerTalk.since = performance.now();
+  walkerTalk.sentAt = 0;
+  maybeWalkerTalk(walkerTalk.since);
+}
+function maybeWalkerTalk(now = performance.now()) {
+  if (!walkerTalk.npcId) return;
+  if (!gkHud?.talking?.() && now - walkerTalk.since > 3000) { walkerTalk.npcId = ""; return; }
+  if (now - walkerTalk.sentAt < 2000) return;
+  if (sendChatSocket("npc:talk", { npcId: walkerTalk.npcId })) walkerTalk.sentAt = now;
 }
 
 function activateRuntimeTargetDirect(target) {
@@ -9519,6 +9541,7 @@ function refreshGameplayClientRanges(now = performance.now()) {
   maybeReadPendingLore(now);
   maybeNpcChatter(now);
   maybeWorldSounds(now);
+  maybeWalkerTalk(now);
 }
 
 // Werkbank Fase 10: een NPC zegt soms een praatje (ballon boven zijn hoofd) als je binnen 12 m bent, om de 25-50 s.
@@ -9535,8 +9558,23 @@ function maybeWorldSounds(now = performance.now()) {
   if (now < worldSoundsAt) return;
   worldSoundsAt = now + 250;
   const here = state.predictedPosition;
+  const listener = here ? { x: Number(here.x) || 0, y: Number(here.y) || 0, z: Number(here.z) || 0 } : null;
   const flyers = state.runtime && typeof state.runtime.flyerSounds === "function" ? state.runtime.flyerSounds() : [];
-  worldSounds().update(actorPresentation.walkerSounds(now).concat(flyers), here ? { x: Number(here.x) || 0, y: Number(here.y) || 0, z: Number(here.z) || 0 } : null);
+  worldSounds().update(actorPresentation.walkerSounds(now).concat(flyers), listener);
+  // Kevin 16-11: een vlieger kwam op een routepunt: zijn geluid en (dichtbij) zijn zin in de chat.
+  const events = state.runtime && typeof state.runtime.flyerEvents === "function" ? state.runtime.flyerEvents() : [];
+  for (const event of events) {
+    if (event.soundUrl) worldSounds().once(event.soundUrl, event, listener, 60);
+    if (event.say && listener && gkHud && Math.hypot(event.x - listener.x, event.z - listener.z) <= 40) gkHud.npcSay(event.key, event.say, event.name);
+  }
+}
+
+// Kevin 16-11: een NPC of vijand op zijn route kwam op een punt met een geluid (de server stuurt "sound").
+function playActorPointSound(message) {
+  const url = actorPresentation.assetUrl(String(message.snd || ""));
+  const here = state.predictedPosition;
+  if (!url || !here) return;
+  worldSounds().once(url, { x: Number(message.x) || 0, y: Number(message.y) || 0, z: Number(message.z) || 0 }, { x: Number(here.x) || 0, y: Number(here.y) || 0, z: Number(here.z) || 0 }, 60);
 }
 
 function maybeNpcChatter(now = performance.now()) {

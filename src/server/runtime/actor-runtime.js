@@ -44,6 +44,9 @@ const FLEE_SPEED = 1.6;           // een wild dier rent harder weg dan hij loopt
 const FLEE_MS = 5000;             // zo lang blijft hij bang voor wie hem sloeg
 const FLEE_REPICK_MS = 1500;
 const WALKER_PREFIX = "npcw:";
+const LAND_M_PER_STEP = 1.5; // zo snel landt een vliegende vijand als hij gaat vechten (15 m/s)
+const NPC_TALK_MS = 5000; // zo lang blijft een NPC staan na de laatste "ik praat met je" van de client
+const NPC_TALK_RANGE_M = 40; // wie verder weg is (bijv. nog op weg naar hem), laat hem niet wachten
 // Werkbank Fase 10 (plan 10a): hooguit zoveel lopende NPC's per vak van 64 m; de rest blijft staan (dan blijft de server licht).
 const WALKER_CELL_M = 64;
 const MAX_WALKERS_PER_CELL = 16;
@@ -60,10 +63,17 @@ const SEPARATION_STEP_M = 0.12;
 function hashText(text) {
   let hash = 0;
   for (let i = 0; i < text.length; i += 1) hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
-  return hash;
+  // Kevin 16-11: goed door elkaar husselen. Bijna dezelfde namen (boer_1, boer_2) gaven bijna dezelfde toevalsgetallen,
+  // waardoor alle NPC's tegelijk liepen en stonden.
+  hash ^= hash >>> 16; hash = Math.imul(hash, 0x85ebca6b) >>> 0;
+  hash ^= hash >>> 13; hash = Math.imul(hash, 0xc2b2ae35) >>> 0;
+  hash ^= hash >>> 16;
+  return hash >>> 0;
 }
 // Werkbank Fase 10: elke vijand of NPC heeft zijn eigen reeks "toevalsgetallen" (vast per plek: herhaalbaar in tests).
 function nextRandom(entry) {
+  // Een vijand zonder eigen reeks krijgt er een uit zijn plek (anders liepen alle vijanden precies gelijk op).
+  if (entry.seed === undefined || entry.seed === null) entry.seed = hashText(String(entry.spawnKey || entry.id || ""));
   let x = (entry.seed >>> 0) || 0x9e3779b9;
   x ^= x << 13; x >>>= 0;
   x ^= x >>> 17;
@@ -230,9 +240,22 @@ export class ActorRuntime {
       const spawnKey = ACTOR_INSTANCE_PREFIX + spawn.spawnId;
       const old = previousActors.get(spawnKey);
       const actor = old && old.def.actorId === def.actorId ? old : this.newActor(spawn, def, persisted.get(spawnKey), nowMs);
+      // Kevin 16-11: een vijand met een route (ook door de lucht); een andere route = opnieuw bij punt 1.
+      const route = Array.isArray(spawn.route) && spawn.route.length ? spawn.route : null;
+      if (actor === old && JSON.stringify(old.route || null) !== JSON.stringify(route)) {
+        actor.routeIndex = null; actor.segFrom = null; actor.waitClip = null; actor.pauseUntilMs = 0; actor.rev += 1;
+      }
+      actor.route = route;
+      actor.routeLoop = spawn.routeLoop !== false;
+      actor.routeSpeedMmPerS = Number(spawn.routeSpeedMmPerS) > 0 ? Number(spawn.routeSpeedMmPerS) : 2000;
+      // Kevin 16-11: een groepje rond een vijand. packKey = de leider; een volger loopt op zijn eigen plekje naast hem.
+      actor.leaderKey = spawn.leaderSpawnId ? ACTOR_INSTANCE_PREFIX + spawn.leaderSpawnId : null;
+      actor.followOffset = Array.isArray(spawn.followMm) ? { x: meters(spawn.followMm[0]), z: meters(spawn.followMm[1]) } : null;
+      actor.packKey = actor.leaderKey || (spawn.packLeader === true ? spawnKey : null);
       actor.def = def;
       actor.spawn = spawn;
-      actor.home = { x: meters(spawn.xMm), z: meters(spawn.zMm) };
+      actor.spawnHome = { x: meters(spawn.xMm), z: meters(spawn.zMm) };
+      actor.home = { x: actor.spawnHome.x, z: actor.spawnHome.z };
       this.setStrength(actor);
       actor.hp = Math.min(actor.hp, actor.hpMax);
       if (actor !== old) actor.y = this.groundYAt(actor.x, actor.z);
@@ -278,7 +301,11 @@ export class ActorRuntime {
       walker.spec = spec;
       walker.home = { x: spec.x, z: spec.z };
       walker.def = { radiusMm: 500, moveSpeedMmPerS: Number(spec.speedMmPerS) || 1200 };
-      if (walker !== old) walker.y = this.groundYAt(walker.x, walker.z);
+      if (walker !== old) {
+        walker.y = this.groundYAt(walker.x, walker.z);
+        // Niet allemaal tegelijk beginnen: elke NPC wacht eerst 0-5 s (eigen toeval).
+        walker.pauseUntilMs = nowMs + nextRandom(walker) * 5000;
+      }
       this.walkers.set(key, walker);
       live.set("npc_entity." + spec.npcId, walker);
     }
@@ -647,6 +674,11 @@ export class ActorRuntime {
       }
     }
     if (actor.state === "engage") {
+      // Kevin 16-11: een vijand die in de lucht is (route met hoogte, bijv. een draak) landt eerst, dan vecht hij.
+      if (actor.route || actor.leaderKey) {
+        const ground = this.groundYAt(actor.x, actor.z);
+        if (actor.y > ground + 0.3) { actor.y = Math.max(ground, actor.y - LAND_M_PER_STEP); actor.rev += 1; this.setAnim(actor, "walk"); return; }
+      }
       const target = this.targetOf(actor, players);
       const fromHome = Math.hypot(actor.x - actor.home.x, actor.z - actor.home.z);
       const eligible = target?.escort ? this.eligibleEscort(actor, target.escort) : this.eligibleTarget(actor, target);
@@ -693,11 +725,50 @@ export class ActorRuntime {
 
   // Niet aan het vechten: de looproute, rondwandelen rond zijn plek, of (weggelopen) terug naar zijn plek.
   stepCalm(actor, nowMs, budget) {
+    // Kevin 16-11: een volger loopt op zijn plekje naast zijn leider (die staat, rondloopt of een route loopt).
+    if (actor.leaderKey) { this.stepFollow(actor, nowMs); return; }
+    // Kevin 16-11: een route (ook door de lucht). Zijn "thuis" loopt mee: na een gevecht loopt hij terug naar waar hij was.
+    if (actor.route) {
+      actor.state = "patrol";
+      this.stepRoute(actor, nowMs, actor.route, actor.routeLoop, actor.routeSpeedMmPerS);
+      actor.home = { x: actor.x, z: actor.z };
+      return;
+    }
     const wander = meters(actor.spawn?.wanderRadiusMm || 0);
     if (actor.patrol.length >= 2) this.stepPatrol(actor, nowMs, budget);
     else if (wander > 0) { actor.state = "patrol"; this.stepWander(actor, nowMs, budget, wander, false); }
     else if (Math.hypot(actor.x - actor.home.x, actor.z - actor.home.z) > HOME_REACHED_M) this.moveTowards(actor, actor.home, budget, false);
     else this.setAnim(actor, "idle");
+  }
+
+  // Kevin 16-11: een volger van een groepje. Recht naar zijn plekje naast de leider (iets sneller dan de leider, zodat hij bijblijft),
+  // op dezelfde hoogte boven de grond (een vlucht draken vliegt samen). Leider dood: hij blijft waar hij is.
+  stepFollow(actor, nowMs) {
+    const leader = this.actors.get(actor.leaderKey);
+    actor.state = "patrol";
+    if (!leader || leader.state === "dead" || !actor.followOffset) { actor.home = { x: actor.x, z: actor.z }; this.setAnim(actor, "idle"); return; }
+    const goal = { x: leader.x + actor.followOffset.x, z: leader.z + actor.followOffset.z };
+    actor.home = goal;
+    const dx = goal.x - actor.x; const dz = goal.z - actor.z;
+    const distance = Math.hypot(dx, dz);
+    const leaderSpeed = leader.route ? leader.routeSpeedMmPerS : leader.def.moveSpeedMmPerS;
+    const step = (Math.max(actor.def.moveSpeedMmPerS, (leaderSpeed || 0) * 1.3) / 1000) * (AI_STEP_MS / 1000);
+    const leaderH = Math.max(0, leader.y - this.groundYAt(leader.x, leader.z));
+    if (distance <= HOME_REACHED_M) {
+      const facing = leader.ry;
+      if (leader.anim !== "walk" && Math.abs(facing - actor.ry) > 0.05) { actor.ry = facing; actor.rev += 1; }
+      const y = this.groundYAt(actor.x, actor.z) + leaderH;
+      if (Math.abs(y - actor.y) > 0.01) { actor.y = y; actor.rev += 1; }
+      this.setAnim(actor, leader.anim === "walk" ? "walk" : "idle");
+      return;
+    }
+    const move = Math.min(distance, step);
+    actor.x += (dx / distance) * move;
+    actor.z += (dz / distance) * move;
+    actor.y = this.groundYAt(actor.x, actor.z) + leaderH;
+    actor.ry = Math.atan2(dx, dz);
+    this.setAnim(actor, "walk");
+    actor.rev += 1;
   }
 
   // Werkbank Fase 10: een plek om naartoe te wandelen, binnen de straal rond zijn plek. roads: liever een plek op de 🛣️ Weg.
@@ -785,15 +856,27 @@ export class ActorRuntime {
     return { x, z };
   }
 
-  // Werkbank Fase 10: een NPC die rondloopt. Staat er een speler bij hem (om te praten of te handelen), dan blijft hij staan
-  // en kijkt hem aan; anders wandelt hij rond zijn plek (over de 🛣️ Weg als die er ligt).
+  // Kevin 16-11: de speler praat met deze NPC (gesprek, winkel of werkplek open). De client meldt dat om de 2 s.
+  setNpcTalk(playerId, npcId, nowMs) {
+    const walker = this.walkers.get(WALKER_PREFIX + String(npcId || ""));
+    if (!walker || !playerId) return false;
+    if (!walker.talk) walker.talk = new Map();
+    walker.talk.set(String(playerId), nowMs + NPC_TALK_MS);
+    return true;
+  }
+
+  // Werkbank Fase 10: een NPC die rondloopt. Praat een speler met hem (Kevin 16-11: alleen dan, niet als je langsloopt),
+  // dan blijft hij staan en kijkt hem aan; anders wandelt hij rond zijn plek of loopt zijn route.
   stepWalker(walker, nowMs, playerList, budget) {
     let close = null;
     let best = Infinity;
-    for (const player of playerList) {
-      if (!player || player.defeated) continue;
-      const distance = Math.hypot(player.x - walker.x, player.z - walker.z);
-      if (distance <= walker.spec.stopM && distance < best) { best = distance; close = player; }
+    if (walker.talk?.size) {
+      for (const [playerId, untilMs] of walker.talk) if (untilMs <= nowMs) walker.talk.delete(playerId);
+      for (const player of playerList) {
+        if (!player || player.defeated || !walker.talk.has(player.id)) continue;
+        const distance = Math.hypot(player.x - walker.x, player.z - walker.z);
+        if (distance <= NPC_TALK_RANGE_M && distance < best) { best = distance; close = player; }
+      }
     }
     if (close) {
       walker.path = []; walker.pathGoal = null; walker.wanderGoal = null;
@@ -804,14 +887,14 @@ export class ActorRuntime {
       this.setAnim(walker, "idle");
       return;
     }
-    if (Array.isArray(walker.spec.route) && walker.spec.route.length) this.stepRoute(walker, nowMs);
+    if (Array.isArray(walker.spec.route) && walker.spec.route.length) this.stepRoute(walker, nowMs, walker.spec.route, walker.spec.routeLoop !== false);
     else this.stepWander(walker, nowMs, budget, walker.spec.radiusM, true);
   }
 
   // Werkbank Fase 10 (Kevin 16-11): een getekende route, punt voor punt in een rechte lijn (de maker tekent om muren heen).
-  // Per punt: hoogte boven de grond (h), wachten (waitS) met een animatie (clip). Aan het eind: rondje of omkeren.
-  stepRoute(walker, nowMs) {
-    const route = walker.spec.route;
+  // Per punt: hoogte boven de grond (h), wachten (waitS) met een animatie (clip), een zin (say) en een geluid (sound).
+  // Aan het eind: rondje (loop) of omkeren. Voor een lopende NPC en (Kevin 16-11) ook voor een vijand.
+  stepRoute(walker, nowMs, route, loop = true, speedMmPerS = walker.def.moveSpeedMmPerS) {
     if (nowMs < (walker.pauseUntilMs || 0)) { this.setAnim(walker, "idle"); return; }
     if (walker.waitClip) { walker.waitClip = null; walker.rev += 1; }
     if (!Number.isInteger(walker.routeIndex) || walker.routeIndex >= route.length) { walker.routeIndex = 0; walker.routeDir = 1; walker.segFrom = null; }
@@ -819,14 +902,14 @@ export class ActorRuntime {
     if (!walker.segFrom) walker.segFrom = { x: walker.x, z: walker.z, h: Math.max(0, walker.y - this.groundYAt(walker.x, walker.z)) };
     const dx = point.x - walker.x; const dz = point.z - walker.z;
     const distance = Math.hypot(dx, dz);
-    const step = (Math.max(0, walker.def.moveSpeedMmPerS) / 1000) * (AI_STEP_MS / 1000);
+    const step = (Math.max(0, speedMmPerS) / 1000) * (AI_STEP_MS / 1000);
     const toH = Number(point.h) || 0;
     if (distance <= Math.max(step, 0.01)) {
       walker.x = point.x; walker.z = point.z;
       walker.y = this.groundYAt(point.x, point.z) + toH;
       walker.segFrom = { x: point.x, z: point.z, h: toH };
       if (route.length > 1) {
-        if (walker.spec.routeLoop !== false) walker.routeIndex = (walker.routeIndex + 1) % route.length;
+        if (loop) walker.routeIndex = (walker.routeIndex + 1) % route.length;
         else {
           if (walker.routeIndex + walker.routeDir < 0 || walker.routeIndex + walker.routeDir >= route.length) walker.routeDir = -walker.routeDir;
           walker.routeIndex += walker.routeDir;
@@ -837,6 +920,8 @@ export class ActorRuntime {
         walker.waitClip = point.clip || null;
         this.setAnim(walker, "idle");
       }
+      if (point.say) this.emitEvent({ e: "say", id: walker.id, text: String(point.say).slice(0, 200), rt: 1, x: point.x, z: point.z }, point.x, point.z, walker);
+      if (point.sound) this.emitEvent({ e: "sound", id: walker.id, snd: point.sound, x: point.x, y: walker.y, z: point.z }, point.x, point.z, walker);
       walker.rev += 1;
       return;
     }
@@ -887,7 +972,21 @@ export class ActorRuntime {
     actor.pathGoal = null;
     actor.pathFails = 0;
     actor.nextPathAtMs = 0;
+    // Kevin 16-11: na het vechten gaat hij verder op zijn route vanaf waar hij dan staat.
+    actor.segFrom = null;
+    actor.waitClip = null;
     actor.rev += 1;
+    // Kevin 16-11: een groepje vecht samen. Raak je er één (of komt er één op je af), dan komen ze allemaal.
+    if (actor.packKey && !this.packEngaging) {
+      this.packEngaging = true;
+      try {
+        for (const other of this.actors.values()) {
+          if (other === actor || other.packKey !== actor.packKey || (other.state !== "idle" && other.state !== "patrol")) continue;
+          other.home = { x: other.x, z: other.z };
+          this.engage(other, playerId, escort);
+        }
+      } finally { this.packEngaging = false; }
+    }
   }
 
   // Fase 6: zijn doelwit is weg (verslagen of in veilig gebied): de dichtstbijzijnde ander die meevocht en nog meedoet.
@@ -1147,6 +1246,11 @@ export class ActorRuntime {
     actor.state = "idle";
     this.rollElite(actor);
     actor.hp = actor.hpMax;
+    // Kevin 16-11: terug op zijn plek (een route begint weer bij punt 1); een volger naast zijn leider als die leeft.
+    if (actor.spawnHome) actor.home = { x: actor.spawnHome.x, z: actor.spawnHome.z };
+    const leader = actor.leaderKey ? this.actors.get(actor.leaderKey) : null;
+    if (leader && leader.state !== "dead" && actor.followOffset) actor.home = { x: leader.x + actor.followOffset.x, z: leader.z + actor.followOffset.z };
+    actor.routeIndex = null; actor.segFrom = null; actor.waitClip = null;
     actor.x = actor.home.x; actor.z = actor.home.z; actor.y = this.groundYAt(actor.x, actor.z);
     if (Number.isFinite(actor.homeRy)) actor.ry = actor.homeRy;
     actor.path = []; actor.pathGoal = null; actor.targetPlayerId = null; actor.patrolIndex = 0; actor.pauseUntilMs = 0;
@@ -1408,6 +1512,8 @@ export class ActorRuntime {
     const out = { id: entry.id, k: "a", d: entry.def.actorId, x: r2(entry.x), y: r2(entry.y), z: r2(entry.z), r: Math.round(entry.ry * 100) / 100, hp: entry.hp, hm: entry.hpMax, s };
     // Fase 5: een sterkere (el) en of zijn schild nu staat (sh). Alleen meesturen als het zo is.
     if (entry.elite) out.el = 1;
+    // Kevin 16-11: een vijand op zijn route wacht met zijn eigen animatie.
+    if (entry.waitClip && s === "i") out.c = entry.waitClip;
     // Kevin 10-11: hoeveel sterker (x100), voor het cijfer voor de naam (200 % = 2).
     if ((entry.strength || 1) !== 1) out.st = Math.round(entry.strength * 100);
     if (entry.state !== "dead" && this.shieldUp(entry, nowMs)) out.sh = 1;

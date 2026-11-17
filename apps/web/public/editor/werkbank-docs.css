@@ -324,3 +324,6 @@
 .wbdRoute .wbdRouteH, .wbdRoute .wbdRouteWait { width: 56px; }
 .wbdRoute .wbdRouteClip { flex: 1 1 110px; min-width: 90px; }
 .wbdRoute .wbdRouteDel { padding: 2px 8px; }
+.wbdRouteLine { flex: 1 1 100%; display: flex; gap: 4px; padding-left: 32px; }
+.wbdRoute .wbdRouteSay { flex: 2 1 120px; min-width: 0; }
+.wbdRoute .wbdRouteSound { flex: 1 1 90px; min-width: 0; }

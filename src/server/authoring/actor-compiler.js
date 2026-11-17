@@ -202,6 +202,8 @@ export function compileActorSection(documents, options = {}) {
     const walker = npcWalkerOf(doc.body);
     if (walker) {
       npcWalkers.push(walker);
+      // Kevin 16-11: geluid per routepunt (de game speelt het als hij daar aankomt).
+      for (const point of walker.route || []) if (point.sound && !needAsset(doc, point.sound, "audio", "NPC " + doc.body.displayName + " (geluid op de route)") && assetInfo) delete point.sound;
       Object.assign(npcs[doc.body.npcId], { walks: true, talkRange: Number(doc.body.talkRange) > 0 ? Number(doc.body.talkRange) : 2.5 });
       // Werkbank Fase 10 (Kevin 16-11): geluid tijdens het lopen (alleen een bestaand geluidsbestand).
       const sound = doc.body.walkSound && assetInfo ? assetInfo.get(doc.body.walkSound) : null;
@@ -216,11 +218,24 @@ export function compileActorSection(documents, options = {}) {
 
   errors.push(...actorSpawnIssues(active).map(({ code, docKey, message }) => ({ code, docKey, message })));
   const spawns = [];
+  const spawnSounds = {};
   for (const doc of of("actor_spawn")) {
-    needRef(doc, doc.body.archetypeRef, "actor_archetype", "Vijand-plek " + doc.body.spawnId);
+    const label = "Vijand-plek " + doc.body.spawnId;
+    needRef(doc, doc.body.archetypeRef, "actor_archetype", label);
     const spawn = { spawnId: doc.body.spawnId, actorId: idFromRef(doc.body.archetypeRef), regionId: doc.body.regionRef ? idFromRef(doc.body.regionRef) : null, xMm: doc.body.xMm, zMm: doc.body.zMm, cellKey: cellKeyForPointMm(doc.body.xMm, doc.body.zMm) };
     if (Array.isArray(doc.body.patrolPointsMm) && doc.body.patrolPointsMm.length) spawn.patrolPointsMm = doc.body.patrolPointsMm;
-    if (Number(doc.body.wanderRadiusMm) > 0) spawn.wanderRadiusMm = Math.round(Number(doc.body.wanderRadiusMm));
+    // Kevin 16-11: Lopen = stilstaan, rondlopen of een route (net als een NPC). Een oudere plek zonder keuze: rondwandelen als die straal er staat.
+    const walkMode = doc.body.walkMode || (Number(doc.body.wanderRadiusMm) > 0 ? "wander" : "stand");
+    if (walkMode === "wander" && Number(doc.body.wanderRadiusMm) > 0) spawn.wanderRadiusMm = Math.round(Number(doc.body.wanderRadiusMm));
+    if (walkMode === "route") {
+      const route = routePointsOf(doc.body.route);
+      for (const point of route) if (point.sound && !needAsset(doc, point.sound, "audio", label + " (geluid op de route)") && assetInfo) delete point.sound;
+      if (route.length) {
+        const speed = Number(doc.body.walkSpeed) > 0 ? Math.max(0.3, Math.min(30, Number(doc.body.walkSpeed))) : 2;
+        Object.assign(spawn, { route, routeLoop: doc.body.routeEnd !== "back", routeSpeedMmPerS: Math.round(speed * 1000) });
+      }
+    }
+    if (walkMode !== "stand" && doc.body.walkSound && (needAsset(doc, doc.body.walkSound, "audio", label + " (geluid tijdens lopen)") || !assetInfo)) spawnSounds[doc.body.spawnId] = doc.body.walkSound;
     if (Number(doc.body.rotationY)) spawn.rotationY = Number(doc.body.rotationY);
     // Fase 5: af en toe een sterkere (leeg = de standaard van het schema: 10 % kans, 200 % sterk).
     const chance = Number.isInteger(doc.body.eliteChancePct) ? doc.body.eliteChancePct : ELITE_DEFAULTS.chancePct;
@@ -229,6 +244,21 @@ export function compileActorSection(documents, options = {}) {
       spawn.eliteStrengthPct = Number.isInteger(doc.body.eliteStrengthPct) ? doc.body.eliteStrengthPct : ELITE_DEFAULTS.strengthPct;
     }
     spawns.push(spawn);
+    // Kevin 16-11: het groepje rond deze vijand (hooguit 12), in een kring om hem heen. Ze lopen met hem mee en vechten samen.
+    const followers = [];
+    for (const row of Array.isArray(doc.body.followers) ? doc.body.followers : []) {
+      const archetype = needRef(doc, row?.ref, "actor_archetype", label + " (groepje)");
+      const count = Math.max(1, Math.min(12, Math.round(Number(row?.count) || 1)));
+      for (let i = 0; archetype && i < count && followers.length < PACK_MAX; i += 1) followers.push(archetype.body.actorId);
+    }
+    if (followers.length) spawn.packLeader = true;
+    followers.forEach((actorId, i) => {
+      const angle = (i / followers.length) * Math.PI * 2;
+      const ringMm = PACK_RING_MM + Math.floor(i / 8) * 1500;
+      const dx = Math.round(Math.cos(angle) * ringMm); const dz = Math.round(Math.sin(angle) * ringMm);
+      spawns.push({ spawnId: doc.body.spawnId + "~" + (i + 1), actorId, regionId: spawn.regionId, xMm: spawn.xMm + dx, zMm: spawn.zMm + dz,
+        cellKey: cellKeyForPointMm(spawn.xMm + dx, spawn.zMm + dz), leaderSpawnId: doc.body.spawnId, followMm: [dx, dz] });
+    });
   }
   const resourceSpawns = [];
   for (const doc of of("resource_spawn")) {
@@ -257,10 +287,14 @@ export function compileActorSection(documents, options = {}) {
     server: { schema: ACTOR_SECTION_VERSION, classAbilityIds, classSkills, abilities: abilities.server, lootTables, resources: resources.server, archetypes: archetypes.server, spawns, resourceSpawns,
       ...(npcWalkers.length ? { npcWalkers } : {}) },
     client: { schema: ACTOR_SECTION_VERSION, classAbilityIds, classSkills, abilities: abilities.client, resources: resources.client, archetypes: archetypes.client, assets,
-      ...(Object.keys(npcs).length ? { npcs } : {}) },
+      ...(Object.keys(npcs).length ? { npcs } : {}), ...(Object.keys(spawnSounds).length ? { spawnSounds } : {}) },
     errors
   };
 }
+
+// Kevin 16-11: een groepje rond een vijand: hooguit 12, op 2,5 m om hem heen (meer dan 8: een tweede kring).
+export const PACK_MAX = 12;
+const PACK_RING_MM = 2500;
 
 // Werkbank Fase 10: een NPC die rondloopt (Lopen = Loopt rond). Met "Alleen als vlag" blijft hij staan: niet iedereen ziet hem.
 export const NPC_WALK_SPEED_MM = 1200;

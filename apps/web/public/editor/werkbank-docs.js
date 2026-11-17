@@ -348,7 +348,10 @@ export function createDocBench(options = {}) {
   // aan de grond of een hoogte, hoe lang hij daar wacht en welke animatie hij dan speelt. Klik het nummer = punt kiezen in 3D.
   function routeControl(field, value, body, onChange) {
     const points = Array.isArray(value) ? value : [];
-    const clips = dynamicOptions({ ui: { optionsFrom: "clips:modelAssetId" } }, body);
+    // Een vijand-plek heeft zijn model op de vijand zelf (archetype).
+    const modelBody = !body.modelAssetId && body.archetypeRef ? bench.doc(body.archetypeRef)?.body || body : body;
+    const clips = dynamicOptions({ ui: { optionsFrom: "clips:modelAssetId" } }, modelBody);
+    const sounds = getAssets().filter((asset) => asset.assetType === "audio");
     const box = el("div", { class: "wbdRoute" });
     box.append(el("div", { class: "wbdNote", text: points.length
       ? "🛣️ " + points.length + (points.length === 1 ? " punt" : " punten") + ". In de 3D-view: F = punten erbij, klik een punt + G = schuiven, G en Z = hoogte, Del = weg."
@@ -381,15 +384,24 @@ export function createDocBench(options = {}) {
       clip.addEventListener("change", () => change(index, { clip: clip.value || null }));
       const del = el("button", { type: "button", class: "wbdGhost wbdRouteDel", text: "✕", title: "Punt weghalen" });
       del.addEventListener("click", () => onChange(points.length > 1 ? points.filter((_, i) => i !== index) : null));
+      // Kevin 16-11: per punt een zin (tekstwolkje) en een geluid, als hij daar aankomt.
+      const say = el("input", { type: "text", class: "wbdText wbdRouteSay", maxlength: "200", value: point.say || "", placeholder: "💬 Zegt hier... (leeg = niets)", title: "Wat hij zegt als hij hier aankomt" });
+      say.addEventListener("change", () => change(index, { say: say.value.trim().slice(0, 200) || null }));
+      const sound = el("select", { class: "wbdSelect wbdRouteSound", title: "Geluid als hij hier aankomt" }, [el("option", { value: "", text: "🔊 (geen geluid)" })]
+        .concat(sounds.map((asset) => el("option", { value: asset.id, text: "🔊 " + (asset.name || asset.id) }))));
+      if (point.sound && !sounds.some((asset) => asset.id === point.sound)) sound.append(el("option", { value: point.sound, text: "🔊 " + point.sound }));
+      sound.value = point.sound || "";
+      sound.addEventListener("change", () => change(index, { sound: sound.value || null }));
       box.append(el("div", { class: "wbdRouteRow", "data-route-index": String(index) }, [
         num,
         el("label", { class: "wbdRouteCell", title: "Aan de grond" }, [ground, el("span", { text: "⛰️" })]),
         el("label", { class: "wbdRouteCell", title: "Hoogte (m)" }, [el("span", { text: "↕️" }), height]),
         el("label", { class: "wbdRouteCell", title: "Wachten (s)" }, [el("span", { text: "⏸️" }), wait]),
-        clip, del
+        clip, del,
+        el("div", { class: "wbdRouteLine" }, [say, sound])
       ]));
     });
-    if (points.length) box.append(el("div", { class: "wbdNote", text: "⛰️ aan = aan de grond, uit = op ↕️ meter hoogte. ⏸️ = seconden wachten op dat punt, met de animatie ernaast." }));
+    if (points.length) box.append(el("div", { class: "wbdNote", text: "⛰️ aan = aan de grond, uit = op ↕️ meter hoogte. ⏸️ = seconden wachten op dat punt, met de animatie ernaast. 💬 en 🔊 = wat hij zegt en welk geluid speelt als hij er aankomt." }));
     return box;
   }
 

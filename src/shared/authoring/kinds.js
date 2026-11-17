@@ -451,15 +451,17 @@ export function validateDocument(kind, body) {
       continue;
     }
     if (field.type === "route") {
-      // Werkbank Fase 10 (Kevin 16-11): { x, z } in meter; h = hoogte boven de grond (zonder h = aan de grond), waitS, clip.
+      // Werkbank Fase 10 (Kevin 16-11): { x, z } in meter; h = hoogte boven de grond (zonder h = aan de grond), waitS, clip, say (tekst), sound (geluid).
       if (!Array.isArray(value)) { issues.push(issue(key, "FIELD_TYPE", field.label + " moet een lijst zijn.")); continue; }
       if (value.length > field.maxItems) issues.push(issue(key, "FIELD_RANGE", field.label + ": hooguit " + field.maxItems + " punten."));
       const inRange = (n, min, max) => typeof n === "number" && Number.isFinite(n) && n >= min && n <= max;
       const badPoint = (point) => !point || typeof point !== "object" || Array.isArray(point)
-        || Object.keys(point).some((name) => !["x", "z", "h", "waitS", "clip"].includes(name))
+        || Object.keys(point).some((name) => !["x", "z", "h", "waitS", "clip", "say", "sound"].includes(name))
         || !inRange(point.x, MM.min / 1000, MM.max / 1000) || !inRange(point.z, MM.min / 1000, MM.max / 1000)
         || (point.h !== undefined && !inRange(point.h, 0, 300)) || (point.waitS !== undefined && !inRange(point.waitS, 0, 600))
-        || (point.clip !== undefined && (typeof point.clip !== "string" || point.clip.length > 120));
+        || (point.clip !== undefined && (typeof point.clip !== "string" || point.clip.length > 120))
+        || (point.say !== undefined && (typeof point.say !== "string" || point.say.length > 200))
+        || (point.sound !== undefined && (typeof point.sound !== "string" || point.sound.length > 160));
       if (value.some(badPoint)) issues.push(issue(key, "FIELD_POINT", field.label + ": elk punt is { x, z } in meter, met hoogte 0-300 m, wachten 0-600 s en een animatie."));
       continue;
     }

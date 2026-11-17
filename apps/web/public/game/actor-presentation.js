@@ -143,6 +143,8 @@ export function createActorPresentation(options = {}) {
   function animationOf(record, now) {
     // Stap 8: een begeleide NPC loopt of staat stil (hij vecht niet en valt zonder animatie weg).
     if (record.k === "n" && record.c && record.s !== "w") return "clip:" + record.c;
+    // Kevin 16-11: een vijand op zijn route wacht met zijn eigen animatie.
+    if (record.k === "a" && record.c && record.s === "i") return "clip:" + record.c;
     if (record.k === "e" || record.k === "n") return record.s === "w" ? "walk" : "idle";
     if (record.k !== "a") return "idle";
     if (record.s === "d") return "death";
@@ -292,14 +294,17 @@ export function createActorPresentation(options = {}) {
   function walkerSounds(now = performance.now()) {
     const out = [];
     for (const record of records.values()) {
-      if (record.k !== "n" || record.s !== "w") continue;
-      const npc = defs?.npcs?.[record.d];
-      const url = npc?.walkSound ? defs.assets?.[npc.walkSound]?.url : null;
+      if ((record.k !== "n" && record.k !== "a") || record.s !== "w") continue;
+      // Kevin 16-11: ook een vijand met een geluid tijdens lopen (per plek: id = "actor:<plek>:<keer>").
+      const soundId = record.k === "n" ? defs?.npcs?.[record.d]?.walkSound : defs?.spawnSounds?.[String(record.id).replace(/^actor:/, "").replace(/:\d+$/, "")];
+      const url = soundId ? defs.assets?.[soundId]?.url : null;
       const pose = url ? currentPose(record, now) : null;
       if (pose) out.push({ key: record.id, url, x: pose.x, y: pose.y, z: pose.z });
     }
     return out;
   }
+
+  function assetUrl(assetId) { return assetId && defs?.assets?.[assetId]?.url || null; }
 
   function nameOf(id) {
     const record = records.get(String(id || ""));
@@ -307,5 +312,5 @@ export function createActorPresentation(options = {}) {
     return (record.k === "e" || record.k === "n" ? defs.npcs?.[record.d] : record.k === "r" ? defs.resources?.[record.d] : defs.archetypes?.[record.d])?.displayName || "";
   }
 
-  return { applySnapshot, applyEvent, targets, targetById, frame, clear, escortNpcIds, walkerNpcIds, walkerPose, npcChatter, walkerSounds, nameOf, ability, debug: () => ({ buildId, records: records.size, hasDefinitions: Boolean(defs) }) };
+  return { applySnapshot, applyEvent, targets, targetById, frame, clear, escortNpcIds, walkerNpcIds, walkerPose, npcChatter, walkerSounds, nameOf, assetUrl, ability, debug: () => ({ buildId, records: records.size, hasDefinitions: Boolean(defs) }) };
 }

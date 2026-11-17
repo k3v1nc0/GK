@@ -2,7 +2,7 @@
 // Valuta, NPC (praten, winkel, crafting), Quest en Recept staan in de Werkbank;
 // placed_model blijft het interne document per wereldinstantie, maar staat niet als Bibliotheek-soort in beeld.
 // Speler en Game-scherm (HUD) staan onder Instellingen. De wereldbouwer maakt hieruit de spelwereld.
-import { HELP_ID, HELP_MODEL, HELP_NAME, HELP_SCALE, help, ui } from "./ui.js";
+import { HELP_ID, HELP_MODEL, HELP_NAME, HELP_SCALE, help, routeEndField, routeField, ui } from "./ui.js";
 import { FLAG_SCOPES, QUEST_LIMITS, QUEST_SPAWN_LIMITS } from "../../../../apps/web/public/shared/quest-graph.js";
 import { professionFields, recipeLearnFields, workstationProfessionField } from "./profession.js";
 
@@ -68,18 +68,13 @@ const WALKS = Object.freeze({ key: "walkMode", is: ["wander", "route"] });
 const NPC_ROUTE_ON = Object.freeze({ key: "walkMode", is: ["route"] });
 const FLY_ROUTE_ON = Object.freeze({ key: "flyMode", is: ["route"], also: FLY_ON });
 const FLY_CIRCLE_ON = Object.freeze({ key: "flyMode", is: ["circle"], also: FLY_ON });
-const routeField = (label, audience, group, when, wat) => ({ type: "route", required: false, maxItems: 64, audience, label,
-  ui: ui("🛣️", "route", "werkbank", { group, when }), default: null,
-  help: help("De route van " + wat + ": punten die hij een voor een afgaat. Per punt: aan de grond of op een hoogte, hoe lang hij daar wacht en welke animatie hij dan speelt.",
-    "Kies " + wat + " in de 3D-view, druk F en klik op de grond: klik, klik, klik (Esc = klaar). Klik een punt en druk G om te schuiven, G en dan Z voor de hoogte. Wachten 5-20 s met bijv. een zwaai- of werk-animatie.",
-    "Hij loopt door een muur → zet er een punt bij om de muur heen. Hij zweeft → zet ⛰️ aan de grond aan.") });
-const routeEndField = (audience, group, when) => ({ type: "select", required: false, options: ["loop", "back"], optionIcons: { loop: "🔁", back: "↩️" },
-  optionLabels: { loop: "Terug naar punt 1", back: "Omkeren" }, audience, label: "Aan het eind",
-  ui: ui("🔁", "select", "werkbank", { group, when }), default: "loop",
-  help: help("Wat er gebeurt bij het laatste punt: in een rondje terug naar punt 1, of omkeren en dezelfde weg terug.",
-    "Rondje voor een wachter rond het dorp of vogels rond een berg; omkeren voor een boer tussen huis en akker.",
-    "Hij steekt dwars door het dorp terug naar punt 1 → kies Omkeren of zet er punten bij.") });
-
+// Kevin 16-11: winkel, markt en werkplek elk een eigen openingstijd (altijd, alleen overdag, alleen 's nachts).
+const hoursField = (label, wat, group, when = null) => ({ type: "select", required: false, options: ["always", "day", "night"], optionIcons: { always: "🕒", day: "☀️", night: "🌙" },
+  optionLabels: { always: "Altijd", day: "Alleen overdag", night: "Alleen 's nachts" }, audience: "client", label,
+  ui: ui("🕒", "select", "werkbank", when ? { group, when } : { group }), default: "always",
+  help: help("Wanneer " + wat + " open is. Dicht = de NPC praat wel, maar " + wat + " zegt hoe lang het nog duurt. Hoe lang dag en nacht duren staat in Instellingen > Wereld > 🌗 Dag en nacht.",
+    "Altijd voor de eerste plekken. Alleen overdag voor gewone dingen in het dorp, alleen 's nachts voor iets geheims (een smokkelaar).",
+    "Spelers kunnen nergens terecht → zet er minstens één op Altijd.") });
 export const STACKING_LABELS = Object.freeze({ refresh: "Opnieuw beginnen", extend: "Tijd erbij", block: "Niet nog eens" });
 
 const MAP_ICON_OPTIONS = Object.freeze(["dot", "diamond", "square", "triangle", "star", "pin", "portal", "cross", "ring", "arrow"]);
@@ -196,11 +191,13 @@ export const GAME_KINDS = {
         help: help("Wanneer je bij deze NPC kunt kopen en verkopen. Dicht = hij praat wel, maar de winkel zegt hoe lang het nog duurt. Hoe lang dag en nacht duren staat in Instellingen > Wereld > 🌗 Dag en nacht.",
           "Altijd voor de eerste winkels. Alleen overdag voor een gewone winkel in het dorp, alleen 's nachts voor een smokkelaar.",
           "Spelers kunnen nergens kopen → zet minstens één winkel op Altijd.") },
+      marketHours: hoursField("Markt open", "de markt", "🌗 Dag en nacht"),
+      craftHours: hoursField("Werkplek open", "de werkplek", "🌗 Dag en nacht"),
       // Werkbank Fase 10 (Kevin 15-11): een NPC kan rondlopen. Hij blijft staan als een speler bij hem is (om te praten).
       walkMode: { type: "select", required: false, options: ["stand", "wander", "route"], optionIcons: { stand: "🧍", wander: "🚶", route: "🛣️" },
         optionLabels: { stand: "Staat stil", wander: "Loopt rond", route: "Loopt een route" }, audience: "server", label: "Lopen",
         ui: ui("🚶", "select", "werkbank", { group: WALK_GROUP }), default: "stand",
-        help: help("Staat de NPC op zijn plek, loopt hij rond, of loopt hij een route die jij tekent? Komt een speler bij hem, dan blijft hij staan en kijkt hem aan (om te praten of te handelen).",
+        help: help("Staat de NPC op zijn plek, loopt hij rond, of loopt hij een route die jij tekent? Praat een speler met hem, dan blijft hij staan en kijkt hem aan; langslopen laat hem gewoon doorlopen.",
           "Loopt rond voor een kind in het dorp (over de 🛣️ Weg als die er ligt). Loopt een route voor een wachter of een boer: kies hem in de 3D-view, druk F en klik de punten. Een NPC met 'Alleen als vlag' blijft staan.",
           "Hij loopt door een huis of muur → kies een open plek, of teken een route om het huis heen.") },
       walkRadius: { type: "number", required: false, min: 1, max: 60, audience: "server", label: "Hoe ver",
@@ -401,6 +398,7 @@ export const GAME_KINDS = {
         help("Kun je bij dit model dingen maken? Loop erheen en druk E (of klik het).", "Aan voor een aambeeld, oven of kookpot, en sleep bij Werkplek voor het beroep erop.", "Je kunt er niets maken → zet dit aan, kies het beroep en geef de recepten hetzelfde beroep."),
         { group: "🔨 Werkplek" }),
       craftProfessionRef: workstationProfessionField("dit model", "🔨 Werkplek"),
+      craftHours: hoursField("Werkplek open", "de werkplek", "🔨 Werkplek", { key: "crafting", is: [true] }),
       // Werkbank Fase 10 (10b): een verhaal op dit model (grafsteen, boek, bord): klik het en lees; daarna staat het in het 📚 kennisboek.
       loreRef: refField("Verhaal om te lezen", "📕", "lore_entry", false,
         help("Kun je dit model lezen? Sleep een 📕 Verhaal uit de Bibliotheek hierop.", "Voor een grafsteen, een boek op een tafel of een bord bij de weg. De speler klikt het model en leest het verhaal; daarna staat het in zijn kennisboek.", "Je kunt het niet lezen → staat er een verhaal op, en sta je dichtbij genoeg (4 m)?"),

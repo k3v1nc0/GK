@@ -3388,6 +3388,8 @@ export function createGkHud(api) {
     const access = marketAccess(ui.market?.marketId);
     if (!access || !m) return [h("div", { class: "gkBody" }, [emptyNote("scales", "Deze markt is er niet meer.")])];
     if (m.rules?.marketOn === false) return [h("div", { class: "gkBody" }, [emptyNote("scales", "De markt is gesloten (Instellingen > Handel).")])];
+    const marketClosed = serviceClosedText(access, "De markt");
+    if (marketClosed) return [h("div", { class: "gkBody" }, [emptyNote("scales", marketClosed)])];
     const busy = Boolean(d.busy?.n05);
     const tab = ui.market.tab || "buy";
     const orders = m.orders || [];
@@ -3836,15 +3838,22 @@ export function createGkHud(api) {
     ])])];
   }
 
+  // Werkbank Fase 10 (Kevin 16-11): winkel, markt en werkplek hebben elk een openingstijd; de HUD ziet zelf de dag of nacht wisselen.
+  function serviceClosedText(service, what) {
+    const sky = data().dayNight;
+    const hours = service?.openHours;
+    if (!hours || hours === "always") return service?.closed || "";
+    if (!sky) return service.closed || "";
+    if (sky.always || (hours === "day" ? sky.isDay : !sky.isDay)) return "";
+    return what + " is dicht. Hij gaat open als het " + (hours === "day" ? "dag" : "nacht") + " wordt (over " + Math.max(1, Math.ceil(num(sky.msToSwitch) / 60000)) + " min).";
+  }
+
   function sheetTrade() {
     const d = data();
     const vendor = api.vendor(ui.trade?.vendorId);
     if (!vendor) return [h("div", { class: "gkBody" }, [emptyNote("shop", "Deze winkel is er niet meer.")])];
     // Werkbank Fase 10: dicht buiten de openingstijd (de server zegt het, en de HUD ziet zelf de dag of nacht wisselen).
-    const sky = d.dayNight;
-    const liveClosed = Boolean(vendor.openHours && vendor.openHours !== "always" && sky && !sky.always && (vendor.openHours === "day" ? !sky.isDay : sky.isDay));
-    const closedText = liveClosed ? "De winkel is dicht. Hij gaat open als het " + (vendor.openHours === "day" ? "dag" : "nacht") + " wordt (over "
-      + Math.max(1, Math.ceil(num(sky.msToSwitch) / 60000)) + " min)." : (sky && vendor.openHours && vendor.openHours !== "always" ? "" : vendor.closed || "");
+    const closedText = serviceClosedText(vendor, "De winkel");
     const offers = (vendor.offers || []).filter(function (offer) { return ["sell_to_player", "both"].includes(offer.mode); })
       .map(function (offer) { return closedText ? Object.assign({}, offer, { canBuy: false }) : offer; });
     // Fase 9 herstel: een winkel kan ook een recept verkopen (kopen = leren); het plaatje is dan wat je ermee maakt.
@@ -3897,6 +3906,8 @@ export function createGkHud(api) {
     const d = data();
     const station = api.station(ui.craft?.stationId);
     if (!station) return [h("div", { class: "gkBody" }, [emptyNote("anvil-impact", "Hier kun je niets meer maken.")])];
+    const stationClosed = serviceClosedText(station, "De werkplek");
+    if (stationClosed) return [h("div", { class: "gkBody" }, [emptyNote("anvil-impact", stationClosed)])];
     const recipes = station.recipes || [];
     // Fase 9: het beroep van deze werkplek met jouw niveau en XP.
     const profession = station.profession || null;
@@ -4454,7 +4465,8 @@ export function createGkHud(api) {
   function markerKind(target) {
     const action = String(target.action || "");
     if (action === "travel" || target.entityKind === "zone_link" || target.entityKind === "portal" || target.targetKind === "zone_link") return "portal";
-    if (action === "node04:start_dialogue" || action === "node05:focus_service") return "npc";
+    // Kevin 16-11: een NPC die rondloopt (npc_walker) is ook gewoon een NPC: gele naam en een ruitje op de kaart.
+    if (action === "node04:start_dialogue" || action === "node05:focus_service" || action === "npc_walker") return "npc";
     return target.entityKind === "enemy" ? "enemy" : target.entityKind === "resource" ? "resource" : target.entityKind === "pickup" ? "pickup" : "";
   }
   function mapMarkers(live) {
@@ -5923,6 +5935,8 @@ export function createGkHud(api) {
     readLore,
     questDone,
     npcSay,
+    // Kevin 16-11: praat de speler nu met een NPC (op weg erheen, gesprek, winkel, werkplek of markt open)?
+    talking() { return Boolean(ui.pendingTalk || ui.serviceTalk || ui.trade || ui.craft || ui.market || data().dialogue); },
     setMapPresentation,
     // Kevin 8-11: klik op een portal in de wereld = de grote kaart open, om te kiezen waarheen.
     openPortalMap(portalId) {

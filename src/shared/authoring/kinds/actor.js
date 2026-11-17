@@ -3,7 +3,7 @@
 // Een losse stat_block/faction/animation_set-kind komt pas als hergebruik dat vraagt (zie F5/VOORTGANG.md).
 // Werkbank Fase 1: per veld icoon, bediening, plek, standaard en Ⓘ-hulp (zie ./ui.js).
 import { MAX_WORLD_MM } from "../../../../apps/web/public/shared/spatial.js";
-import { HELP_ID, HELP_MODEL, HELP_NAME, HELP_RESPAWN, HELP_SCALE, help, ui } from "./ui.js";
+import { HELP_ID, HELP_MODEL, HELP_NAME, HELP_RESPAWN, HELP_SCALE, help, routeEndField, routeField, ui } from "./ui.js";
 
 const M = { unit: "m", scale: 1000 };
 const POS_HELP = help(
@@ -33,6 +33,11 @@ const HEAL_GROUP = "💚 Genezen";
 const ELITE_GROUP = "💪 Af en toe een sterkere";
 const LEVEL_GROUP = "🎚️ Level en groepsbaas";
 const BOSS_ONLY = Object.freeze({ key: "groupBoss", is: [true] });
+// Kevin 16-11: een vijand kan alles wat een NPC kan: stilstaan, rondlopen of een route (ook in de lucht, bijv. een draak).
+const WALK_GROUP = "🚶 Lopen";
+const WALKS = Object.freeze({ key: "walkMode", is: ["wander", "route"] });
+const ROUTE_ON = Object.freeze({ key: "walkMode", is: ["route"] });
+const PACK_GROUP = "👥 Groepje";
 
 export const ACTOR_KINDS = {
   actor_archetype: {
@@ -164,10 +169,31 @@ export const ACTOR_KINDS = {
       eliteStrengthPct: { type: "integer", required: false, min: 100, max: 1000, audience: "server", label: "Hoeveel sterker",
         ui: ui("💪", "slider", "werkbank", { step: 10, unit: "%", range: [100, 500], group: ELITE_GROUP }), default: 200,
         help: help("Hoeveel levens, schade en XP een sterkere heeft vergeleken met de gewone vijand.", "200 % = dubbel zoveel levens, schade en XP.", "Sterkere is niet te doen → lager.") },
+      walkMode: { type: "select", required: false, options: ["stand", "wander", "route"], optionIcons: { stand: "🧍", wander: "🚶", route: "🛣️" },
+        optionLabels: { stand: "Staat stil", wander: "Loopt rond", route: "Loopt een route" }, audience: "server", label: "Lopen",
+        ui: ui("🚶", "select", "werkbank", { group: WALK_GROUP }), default: "stand",
+        help: help("Staat de vijand op zijn plek, loopt hij rond, of loopt hij een route die jij tekent (ook door de lucht)? Ziet hij je, dan vecht hij; daarna loopt hij terug en gaat verder.",
+          "Staat stil voor een wachter bij een poort, Loopt rond voor een wolf, Loopt een route voor een patrouille of een draak die rondvliegt: kies hem in de 3D-view, druk F en klik de punten.",
+          "Hij loopt door een muur → teken een punt om de muur heen. Hij vliegt te hoog om te raken → hij landt vanzelf als hij vecht.") },
       // Werkbank Fase 10 (Kevin 15-11): rondwandelen rond zijn plek als hij niet vecht (0 = blijft staan).
       wanderRadiusMm: { type: "integer", required: false, min: 0, max: 50000, audience: "server", label: "Rondwandelen",
-        ui: ui("🚶", "slider", "werkbank", Object.assign({ step: 500, range: [0, 30000] }, M)), default: 0,
+        ui: ui("📏", "slider", "werkbank", Object.assign({ step: 500, range: [0, 30000], group: WALK_GROUP, when: { key: "walkMode", is: ["wander"] } }, M)), default: 0,
         help: help("Hoe ver de vijand rondwandelt rond zijn plek als hij niet vecht. 0 m = hij blijft staan.", "3-8 m voor een wolf of een wild dier, 0 m voor een wachter bij een poort.", "Loopt te ver weg van zijn plek → kleiner. Staat er stijf bij → groter.") },
+      route: routeField("Route", "server", WALK_GROUP, ROUTE_ON, "deze vijand"),
+      routeEnd: routeEndField("server", WALK_GROUP, ROUTE_ON),
+      walkSpeed: { type: "number", required: false, min: 0.3, max: 30, audience: "server", label: "Hoe snel",
+        ui: ui("💨", "slider", "werkbank", { step: 0.1, unit: "m/s", range: [0.5, 20], group: WALK_GROUP, when: ROUTE_ON }), default: 2,
+        help: help("Hoe snel de vijand zijn route loopt (of vliegt) als hij niet vecht. Vechten gaat met de Loopsnelheid van de vijand.", "1-2 m/s voor een patrouille, 8-15 m/s voor een draak in de lucht.", "Zijn benen gaan sneller dan hij vooruit komt → maak hem sneller of kies een rustiger animatie.") },
+      walkSound: { type: "asset", assetType: "audio", required: false, maxLength: 160, audience: "server", label: "Geluid tijdens lopen",
+        ui: ui("🔊", "asset", "werkbank", { group: WALK_GROUP, when: WALKS }), default: null,
+        help: help("Een geluid dat speelt terwijl de vijand loopt of vliegt (voetstappen, vleugels). Hoe dichterbij, hoe harder.", "Sleep een kort geluid dat mooi rondloopt. Leeg = stil.", "Te druk → kies een zachter geluid; spelers zetten het uit met Muziek en geluid.") },
+      // Kevin 16-11: een groepje rond deze vijand (bijv. 5 wolven rond een groepsbaas). Ze lopen met hem mee en vechten samen.
+      followers: { type: "refList", refKinds: ["actor_archetype"], columns: [{ key: "count", label: "Hoeveel", icon: "🔢", min: 1, max: 12, default: 1 }],
+        required: false, minItems: 0, maxItems: 6, audience: "server", label: "Met een groepje",
+        ui: ui("👥", "refList", "werkbank", { group: PACK_GROUP }), default: [],
+        help: help("Vijanden die bij deze vijand horen. Ze staan of lopen in een kring om hem heen, lopen zijn route mee, en vallen je allemaal tegelijk aan als je er één raakt of te dichtbij komt.",
+          "Sleep een vijand uit de Bibliotheek erop en zet Hoeveel op 3-6. Zet bij deze vijand zelf eventueel Groepsbaas aan.",
+          "Te zwaar voor één speler → minder in het groepje, of een zwakkere vijand erin.") },
       patrolPointsMm: { type: "pointList", required: false, minItems: 2, maxItems: 16, min: -MAX_WORLD_MM, max: MAX_WORLD_MM, audience: "server", label: "Looproute",
         ui: ui("🧭", "points", "viewport"), default: null,
         help: help("De punten waar de vijand langs loopt als hij niet vecht.", "2-5 punten dicht bij de plek; teken ze in de 3D-view.", "Vijand loopt door muren → zet de punten op een open pad.") }

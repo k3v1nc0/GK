@@ -15,6 +15,9 @@ const color = (label, icon, def, helpText, extra = {}) => ({
 });
 
 const DAY_GROUP = "🌗 Dag en nacht";
+// Kevin 16-11: zon en schaduw zelf instellen (de game en de editor tonen dezelfde zon).
+const SUN_GROUP = "☀️ Zon en schaduw";
+const SHADOWS_ON = Object.freeze({ key: "shadowsOn", is: [true] });
 
 export const WORLD_KINDS = {
   world_settings: {
@@ -67,6 +70,26 @@ export const WORLD_KINDS = {
       lightStrength: num("Licht overal", "💡", 0.6, 0, 5, 0.05, "",
         help("Licht dat overal even sterk is (ook in de schaduw).", "0.4 tot 1 werkt meestal goed.", "Schaduwen pikzwart → hoger."),
         { more: true, range: [0, 2] }),
+      sunAngle: num("Zon: richting", "🧭", 56, 0, 359, 1, "°",
+        help("Uit welke richting de zon schijnt; de schaduwen vallen de andere kant op. Geldt in de game en in de editor.", "0° = de zon staat 'boven' op de kaart, 90° = rechts. Kies een richting waarbij huizen en bomen mooie schaduwen op het pad geven.", "Schaduwen vallen over je speler heen of verstoppen het pad → draai de zon."),
+        { group: SUN_GROUP }),
+      sunHeight: num("Zon: hoogte", "📐", 54, 10, 89, 1, "°",
+        help("Hoe hoog de zon staat. Laag = lange schaduwen (ochtend, avond), hoog = korte schaduwen (middag).", "40-60°. Onder 25° worden schaduwen erg lang.", "Schaduwen zijn te lang of strepen over de grond → hoger."),
+        { group: SUN_GROUP }),
+      shadowsOn: { type: "boolean", required: false, audience: "client", label: "Schaduw in de game",
+        ui: ui("🌓", "toggle", "instellingen", { group: SUN_GROUP }), default: true,
+        help: help("Laat de game schaduwen tekenen. Uit = sneller op een oude laptop, maar platter.", "Aan. Alleen uit als de game hapert.", "De game hapert → zet de schaduw uit of zet Scherpte op Laag.") },
+      modelShadows: { type: "boolean", required: false, audience: "client", label: "Modellen geven schaduw",
+        ui: ui("🏠", "toggle", "instellingen", { group: SUN_GROUP, when: SHADOWS_ON }), default: true,
+        help: help("Geven alle geplaatste modellen (huizen, bomen, hekken) in de game schaduw, net als in de editor? NPC's, vijanden en de speler geven altijd schaduw.", "Aan, dan ziet de game eruit als de editor.", "De game hapert in een druk dorp → zet dit uit (alleen figuren geven dan schaduw)."),
+        },
+      shadowSharpness: { type: "select", required: false, options: ["low", "medium", "high"], optionIcons: { low: "🐢", medium: "🙂", high: "✨" },
+        optionLabels: { low: "Laag (snelst)", medium: "Middel (zoals de editor)", high: "Hoog (scherpst)" }, audience: "client", label: "Scherpte van de schaduw",
+        ui: ui("🔍", "select", "instellingen", { group: SUN_GROUP, when: SHADOWS_ON }), default: "low",
+        help: help("Hoe scherp de randen van de schaduwen in de game zijn. Scherper kost meer van de laptop.", "Laag op een oude laptop, Middel voor hetzelfde beeld als de editor.", "Schaduwranden zijn blokkerig → hoger. De game hapert → lager.") },
+      shadowDistance: num("Schaduw tot", "📏", 70, 30, 200, 5, "m",
+        help("Tot hoe ver om de speler heen de game schaduwen tekent. Verder weg = geen schaduw.", "60-90 m: genoeg voor wat je in beeld hebt.", "Schaduwen verdwijnen aan de rand van het beeld → verder. Schaduwen worden wazig → dichterbij."),
+        { group: SUN_GROUP, when: SHADOWS_ON }),
       // Werkbank Fase 10 (keuze van Kevin 15-11): dag en nacht, standaard 1 uur dag en 1 uur nacht.
       dayMinutes: num("Lengte van de dag", "☀️", 60, 1, 720, 1, "min",
         help("Hoe lang het dag is. Daarna wordt het nacht, en zo steeds opnieuw. Iedereen heeft dezelfde tijd (de server telt).", "60 min dag en 60 min nacht: in twee uur spelen zie je beide.", "Spelers zien nooit de nacht → maak de dag korter."),

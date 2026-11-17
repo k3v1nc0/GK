@@ -67,6 +67,25 @@ const CHUNK_LOADING = {
 };
 const EMPTY_LIST = () => ({ byId: {}, all: [] });
 
+// Kevin 16-11: de zon uit Instellingen > Wereld (richting en hoogte in graden). Alleen de richting telt voor de schaduw.
+export function sunPositionOf(settings) {
+  const angle = (Number(settings?.sunAngle ?? 56) * Math.PI) / 180;
+  const height = (Math.max(10, Math.min(89, Number(settings?.sunHeight ?? 54))) * Math.PI) / 180;
+  const round = (value) => Math.round(value * 100) / 100;
+  return { x: round(Math.sin(angle) * Math.cos(height) * 24), y: round(Math.sin(height) * 24), z: round(Math.cos(angle) * Math.cos(height) * 24) };
+}
+
+// Kevin 16-11: de schaduw van de game uit Instellingen (aan/uit, modellen ook, scherpte, hoe ver). De editor houdt zijn eigen beeld.
+const SHADOW_MAP_SIZES = { low: 512, medium: 1024, high: 2048 };
+export function gameShadowOf(settings) {
+  const game = clone(PERFORMANCE.game);
+  const size = Math.max(30, Math.min(200, Number(settings?.shadowDistance) || 70));
+  Object.assign(game.shadow, { enabled: settings?.shadowsOn !== false, staticPropsCast: settings?.modelShadows !== false,
+    mapSize: SHADOW_MAP_SIZES[settings?.shadowSharpness] || 512, cameraSize: size, cameraFar: Math.max(300, size * 4) });
+  if (settings?.shadowsOn === false) { game.preset = "geen_schaduw"; game.shadow.preset = "geen_schaduw"; }
+  return { game };
+}
+
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
 // De waarden van de kaart "Wereld", aangevuld met de standaard uit het schema (zonder kaart: alleen standaard).
@@ -257,7 +276,7 @@ export function baseRuntimeWorld(data = {}, options = {}) {
     schemaVersion: WORLD_FORMAT_VERSION,
     source: WORLD_SOURCE,
     world: { id: WORLD_ID, displayName: gameName, backgroundColor: sky, fogColor: sky, fogDensity: 0,
-      performance: Object.assign(clone(PERFORMANCE), { shared: { worldId: WORLD_ID, displayName: gameName, backgroundColor: sky, fogColor: sky, fogDensity: 0, smoothShading: true } }) },
+      performance: Object.assign(clone(PERFORMANCE), { shared: { worldId: WORLD_ID, displayName: gameName, backgroundColor: sky, fogColor: sky, fogDensity: 0, smoothShading: true } }, gameShadowOf(settings)) },
     ground,
     camera: Object.assign({ mode: "top-down" }, camera),
     player: { id: "player", modelAssetId: settings.playerModelAssetId || null, moveSpeed: Number(settings.playerSpeed), sprintMultiplier: 1.6,
@@ -268,7 +287,7 @@ export function baseRuntimeWorld(data = {}, options = {}) {
       daySkyColor: sky, nightSkyColor: settings.nightSkyColor },
     lights: [
       { id: "ambient_light", type: "ambient", color: "#ffffff", intensity: Number(settings.lightStrength) },
-      { id: "sun_light", type: "directional", color: "#ffffff", intensity: Number(settings.sunStrength), position: { x: 12, y: 20, z: 8 } }
+      { id: "sun_light", type: "directional", color: "#ffffff", intensity: Number(settings.sunStrength), position: sunPositionOf(settings) }
     ],
     entities: [], interactables: [], keybinds: [], ui: [],
     minimap: options.editor ? { bakes: [], game: null, editor: null } : { bakes: [], game: null },
@@ -732,10 +751,10 @@ function withGame(world, source, options) {
     if (npc.shopOffers.length) components.push({ nodeType: "vendor_component", componentId: "vendor." + npc.npcId, linkedEntityId: id, vendorId: "vendor." + npc.npcId,
       vendorCatalogRef: "vendor_catalog." + npc.npcId, interactionPrompt: "Handelen", range: talkRangeOf(npc) + 0.5, openHours: npc.openHours || "always" });
     if (npc.crafting) components.push({ nodeType: "crafting_station_component", componentId: "station." + npc.npcId, linkedEntityId: id, stationId: "station." + npc.npcId,
-      stationType: stationTypeFor(npc.craftProfessionId), professionId: npc.craftProfessionId || null, recipeRefs: [], range: talkRangeOf(npc) + 0.5, interactionPrompt: "Maken" });
+      stationType: stationTypeFor(npc.craftProfessionId), professionId: npc.craftProfessionId || null, recipeRefs: [], range: talkRangeOf(npc) + 0.5, interactionPrompt: "Maken", openHours: npc.craftHours || "always" });
     // Fase 8 herstel: een NPC kan een markt zijn (spelers verkopen hier aan elkaar).
     if (npc.market) components.push({ nodeType: "marketplace_access_component", componentId: "market." + npc.npcId, linkedEntityId: id,
-      marketAccessId: "market." + npc.npcId, range: talkRangeOf(npc) + 0.5, interactionPrompt: "Markt", remoteAccessAllowed: false });
+      marketAccessId: "market." + npc.npcId, range: talkRangeOf(npc) + 0.5, interactionPrompt: "Markt", remoteAccessAllowed: false, openHours: npc.marketHours || "always" });
     zoneEntities.push({ nodeType: "model_entity", nodeId: id, entityId: id, label: npc.displayName, modelAssetId: npc.modelAssetId || null,
       x: npc.x, y: npc.y, z: npc.z, rotationY: npc.rotationY, scaleX: scale, scaleY: scale, scaleZ: scale, components });
     questTargets.push({ nodeType: "quest_target", targetId: npcTargetId(npc.npcId), label: npc.displayName, targetKind: "npc", zoneRef: WORLD_ZONE_ID,
@@ -750,7 +769,7 @@ function withGame(world, source, options) {
   const readables = [];
   for (const model of game?.placedModels || []) {
     if (model.fly && !editor) {
-      if (model.modelAssetId && !model.flagId) flyers.push({ id: "flyer." + model.placedModelId, modelAssetId: model.modelAssetId, scale: model.scale, idleClip: model.idleClip || null,
+      if (model.modelAssetId && !model.flagId) flyers.push({ id: "flyer." + model.placedModelId, name: model.displayName || "", modelAssetId: model.modelAssetId, scale: model.scale, idleClip: model.idleClip || null,
         x: model.x, y: model.y, z: model.z, rotationY: model.rotationY || 0, count: model.fly.count, radius: model.fly.radius, height: model.fly.height, speed: model.fly.speed,
         ...(model.fly.route ? { route: model.fly.route, loop: model.fly.loop !== false } : {}), ...(model.fly.soundAssetId ? { soundAssetId: model.fly.soundAssetId } : {}) });
       continue;
@@ -772,7 +791,7 @@ function withGame(world, source, options) {
         x: model.x, y: model.y, z: model.z, rotationY: model.rotationY, scaleX: model.scale, scaleY: model.scale, scaleZ: model.scale,
         components: [{ nodeType: "crafting_station_component", componentId: "station.model." + model.placedModelId, linkedEntityId: id,
           stationId: "station.model." + model.placedModelId, stationType: stationTypeFor(model.craftProfessionId), professionId: model.craftProfessionId || null,
-          recipeRefs: [], range: reach + 2.5, clickRadius: reach + 0.3, interactionPrompt: "Maken" }] });
+          recipeRefs: [], range: reach + 2.5, clickRadius: reach + 0.3, interactionPrompt: "Maken", openHours: model.craftHours || "always" }] });
     }
   }
   // Portals (8-11): een model in de wereld; de server onthoudt per speler welke vrij zijn (zie runtime/portal-runtime.js).
@@ -958,6 +977,7 @@ function withGame(world, source, options) {
   const modelIds = Array.from(new Set(entities.map((entity) => entity.modelAssetId)
     .concat(flyers.map((flyer) => flyer.modelAssetId))
     .concat(flyers.map((flyer) => flyer.soundAssetId))
+    .concat(flyers.flatMap((flyer) => (Array.isArray(flyer.route) ? flyer.route.map((point) => point.sound) : [])))
     .concat(Object.values(items).map((item) => item?.worldModelAssetId))
     // Stap 4 (HUD): eigen iconen van items en valuta (plaatjes in de tas).
     .concat(Object.values(items).map((item) => item?.iconAssetId))

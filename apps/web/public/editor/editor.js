@@ -1,4 +1,4 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261116-route1";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261116-herstel1";
 import { edgeBetweenPoints, editClosedEdges } from "./walkable-edge-tools.js?v=20261031-randen1";
 import { createTerrainEditor } from "./terrain-editor.js?v=20261102-terrein10";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261106-perf1";
@@ -11,12 +11,12 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261106-perf1";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261106-perf1";
-import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261116-route1";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261116-herstel1";
 import { createAssetPicker } from "./mini-asset-picker.js?v=20261106-thumbs150";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
 import { createDocDrop, docKeyFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261108-portals1";
 import { createRoadEditor } from "./road-editor.js?v=20261108-roads7";
-import { createRouteEditor } from "./route-editor.js?v=20261116-route1";
+import { createRouteEditor } from "./route-editor.js?v=20261116-herstel1";
 import { AREA_EDITOR_PREFIX, AREA_SOORTEN, AREA_SOORT_ORDER, areaBodyFromNodePatch, areaCirclePointsMm, areaNodeValues, areaSoort } from "../shared/area-soorten.js?v=20261108-roads7";
 import { removeVisualObjects, visualModelsForRelation, visualObjectRelations } from "./visual-object-relations.js?v=20261106-perf1";
 import { FIELD_HELP_STATUSES, createSemanticFieldHelpRegistry, formatSemanticFieldHelp, semanticFieldHelpEntry } from "./semantic-field-help.js?v=20261012-semantic-help1";
@@ -958,6 +958,8 @@ function routeTarget() {
   const doc = docBench.doc(focusedPlacedDocKey());
   if (!doc) return null;
   if (doc.kind === "npc" && doc.body?.walkMode === "route") return { doc: doc, kind: "npc", key: "route", loop: doc.body.routeEnd !== "back", label: "NPC-route" };
+  // Kevin 16-11: een vijand kan ook een route lopen (of vliegen).
+  if (doc.kind === "actor_spawn" && doc.body?.walkMode === "route") return { doc: doc, kind: "actor_spawn", key: "route", loop: doc.body.routeEnd !== "back", label: "Vijand-route" };
   if (doc.kind === "placed_model" && doc.body?.fly === true && doc.body?.flyMode === "route") return { doc: doc, kind: "placed_model", key: "flyRoute", loop: doc.body.flyEnd !== "back", label: "Vliegroute" };
   return null;
 }
@@ -32846,7 +32848,9 @@ function handleTerrainPointerDown(event) {
   }
   if (runtimeTransformActive()) return;
   terrainRememberPointer(event);
-  if (roadEditor.handlePointerDown(event)) return;
+  // Kevin 16-11: bezig met een route (NPC, vijand of vlieger geselecteerd)? Dan is de hoofdweg even niet aan te klikken.
+  const routeBusy = Boolean(routeTarget());
+  if (!routeBusy && roadEditor.handlePointerDown(event)) return;
   if (routeEditor.handlePointerDown(event)) return;
   if (handleScatterPointerDown(event)) return;
   if (terrainHasActiveSession() && isPrimaryPointerAction(event) && terrainCanvasTarget(event)) {

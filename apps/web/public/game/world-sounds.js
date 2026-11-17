@@ -49,10 +49,33 @@ export function createWorldSounds(options = {}) {
     for (const key of Array.from(playing.keys())) if (!keep.has(key)) stop(key);
   }
 
-  function setMuted(on) {
-    muted = on === true;
-    if (muted) for (const key of Array.from(playing.keys())) stop(key);
+  // Kevin 16-11: één keer afspelen op een plek (een routepunt: de draak landt). Hooguit 4 tegelijk, verder = niet.
+  const shots = new Set();
+  function once(url, at, listener, range = 40) {
+    if (muted || !url || !at || !listener || shots.size >= maxPlaying) return false;
+    const reach = Math.max(1, Number(range) || 40);
+    const distance = Math.hypot(Number(at.x) - listener.x, (Number(at.y) || 0) - (Number(listener.y) || 0), Number(at.z) - listener.z);
+    if (!Number.isFinite(distance) || distance >= reach) return false;
+    let audio;
+    try { audio = createAudio(url); } catch { return false; }
+    const closeness = 1 - distance / reach;
+    audio.volume = Math.max(0, Math.min(1, baseVolume * 1.6 * closeness * closeness));
+    shots.add(audio);
+    const done = () => shots.delete(audio);
+    try { audio.onended = done; audio.onerror = done; } catch {}
+    setTimeout(done, 15000);
+    try { const result = audio.play(); if (result && typeof result.catch === "function") result.catch(done); } catch { done(); }
+    return true;
   }
 
-  return { update, setMuted, playingCount: () => playing.size };
+  function setMuted(on) {
+    muted = on === true;
+    if (muted) {
+      for (const key of Array.from(playing.keys())) stop(key);
+      for (const audio of shots) { try { audio.pause(); } catch {} }
+      shots.clear();
+    }
+  }
+
+  return { update, once, setMuted, playingCount: () => playing.size };
 }

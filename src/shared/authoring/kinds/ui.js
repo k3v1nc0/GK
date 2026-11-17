@@ -80,3 +80,16 @@ export const HELP_RESPAWN = help(
   "30-120 s voor gewone dingen, 5-15 min voor zeldzame dingen.",
   "Spelers staan te wachten → korter. Te veel in de wereld → langer."
 );
+
+// Werkbank Fase 10 (Kevin 16-11): een getekende route (NPC, vijand, vliegend model) en wat er aan het eind gebeurt.
+export const routeField = (label, audience, group, when, wat) => ({ type: "route", required: false, maxItems: 64, audience, label,
+  ui: ui("🛣️", "route", "werkbank", { group, when }), default: null,
+  help: help("De route van " + wat + ": punten die hij een voor een afgaat. Per punt: aan de grond of op een hoogte, hoe lang hij daar wacht, welke animatie hij dan speelt, wat hij zegt en welk geluid er klinkt.",
+    "Kies " + wat + " in de 3D-view, druk F en klik op de grond: klik, klik, klik (Esc = klaar). Klik een punt en druk G om te schuiven, G en dan Z voor de hoogte. Wachten 5-20 s met bijv. een zwaai- of werk-animatie.",
+    "Hij loopt door een muur → zet er een punt bij om de muur heen. Hij zweeft → zet ⛰️ aan de grond aan.") });
+export const routeEndField = (audience, group, when) => ({ type: "select", required: false, options: ["loop", "back"], optionIcons: { loop: "🔁", back: "↩️" },
+  optionLabels: { loop: "Terug naar punt 1", back: "Omkeren" }, audience, label: "Aan het eind",
+  ui: ui("🔁", "select", "werkbank", { group, when }), default: "loop",
+  help: help("Wat er gebeurt bij het laatste punt: in een rondje terug naar punt 1, of omkeren en dezelfde weg terug.",
+    "Rondje voor een wachter rond het dorp of vogels rond een berg; omkeren voor een boer tussen huis en akker.",
+    "Hij steekt dwars door het dorp terug naar punt 1 → kies Omkeren of zet er punten bij.") });

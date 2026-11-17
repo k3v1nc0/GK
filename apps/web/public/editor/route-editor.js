@@ -16,6 +16,8 @@ export function cleanRoutePoint(point) {
   if (hasHeight(point)) out.h = Math.max(0, Math.min(300, round1(point.h)));
   if (Number(point.waitS) > 0) out.waitS = Math.min(600, round1(point.waitS));
   if (point.clip) out.clip = String(point.clip).slice(0, 120);
+  if (typeof point.say === "string" && point.say.trim()) out.say = point.say.trim().slice(0, 200);
+  if (point.sound) out.sound = String(point.sound).slice(0, 160);
   return out;
 }
 

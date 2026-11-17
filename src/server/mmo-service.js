@@ -3545,6 +3545,10 @@ export class MmoService {
       try { this.friendsRuntime.handle(connection, message); } catch (error) { console.error("[vrienden] mislukt:", error.message); }
       return;
     }
+    if (message.type === "npc:talk") {
+      try { this.actorRuntime?.setNpcTalk(connection.player.id, message.payload.npcId, nowMs()); } catch (error) { console.error("[npc] praten mislukt:", error.message); }
+      return;
+    }
     if (message.type !== "player:move_intent" && message.type !== "player:position_intent" && message.type !== "player:input_state") {
       const payload = { code: "unknown_event", message: "Onbekend WebSocket event: " + message.type };
       send(connection.ws, eventMessage("error", payload, this.stampServerPayload(connection.worldId, payload)));
