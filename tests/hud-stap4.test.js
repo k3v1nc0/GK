@@ -200,6 +200,8 @@ test("Kaartinstellingen: mist en afstand van questpijlen volgen de editor, ook b
   assert.equal(defaults.presentation.miniViewportPercent, 22);
   assert.equal(defaults.clickToMove, true);
   assert.equal(defaults.questArrowDistanceMeters, 200);
+  assert.equal(defaults.presentation.styles.npc.edgeMini, false);
+  assert.equal(defaults.presentation.styles.quest.edgeMini, true);
   const fog = defaults.fogOfWar;
   assert.equal(fog.enabled, true);
   assert.equal(fog.cellSize, 8);
@@ -236,6 +238,7 @@ test("Kaartinstellingen: mist en afstand van questpijlen volgen de editor, ook b
     mapNpcIcon: "triangle",
     mapNpcShowMini: false,
     mapNpcSizePct: 150,
+    mapNpcEdgeMini: true,
     mapFogColor: "#112233"
   }).minimap.game;
   assert.equal(authoredMap.presentation.shape, "square");
@@ -251,7 +254,7 @@ test("Kaartinstellingen: mist en afstand van questpijlen volgen de editor, ook b
   assert.equal(authoredMap.presentation.bigSpanMeters, 500);
   assert.equal(authoredMap.presentation.bigShowMarkerNames, true);
   assert.deepEqual(authoredMap.presentation.styles.npc, {
-    label: "Bewoners", color: "#123456", shape: "triangle", showMini: false, showBig: true, size: 1.5, namesMini: false, namesBig: false
+    label: "Bewoners", color: "#123456", shape: "triangle", showMini: false, showBig: true, size: 1.5, namesMini: false, namesBig: false, edgeMini: true
   });
   assert.equal(authoredMap.fogOfWar.fogColor, "#112233");
 

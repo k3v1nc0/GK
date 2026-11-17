@@ -7846,6 +7846,13 @@ function resolveChunkDebugCenter(policy) {
     };
   }
 
+  // Bewegende/klikbare wereldobjecten worden niet als static prop of scatter
+  // gebouwd. Zij horen wel allemaal schaduw te geven zolang schaduw aan staat.
+  function dynamicWorldShadowOptions() {
+    const enabled = currentShadowPolicy().enabled === true;
+    return { castShadow: enabled, receiveShadow: enabled };
+  }
+
   function groundShadowOptions() {
     const policy = currentShadowPolicy();
     return {
@@ -8990,7 +8997,11 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function captureViewState() {
-    if (mode !== "editor") return null;
+    // OrbitControls begint met 0/Infinity totdat de eerste editorwereld zijn
+    // cameraconfiguratie heeft toegepast. Sla die tijdelijke waarden niet op:
+    // Infinity wordt in de server-resumestatus null en kon bij het herstellen
+    // vervolgens als 0 worden gelezen, waardoor de camera op zijn doel vastzat.
+    if (mode !== "editor" || !editorViewInitialized) return null;
     return {
       cameraPosition: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
       cameraTarget: orbitControls ? { x: orbitControls.target.x, y: orbitControls.target.y, z: orbitControls.target.z } : null,
@@ -9006,7 +9017,23 @@ function resolveChunkDebugCenter(policy) {
 
   function restoreViewState(viewState) {
     if (mode !== "editor" || !viewState) return false;
-    if (orbitControls && viewState.cameraPosition && viewState.cameraTarget) {
+    const savedMinDistance = typeof viewState.orbitMinDistance === "number" && Number.isFinite(viewState.orbitMinDistance)
+      ? viewState.orbitMinDistance
+      : null;
+    const savedMaxDistance = typeof viewState.orbitMaxDistance === "number" && Number.isFinite(viewState.orbitMaxDistance)
+      ? viewState.orbitMaxDistance
+      : null;
+    const validOrbitRange = savedMinDistance !== null && savedMaxDistance !== null
+      && savedMinDistance > 0 && savedMaxDistance >= savedMinDistance;
+    const cameraPosition = viewState.cameraPosition;
+    const cameraTarget = viewState.cameraTarget;
+    const validCameraView = validOrbitRange
+      && cameraPosition && cameraTarget
+      && [cameraPosition.x, cameraPosition.y, cameraPosition.z, cameraTarget.x, cameraTarget.y, cameraTarget.z]
+        .every(function (value) { return typeof value === "number" && Number.isFinite(value); });
+    if (orbitControls && validCameraView) {
+      orbitControls.minDistance = Math.min(editorInspectionMinDistance, savedMinDistance);
+      orbitControls.maxDistance = savedMaxDistance;
       camera.position.set(viewState.cameraPosition.x, viewState.cameraPosition.y, viewState.cameraPosition.z);
       orbitControls.target.set(viewState.cameraTarget.x, viewState.cameraTarget.y, viewState.cameraTarget.z);
       orbitControls.update();
@@ -9017,10 +9044,6 @@ function resolveChunkDebugCenter(policy) {
     }
     if (viewState.cameraUp && Number.isFinite(Number(viewState.cameraUp.x)) && Number.isFinite(Number(viewState.cameraUp.y)) && Number.isFinite(Number(viewState.cameraUp.z))) {
       camera.up.set(viewState.cameraUp.x, viewState.cameraUp.y, viewState.cameraUp.z);
-    }
-    if (orbitControls && Number.isFinite(Number(viewState.orbitMinDistance)) && Number.isFinite(Number(viewState.orbitMaxDistance))) {
-      orbitControls.minDistance = Math.min(editorInspectionMinDistance, num(viewState.orbitMinDistance, orbitControls.minDistance));
-      orbitControls.maxDistance = num(viewState.orbitMaxDistance, orbitControls.maxDistance);
     }
     selectedEntityId = viewState.selectedEntityId || null;
     refreshSelectedRootReference();
@@ -13677,7 +13700,7 @@ function resolveChunkDebugCenter(policy) {
 
   // Werkbank Fase 10 (Kevin 15-11): vogels of een draak die rondjes vliegen. Alleen om naar te kijken (geen doel, geen botsing).
   // Kevin 16-11: of een getekende route: per punt een hoogte (of aan de grond = landen), wachten en een animatie.
-  // Licht voor de oude laptop: hooguit 40, geen schaduw, en wie ver weg is wordt niet bijgewerkt.
+  // Licht voor de oude laptop: hooguit 40 en wie ver weg is wordt niet bijgewerkt.
   const FLYER_MAX = 40;
   const FLYER_UPDATE_M = 220;
   const flyerRoots = [];
@@ -13742,7 +13765,7 @@ function resolveChunkDebugCenter(policy) {
         };
         content.add(root);
         flyerRoots.push(root);
-        loadModelInto(root, flyer.modelAssetId, worldData, null, { castShadow: false, receiveShadow: false });
+        loadModelInto(root, flyer.modelAssetId, worldData, null, dynamicWorldShadowOptions());
       }
     }
     if (flyerRoots.length) updateFlyers(true);
@@ -15262,8 +15285,9 @@ function resolveChunkDebugCenter(policy) {
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = "model-entity-placeholder";
     mesh.position.y = 0.6;
-    mesh.castShadow = false;
-    mesh.receiveShadow = true;
+    const shadowOptions = staticPropShadowOptions();
+    mesh.castShadow = shadowOptions.castShadow;
+    mesh.receiveShadow = shadowOptions.receiveShadow;
     mesh.userData.runtimeAlive = true;
     root.add(mesh);
     runtimeStats.sceneObjects += 1;
@@ -15283,8 +15307,9 @@ function resolveChunkDebugCenter(policy) {
     });
     const mesh = new THREE.InstancedMesh(geometry, material, count);
     mesh.name = "scatter-placeholder [instances]";
-    mesh.castShadow = false;
-    mesh.receiveShadow = true;
+    const shadowOptions = scatterShadowOptions();
+    mesh.castShadow = shadowOptions.castShadow;
+    mesh.receiveShadow = shadowOptions.receiveShadow;
     mesh.frustumCulled = false;
     const helper = new THREE.Object3D();
     for (let index = 0; index < count; index += 1) {
@@ -15384,9 +15409,10 @@ function resolveChunkDebugCenter(policy) {
           chunkKeys: [chunkKeyValue]
         });
       }
+      const shadowOptions = modelShadowOptions(worldData, inter.modelAssetId);
       loadModelInto(root, inter.modelAssetId, worldData, null, {
-        castShadow: options.castShadow !== undefined ? options.castShadow : false,
-        receiveShadow: options.receiveShadow !== undefined ? options.receiveShadow : true
+        castShadow: options.castShadow !== undefined ? options.castShadow : shadowOptions.castShadow,
+        receiveShadow: options.receiveShadow !== undefined ? options.receiveShadow : shadowOptions.receiveShadow
       });
     }
   }
@@ -15467,7 +15493,7 @@ function resolveChunkDebugCenter(policy) {
     if (asset?.sourcePath && asset.assetType === "model" && Number(asset?.metadata?.animationCount || 0) === 0) {
       return staticPropShadowOptions();
     }
-    return { castShadow: true, receiveShadow: true };
+    return dynamicWorldShadowOptions();
   }
 
   function addStaticPropBatch(worldData, assetId, descriptors, options = {}) {
@@ -17122,10 +17148,7 @@ function resolveChunkDebugCenter(policy) {
           targetRoot.userData.runtimeTargetVisualMeasurement = null;
           refreshRuntimeTargetHitProxy(targetRoot, targetRoot.userData.runtimeTargetPayload || target);
         }
-      }, {
-        castShadow: false,
-        receiveShadow: true
-      });
+      }, dynamicWorldShadowOptions());
       return group;
     }
     const kind = String(target?.entityKind || target?.targetKind || "").toLowerCase();
@@ -17157,8 +17180,9 @@ function resolveChunkDebugCenter(policy) {
       mesh.position.y = 0.32;
     }
     mesh.name = "node03-runtime-target-body";
-    mesh.castShadow = false;
-    mesh.receiveShadow = true;
+    const shadowOptions = dynamicWorldShadowOptions();
+    mesh.castShadow = shadowOptions.castShadow;
+    mesh.receiveShadow = shadowOptions.receiveShadow;
     return mesh;
   }
 

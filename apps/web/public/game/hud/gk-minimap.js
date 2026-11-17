@@ -146,7 +146,8 @@ function markerStyle(styles, kind) {
     shape: String(style.shape || MARKER_SHAPES[kind] || "dot"),
     label: String(style.label || ""),
     // Kevin 8-11: eigen grootte per icoon (Instellingen > Minimap), bovenop de algemene icoongrootte.
-    size: Math.max(0.3, Math.min(3, num(style.size, 1)))
+    size: Math.max(0.3, Math.min(3, num(style.size, 1))),
+    edgeMini: style.edgeMini === true
   };
 }
 
@@ -743,6 +744,19 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
     const areaFont = (fixedOverlaySize
       ? size * 0.075
       : Math.max(size * 0.05, Math.min(size * 0.14, size * 0.075 * 60 / Math.max(5, num(view.radius, 60))))) * textScale(view.textScale);
+    const mapEdge = function (p, pad = dot * 2.2) {
+      if (!roundMap) {
+        if (insideMap(p, pad)) return null;
+        const dx = p.x - half;
+        const dy = p.y - half;
+        const t = (half - pad) / Math.max(Math.abs(dx), Math.abs(dy), 1);
+        return { x: half + dx * t, y: half + dy * t, angle: Math.atan2(dy, dx) };
+      }
+      if (Math.hypot(p.x - half, p.y - half) <= half - pad) return null;
+      const angle = Math.atan2(p.y - half, p.x - half);
+      const r = half - pad;
+      return { x: half + Math.cos(angle) * r, y: half + Math.sin(angle) * r, angle };
+    };
     if (view.questArea && show.quest !== false) drawQuestArea(ctx, view.questArea, toScreen, Math.max(1.5, size * 0.012));
     if (show.area !== false) drawAreaNames(ctx, view.areas, toScreen, areaFont, function (p) { return insideMap(p, half * 0.18); }, view.areaColor);
     ctx.lineWidth = Math.max(1, size * 0.008);
@@ -750,47 +764,36 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
     for (const marker of Array.isArray(view.markers) ? view.markers : []) {
       if (show[marker.kind] === false || marker.kind === "questgiver_available") continue;
       const p = toScreen(num(marker.x), num(marker.z));
-      if (!insideMap(p, dot)) continue;
       if (!marker.alwaysVisible && !discovered(marker.x, marker.z)) continue;
-      drawMarker(ctx, marker.kind, p.x, p.y, dot, view.styles);
-      if (namesOn(view, marker.kind)) drawMarkerName(ctx, marker.name, p.x, p.y, markerNameFont, view.nameColor, dot * 1.5);
+      const style = markerStyle(view.styles, marker.kind);
+      const edge = insideMap(p, dot) ? null : (style.edgeMini ? mapEdge(p, dot * (Math.max(1, style.size) + 0.8)) : null);
+      if (!insideMap(p, dot) && !edge) continue;
+      const drawAt = edge || p;
+      drawMarker(ctx, marker.kind, drawAt.x, drawAt.y, dot, view.styles);
+      if (!edge && namesOn(view, marker.kind)) drawMarkerName(ctx, marker.name, p.x, p.y, markerNameFont, view.nameColor, dot * 1.5);
     }
     // Quest-doel (gouden ster) en je pin; buiten de kaart een pijltje op de rand in de goede richting.
-    const mapEdge = function (p) {
-      if (!roundMap) {
-        const pad = dot * 2.2;
-        if (insideMap(p, pad)) return null;
-        const dx = p.x - half;
-        const dy = p.y - half;
-        const t = (half - pad) / Math.max(Math.abs(dx), Math.abs(dy), 1);
-        return { x: half + dx * t, y: half + dy * t, angle: Math.atan2(dy, dx) };
-      }
-      if (Math.hypot(p.x - half, p.y - half) <= half - dot * 2.2) return null;
-      const angle = Math.atan2(p.y - half, p.x - half);
-      const r = half - dot * 2;
-      return { x: half + Math.cos(angle) * r, y: half + Math.sin(angle) * r, angle };
-    };
     if (view.quest && show.quest !== false && Number.isFinite(Number(view.quest.x))) {
       const p = toScreen(num(view.quest.x), num(view.quest.z));
-      if (drawGoal(ctx, "quest", p, dot, mapEdge, questArrowInRange(view, view.quest), view.styles) && namesOn(view, "quest")) {
+      if (drawGoal(ctx, "quest", p, dot, mapEdge, markerStyle(view.styles, "quest").edgeMini && questArrowInRange(view, view.quest), view.styles) && namesOn(view, "quest")) {
         drawMarkerName(ctx, view.quest.name || markerStyle(view.styles, "quest").label, p.x, p.y, markerNameFont, view.nameColor, dot * 2);
       }
     }
     // Kevin 5-11: sterren op de vijanden die je moet verslaan (boven de mist); alleen de dichtstbijzijnde krijgt een pijltje.
     if (show.quest !== false) (Array.isArray(view.questMarks) ? view.questMarks : []).forEach(function (mark, index) {
-      drawGoal(ctx, "quest", toScreen(num(mark.x), num(mark.z)), dot * 0.8, mapEdge, index === 0 && questArrowInRange(view, mark), view.styles);
+      drawGoal(ctx, "quest", toScreen(num(mark.x), num(mark.z)), dot * 0.8, mapEdge, markerStyle(view.styles, "quest").edgeMini && index === 0 && questArrowInRange(view, mark), view.styles);
     });
     // Beschikbare questgevers zijn vanaf het begin boven de mist zichtbaar, onafhankelijk van het gevolgde quest-doel.
     for (const marker of Array.isArray(view.markers) ? view.markers : []) {
       if (marker.kind !== "questgiver_available" || show[marker.kind] === false) continue;
       const p = toScreen(num(marker.x), num(marker.z));
-      if (drawGoal(ctx, marker.kind, p, dot, mapEdge, questArrowInRange(view, marker), view.styles) && namesOn(view, marker.kind)) {
+      if (drawGoal(ctx, marker.kind, p, dot, mapEdge, markerStyle(view.styles, marker.kind).edgeMini && questArrowInRange(view, marker), view.styles) && namesOn(view, marker.kind)) {
         drawMarkerName(ctx, marker.name, p.x, p.y, markerNameFont, view.nameColor, dot * 2);
       }
     }
     if (view.pin && show.pin !== false && Number.isFinite(Number(view.pin.x))) {
       const p = toScreen(num(view.pin.x), num(view.pin.z));
-      if (drawGoal(ctx, "pin", p, dot, mapEdge, true, view.styles) && namesOn(view, "pin")) {
+      if (drawGoal(ctx, "pin", p, dot, mapEdge, markerStyle(view.styles, "pin").edgeMini, view.styles) && namesOn(view, "pin")) {
         drawMarkerName(ctx, markerStyle(view.styles, "pin").label, p.x, p.y, markerNameFont, view.nameColor, dot * 2);
       }
     }

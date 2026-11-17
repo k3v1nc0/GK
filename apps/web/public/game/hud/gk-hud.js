@@ -6,7 +6,7 @@
 //   herlaad) sta je weer precies waar je was: zelfde paneel, tabblad, filter, item en scrollplek.
 // Dit bestand tekent alleen. Alle spelregels blijven op de server; game.js geeft de data en de acties (api).
 import { ICON_PATHS } from "./gk-icon-paths.js?v=20261110-fase5b";
-import { createHudMinimap } from "./gk-minimap.js?v=20261108-portals3";
+import { createHudMinimap } from "./gk-minimap.js?v=20261117-minimap-edge1";
 import { formatDuration } from "../../shared/effect-math.js?v=20261102-heal2";
 
 const STORE_KEY = "gk:hud:v1";
@@ -119,10 +119,10 @@ const MAP_STYLE_DEFAULTS = Object.freeze({
   party: { label: "Groepsleden", color: "#5ee07a", shape: "dot" },
   portal: { label: "Portals", color: "#c77dff", shape: "portal" },
   portal_locked: { label: "Portal: nog niet vrij", color: "#8a7d99", shape: "portal" },
-  questgiver_available: { label: "Questgever: quest te halen", color: "#ffe08a", shape: "star" },
+  questgiver_available: { label: "Questgever: quest te halen", color: "#ffe08a", shape: "star", edgeMini: true },
   questgiver: { label: "Questgever: geen nieuwe quest", color: "#d4a84a", shape: "star" },
-  quest: { label: "Quest-doel", color: "#ffb020", shape: "star" },
-  pin: { label: "Jouw pin", color: "#ff4fd8", shape: "pin" }
+  quest: { label: "Quest-doel", color: "#ffb020", shape: "star", edgeMini: true },
+  pin: { label: "Jouw pin", color: "#ff4fd8", shape: "pin", edgeMini: true }
 });
 const MAP_DEFAULTS = { span: 160, bigIcon: 0.8, miniIcon: 1, bigText: 1, miniText: 1, rotate: false, pin: null, big: {}, mini: { pickup: false, resource: false } };
 // Alles wat op de kaarten kan staan: [soort, meervoud (legenda), enkelvoud (naamlabel)].
@@ -145,7 +145,8 @@ function mapPresentation(raw) {
       // Kevin 8-11: eigen grootte per icoon (Instellingen > Minimap).
       size: Math.max(0.3, Math.min(3, num(source.size, 1))),
       namesMini: source.namesMini === true,
-      namesBig: source.namesBig === true
+      namesBig: source.namesBig === true,
+      edgeMini: source.edgeMini !== undefined ? source.edgeMini === true : fallback.edgeMini === true
     };
     big[kind] = source.showBig !== false;
     mini[kind] = source.showMini !== false;
@@ -3161,14 +3162,14 @@ export function createGkHud(api) {
     const rewards = (quest.rewards || []).map(function (reward) {
       if (reward.kind === "xp") return stat("round-star", fmt(reward.amount) + " XP");
       if (reward.kind === "currency") return h("span", { class: "gkStat" }, [coin(reward.amount, reward.currencyId)]);
-      return h("span", { class: "gkStat" }, [h("span", { style: "width:16px;height:16px;display:inline-block" }, [itemVisual(reward.itemId)]), reward.amount + "× " + (reward.displayName || "")]);
+      return h("span", { class: "gkStat" }, [h("span", { class: "gkRewardIcon" }, [itemVisual(reward.itemId)]), reward.amount + "× " + (reward.displayName || "")]);
     });
     if (rewards.length && quest.status !== "completed") card.append(h("div", { class: "gkRewards" }, rewards));
     // Stap 7: einde met "Speler kiest 1": tik op de beloning die je wilt.
     if (Array.isArray(step?.rewardChoice) && step.rewardChoice.length) {
       card.append(h("div", { class: "gkBtns" }, step.rewardChoice.map(function (reward) {
         const label = reward.kind === "currency" ? [coin(reward.amount, reward.currencyId)]
-          : [h("span", { style: "width:16px;height:16px;display:inline-block" }, [itemVisual(reward.itemId)]), reward.amount + "× " + (reward.displayName || "")];
+          : [h("span", { class: "gkRewardIcon" }, [itemVisual(reward.itemId)]), reward.amount + "× " + (reward.displayName || "")];
         return h("button", { type: "button", class: "gkBtn gkGo", "data-act": "quest-reward", "data-id": quest.questId, "data-index": String(reward.index), disabled: data().busy?.n04 ? true : null }, label);
       })));
     }

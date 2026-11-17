@@ -627,4 +627,8 @@ test("herstel 16-11: zon en schaduw uit Instellingen; in de game geven alle mode
   assert.equal(set.world.performance.editor.shadow.mapSize, 1024, "de editor houdt zijn eigen beeld");
   const off = baseRuntimeWorld({ worldSettings: { shadowsOn: false } });
   assert.equal(off.world.performance.game.shadow.preset, "geen_schaduw");
+  const runtimeSrc = fs.readFileSync("apps/web/public/shared/world-runtime.js", "utf8");
+  assert.match(runtimeSrc, /function dynamicWorldShadowOptions\(\)/, "bewegende en klikbare wereldobjecten volgen de actieve schaduwinstelling");
+  assert.match(runtimeSrc, /loadModelInto\(group, assetId, world,[\s\S]{0,500}dynamicWorldShadowOptions\(\)\);/, "lopende NPC's, pickups, grondstoffen en vijanden geven schaduw");
+  assert.match(runtimeSrc, /loadModelInto\(root, flyer\.modelAssetId, worldData, null, dynamicWorldShadowOptions\(\)\)/, "ook vliegende modellen geven schaduw");
 });

@@ -990,9 +990,10 @@ export function createDocBench(options = {}) {
         bench.groupOpen = Object.assign({}, bench.groupOpen || {}, { [name]: !fields.hidden });
         toggle.textContent = (fields.hidden ? "▸ " : "▾ ") + name + " (" + fields.childElementCount + ")";
       });
-      entry = { fields, toggle };
+      const head = el("div", { class: "wbdGroupHead" }, [toggle]);
+      entry = { fields, toggle, head };
       groups.set(name, entry);
-      visible.append(el("div", { class: "wbdGroup" }, [toggle, fields]));
+      visible.append(el("div", { class: "wbdGroup" }, [head, fields]));
       return entry;
     };
     // ui.when: { key, is: [...] } = alleen tonen als dat andere veld zo staat (bijv. Geneest alleen bij soort Genezen).
@@ -1066,6 +1067,18 @@ export function createDocBench(options = {}) {
         const rows = areaSettingsRows(field, body, onChange);
         visible.append(...rows.main);
         more.append(...rows.extra);
+        continue;
+      }
+      if (kind === "minimap_settings" && key.endsWith("EdgeMini") && field.ui?.group?.startsWith("📍 Legenda:")) {
+        const edgeInput = document.createElement("input");
+        edgeInput.type = "checkbox";
+        edgeInput.checked = emptyValue(body[key]) ? field.default === true : body[key] === true;
+        edgeInput.addEventListener("change", function () { onChange(edgeInput.checked); });
+        const edge = el("label", {
+          class: "wbdGroupEdge",
+          title: "Toon deze soort aan de rand wanneer de echte plek buiten de minimap valt"
+        }, [edgeInput, document.createTextNode("Op rand")]);
+        groupBox(field.ui.group).head.append(edge);
         continue;
       }
       const shown = labels && labels[key] ? Object.assign({}, field, { label: labels[key] }) : field;
@@ -1555,6 +1568,13 @@ export function createDocBench(options = {}) {
   };
 
   bench.renderSettingsCard = function renderSettingsCard(host, rerender) {
+    const enteredSettingsView = bench.renderedSettingsView !== bench.settingsView;
+    bench.renderedSettingsView = bench.settingsView;
+    if (enteredSettingsView && bench.settingsView === "minimap_settings") {
+      bench.groupOpen = Object.fromEntries(Object.entries(bench.groupOpen || {}).map(function ([name, open]) {
+        return [name, name.startsWith("📍 Legenda:") ? false : open];
+      }));
+    }
     if (bench.settingsView === "builds") return renderBuilds(host, rerender);
     if (bench.settingsView === "users") return renderUsers(host, { setStatus, rerender });
     // Instellingen met meerdere kaarten (bijv. Klassen): lijst + nieuw + bewerken op dezelfde plek.

@@ -110,7 +110,10 @@
 .wbdMoreToggle { justify-self: start; border: 1px solid var(--wbd-line); background: transparent; color: var(--wbd-muted); border-radius: 7px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
 .wbdMoreToggle:hover, .wbdMoreToggle[aria-expanded="true"] { color: var(--wbd-text); border-color: #4a5a6a; }
 .wbdGroup { display: grid; gap: 6px; border: 1px solid var(--wbd-line); border-radius: 8px; padding: 6px; }
-.wbdGroup > .wbdGroupToggle { justify-self: stretch; text-align: left; border: 0; padding: 2px 4px; color: var(--wbd-text); font-weight: 600; }
+.wbdGroupHead { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.wbdGroupHead > .wbdGroupToggle { justify-self: stretch; text-align: left; border: 0; padding: 2px 4px; color: var(--wbd-text); font-weight: 600; }
+.wbdGroupEdge { display: inline-flex; align-items: center; gap: 4px; color: var(--wbd-text); font-size: 11px; white-space: nowrap; cursor: pointer; }
+.wbdGroupEdge input { margin: 0; }
 .wbdMore { padding-top: 4px; border-top: 1px dashed var(--wbd-line); }
 .wbdNote { color: var(--wbd-muted); font-size: 12px; }
 /* Fase 6: de XP-grafiek (Instellingen > Project) */

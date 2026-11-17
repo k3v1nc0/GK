@@ -906,7 +906,8 @@ function withGame(world, source, options) {
       size: mapNumber(hud["map" + key + "SizePct"], 100, 30, 300) / 100,
       // Kevin 8-11: namen naast de iconen per soort (de oude schakelaar "alle namen" blijft ook werken).
       namesMini: hud["map" + key + "NamesMini"] === true,
-      namesBig: hud["map" + key + "NamesBig"] === true
+      namesBig: hud["map" + key + "NamesBig"] === true,
+      edgeMini: hud["map" + key + "EdgeMini"] !== undefined ? hud["map" + key + "EdgeMini"] === true : fallback.edgeMini === true
     };
   };
   const mapStyles = {
@@ -919,10 +920,10 @@ function withGame(world, source, options) {
     party: mapStyle("Party", { label: "Groepsleden", color: "#5ee07a", shape: "dot" }),
     portal: mapStyle("Portal", { label: "Portals", color: "#c77dff", shape: "portal" }),
     portal_locked: mapStyle("PortalLocked", { label: "Portal: nog niet vrij", color: "#8a7d99", shape: "portal" }),
-    questgiver_available: mapStyle("QuestgiverAvailable", { label: "Questgever: quest te halen", color: "#ffe08a", shape: "star" }),
+    questgiver_available: mapStyle("QuestgiverAvailable", { label: "Questgever: quest te halen", color: "#ffe08a", shape: "star", edgeMini: true }),
     questgiver: mapStyle("Questgiver", { label: "Questgever: geen nieuwe quest", color: "#d4a84a", shape: "star" }),
-    quest: mapStyle("Quest", { label: "Quest-doel", color: "#ffb020", shape: "star" }),
-    pin: mapStyle("Pin", { label: "Jouw pin", color: "#ff4fd8", shape: "pin" })
+    quest: mapStyle("Quest", { label: "Quest-doel", color: "#ffb020", shape: "star", edgeMini: true }),
+    pin: mapStyle("Pin", { label: "Jouw pin", color: "#ff4fd8", shape: "pin", edgeMini: true })
   };
   const mapDefaultZoom = { near: 0, normal: 1, far: 2 }[hud.mapMiniDefaultZoom] ?? 1;
   const mapPresentation = {

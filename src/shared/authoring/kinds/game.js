@@ -83,10 +83,10 @@ const MAP_ICON_LABELS = Object.freeze({ dot: "Rondje", diamond: "Ruit", square: 
 const MAP_START_GROUP = "🗺️ Kaart: begin en vorm";
 const MAP_SIZE_GROUP = "📐 Kaart: maten en tekst";
 const MAP_COLOR_GROUP = "🎨 Kaart: algemene kleuren";
-const mapLegendFields = (key, label, color, shape, mini = true, big = true, names = false) => {
+const mapLegendFields = (key, label, color, shape, mini = true, big = true, names = false, edgeMini = false) => {
   const group = "📍 Legenda: " + label;
   const title = label.replace(/:.*$/, "");
-  return {
+  const fields = {
     ["map" + key + "Label"]: textSetting("Naam in legenda", "🏷️", label, group,
       help("De naam van deze soort in de legenda en bij kaartlabels.", label + " is de standaard.", "De kaartnaam is onduidelijk → schrijf hier je eigen naam.")),
     ["map" + key + "Color"]: colorSetting("Kleur", "🎨", color, group,
@@ -106,6 +106,9 @@ const mapLegendFields = (key, label, color, shape, mini = true, big = true, name
     ["map" + key + "ShowBig"]: toggle("Op grote kaart bij start", "🗺️", big, "instellingen",
       help("Toont deze soort standaard op de grote kaart. Een speler kan dit later zelf wijzigen in de legenda.", big ? "Aan: meteen te zien." : "Uit: de speler zet het zelf aan.", "De grote kaart is te druk → zet uit."), { group, more: true })
   };
+  if (key !== "Self") fields["map" + key + "EdgeMini"] = toggle("Op rand van minimap", "↗️", edgeMini, "instellingen",
+    help("Blijft het icoon aan de rand van de minimap zichtbaar wanneer de echte plek buiten beeld valt?", edgeMini ? "Aan: het icoon blijft de richting aanwijzen." : "Uit: buiten beeld is het icoon verborgen.", "Je wilt deze soort ook buiten beeld kunnen volgen → zet aan."), { group });
+  return fields;
 };
 const MAP_LEGEND_FIELDS = Object.freeze(Object.assign({},
   mapLegendFields("Self", "Jij", "#ffffff", "arrow"),
@@ -117,10 +120,10 @@ const MAP_LEGEND_FIELDS = Object.freeze(Object.assign({},
   mapLegendFields("Party", "Groepsleden", "#5ee07a", "dot", true, true, true),
   mapLegendFields("Portal", "Portals", "#c77dff", "portal"),
   mapLegendFields("PortalLocked", "Portal: nog niet vrij", "#8a7d99", "portal"),
-  mapLegendFields("QuestgiverAvailable", "Questgever: quest te halen", "#ffe08a", "star"),
+  mapLegendFields("QuestgiverAvailable", "Questgever: quest te halen", "#ffe08a", "star", true, true, false, true),
   mapLegendFields("Questgiver", "Questgever: geen nieuwe quest", "#d4a84a", "star"),
-  mapLegendFields("Quest", "Quest-doel", "#ffb020", "star"),
-  mapLegendFields("Pin", "Jouw pin", "#ff4fd8", "pin")
+  mapLegendFields("Quest", "Quest-doel", "#ffb020", "star", true, true, false, true),
+  mapLegendFields("Pin", "Jouw pin", "#ff4fd8", "pin", true, true, false, true)
 ));
 
 export const QUEST_GOALS = Object.freeze(["deliver", "visit"]);

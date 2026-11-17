@@ -511,6 +511,8 @@
 .gkObjective { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
 .gkObjective.gkOk { color: #8ff0ae; }
 .gkRewards { display: flex; flex-wrap: wrap; gap: 6px; }
+.gkRewardIcon { width: 16px; height: 16px; display: inline-grid; place-items: center; flex: none; overflow: hidden; }
+.gkRewardIcon img, .gkRewardIcon .gkIco { width: 100%; height: 100%; object-fit: contain; display: block; }
 .gkEmptyNote { padding: 18px 8px; text-align: center; color: var(--gk-muted); font-weight: 600; }
 .gkEmptyNote .gkIco { width: 48px; height: 48px; margin: 0 auto 8px; opacity: 0.6; }
 .gkMoney { display: flex; align-items: center; gap: 12px; }
