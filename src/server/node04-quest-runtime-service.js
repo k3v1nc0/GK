@@ -1217,7 +1217,6 @@ export class Node04QuestRuntimeService {
         ctx.campaigns = campaignPackage(ctx.project);
         const definition = this.questDefinition(ctx, quest.id, row);
         if (definition) this.atomic(() => this.failQuest(ctx, definition, row, randomId("quest_event"), "event_over"));
-        this.questMessage([row.player_id], quest, "🌍 Het wereld-event is voorbij.");
       } catch (error) {
         console.warn("[quest] wereld-event afsluiten voor " + row.player_id + ":", error?.message || error);
       }

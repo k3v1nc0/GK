@@ -1,4 +1,4 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261117-shadow1";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261118-label-lock1";
 import { nextPlayerRouteWaypoint } from "../shared/player-path-client.js?v=20261108-roads9";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20261106-perf1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
@@ -7,7 +7,7 @@ import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolatio
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createWorldSounds } from "./world-sounds.js?v=20261116-herstel1";
 import { createActorPresentation } from "./actor-presentation.js?v=20261116-herstel1";
-import { createGkHud } from "./hud/gk-hud.js?v=20261117-minimap-edge1";
+import { createGkHud } from "./hud/gk-hud.js?v=20261118-label-lock1";
 import { dayNightState, mixColor } from "../shared/day-night.js?v=20261115-fase10";
 import { node05ActionBody, node05OperationId } from "./node05-request.js?v=20261113-fase8d";
 import {
@@ -112,6 +112,7 @@ const CLICK_MOVE_START_RADIUS = 0.04;
 // Client en server eindigen zo op hetzelfde punt en er is na een klik niets te corrigeren.
 const CLICK_MOVE_ARRIVAL_RADIUS = 0.15;
 const PORTAL_SERVER_RANGE_WAIT_MS = 4000;
+const LORE_SERVER_RANGE_WAIT_MS = 4000;
 // De server telt een looppunt als bereikt binnen 0,15. Een actie op afstand start daarom pas als de client
 // duidelijk binnen bereik is, zodat ook de server (die naar dezelfde plek loopt) binnen bereik eindigt.
 const PENDING_ACTION_RANGE_MARGIN = 0.4;
@@ -5278,7 +5279,6 @@ function startRemoteFrameLoop() {
     if (!state.remote.rafId) return;
     state.remote.rafId = window.requestAnimationFrame(tick);
     syncRemotePlayers(now);
-    if (actorPresentation.frame(state.runtime, now)) syncRuntimeTargets();
   };
   state.remote.rafId = window.requestAnimationFrame(tick);
 }
@@ -7705,6 +7705,9 @@ async function runNode03Action(action, targetId, extra = {}) {
     else if (data.position) applyFallbackPosition({ ok: true, position: data.position });
     renderNode03Hud();
     renderNode04Hud();
+    // Geef de bevestigde stand ook terug aan de knop die de actie startte. Maker-gereedschap
+    // kan zo het echte nieuwe level gebruiken in plaats van op een latere HUD-refresh te gokken.
+    return data;
   } catch (error) {
     state.node03.lastError = String(error?.message || error || "Spelactie mislukt.");
     showHudError(state.node03.lastError);
@@ -8184,14 +8187,12 @@ function activateRuntimeTarget(target) {
   const action = String(target?.action || "");
   if (action === "npc_walker") {
     const service = walkingNpcServiceTarget(target.npcId);
-    if (service) { startWalkerTalk(target.npcId); activateRuntimeTarget(service); }
+    if (service) activateRuntimeTarget(service);
     return;
   }
-  if (action === "portal_map") { if (gkHud) gkHud.openPortalMap(target.portalId || String(target.instanceId).replace(/^portal_target\./, "")); return; }
+  if (action === "portal_map") { activatePortalTarget(target); return; }
   if (action === "lore_read") { activateLoreTarget(target); return; }
   if (gkHud && (action === "node04:start_dialogue" || action === "node05:focus_service")) {
-    const entityId = String(target?.entityRef || target?.linkedEntityId || target?.linkedEntity?.entityId || target?.visualEntityId || "");
-    if (entityId.startsWith("npc_entity.") && actorPresentation.walkerPose(entityId.slice("npc_entity.".length))) startWalkerTalk(entityId.slice("npc_entity.".length));
     gkHud.talkTo(target);
     return;
   }
@@ -8204,7 +8205,7 @@ const walkerTalk = { npcId: "", since: 0, sentAt: 0 };
 function startWalkerTalk(npcId) {
   walkerTalk.npcId = String(npcId || "");
   walkerTalk.since = performance.now();
-  walkerTalk.sentAt = 0;
+  walkerTalk.sentAt = -Infinity;
   maybeWalkerTalk(walkerTalk.since);
 }
 function maybeWalkerTalk(now = performance.now()) {
@@ -8218,7 +8219,7 @@ function activateRuntimeTargetDirect(target) {
   if (!target?.instanceId || !target.action) return;
   const action = String(target.action);
   if (action === "npc_walker") { activateRuntimeTarget(target); return; }
-  if (action === "portal_map") { if (gkHud) gkHud.openPortalMap(target.portalId || String(target.instanceId).replace(/^portal_target\./, "")); return; }
+  if (action === "portal_map") { activateRuntimeTarget(target); return; }
   if (action === "lore_read") { activateLoreTarget(target); return; }
   if (action.startsWith("node04:")) {
     runNode04Action(action, target.instanceId, { questId: target.questId || null, dialogueId: target.dialogueId || null });
@@ -8288,12 +8289,20 @@ function loreDistance(target) {
   const here = state.predictedPosition;
   return here ? Math.hypot(num(here.x, 0) - num(target.x, 0), num(here.z, 0) - num(target.z, 0)) : Infinity;
 }
+function loreArrivalRange(target) {
+  return Math.max(0, targetArrivalRadius(target, true) - PENDING_ACTION_RANGE_MARGIN);
+}
+function loreWalkArrivalRange(target) {
+  // De looproute telt een punt al binnen 0,15 m als bereikt. Leg het route-eindpunt daarom nog iets
+  // binnen de leesgrens, zodat de automatische actie ook bij stoppen vóór het exacte punt afgaat.
+  return Math.max(0, loreArrivalRange(target) - CLICK_MOVE_ARRIVAL_RADIUS - 0.1);
+}
 function activateLoreTarget(target) {
   if (!target?.readableId) return;
-  if (loreDistance(target) > num(target.range, 4) + num(target.radius, 0) - 0.3) {
+  if (loreDistance(target) > loreArrivalRange(target)) {
     lorePending.target = target;
     lorePending.at = performance.now();
-    startClickToMoveTarget(num(target.x, 0), num(target.z, 0), "lore-target", { arrivalRadius: targetArrivalRadius(target, true) });
+    startClickToMoveTarget(num(target.x, 0), num(target.z, 0), "lore-target", { arrivalRadius: loreWalkArrivalRange(target) });
     return;
   }
   lorePending.target = null;
@@ -8302,16 +8311,36 @@ function activateLoreTarget(target) {
 function maybeReadPendingLore(now = performance.now()) {
   const target = lorePending.target;
   if (!target) return;
+  if (isWalkingToTarget(target)) lorePending.at = now;
   if (now - lorePending.at > 20000 || (!isWalkingToTarget(target) && hasMovementInput())) { lorePending.target = null; return; }
-  if (loreDistance(target) <= num(target.range, 4) + num(target.radius, 0) - 0.3) { lorePending.target = null; readLoreTarget(target); }
+  if (loreDistance(target) <= loreArrivalRange(target)) { lorePending.target = null; readLoreTarget(target); }
 }
 async function readLoreTarget(target) {
   if (lorePending.busy) return;
   lorePending.busy = true;
   try {
-    const result = await gkHudJson("/api/game/lore/read", { readableId: target.readableId });
+    // De lokale speler bereikt het doel iets eerder dan de serverpositie. Wacht op die serverpositie en
+    // probeer een afstandsweigering kort opnieuw, zodat één klik ook na een lange looproute meteen leest.
+    await waitForServerPositionInRange(target, LORE_SERVER_RANGE_WAIT_MS);
+    let result = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        result = await gkHudJson("/api/game/lore/read", { readableId: target.readableId });
+        break;
+      } catch (error) {
+        if (attempt >= 2 || !/dichterbij|te ver/i.test(String(error?.message || error))) throw error;
+        await new Promise(function (resolve) { window.setTimeout(resolve, 180); });
+      }
+    }
+    if (!result) return;
     state.chat.loreReads = Array.isArray(result.reads) ? result.reads : state.chat.loreReads;
-    if (gkHud?.readLore) gkHud.readLore(result.loreId || target.loreId, { first: result.first === true });
+    if (gkHud?.readLore) gkHud.readLore(result.loreId || target.loreId, {
+      first: result.first === true,
+      // Een wereldverhaal blijft alleen open zolang de speler bij de echte bron staat.
+      sourceX: num(target.x, 0),
+      sourceZ: num(target.z, 0),
+      leaveMeters: Math.max(1, num(target.range, 4) + Math.max(0, num(target.radius, 0)))
+    });
     syncRuntimeTargets();
   } catch (error) {
     if (gkHud) gkHud.toast(error?.message || "Lezen lukte niet.", { tone: "error", icon: "book-cover" });
@@ -8333,20 +8362,55 @@ async function loadLoreReads(force = false) {
   return state.chat.loreReads;
 }
 
-// Kevin 8-11: een portal in de wereld is aanklikbaar; een klik opent de grote kaart om te kiezen waarheen.
+// Een portal blijft ook van ver aanklikbaar. Buiten de ingestelde gebruiksafstand loopt de speler er eerst
+// naartoe; zodra hij dichtbij genoeg is opent de kaart vanzelf.
+const portalPending = { target: null, at: 0 };
+function portalUseRange(target) {
+  return Math.max(1, num(target?.interactMeters, 10));
+}
+function openPortalTarget(target) {
+  if (gkHud) gkHud.openPortalMap(target.portalId || String(target.instanceId).replace(/^portal_target\./, ""));
+}
+function activatePortalTarget(target) {
+  if (!target?.instanceId) return;
+  const distance = node03ClientDistance(target);
+  if (distance !== null && distance > portalUseRange(target)) {
+    portalPending.target = target;
+    portalPending.at = performance.now();
+    const started = startClickToMoveTarget(num(target.x, 0), num(target.z, 0), "portal-target", {
+      arrivalRadius: Math.max(0, portalUseRange(target) - 0.25)
+    });
+    if (started) return;
+  }
+  portalPending.target = null;
+  if (distance === null || distance <= portalUseRange(target)) openPortalTarget(target);
+}
+function maybeOpenPendingPortal(now = performance.now()) {
+  const target = portalPending.target;
+  if (!target) return;
+  if (isWalkingToTarget(target)) portalPending.at = now;
+  if (now - portalPending.at > 20000 || (!isWalkingToTarget(target) && hasMovementInput())) { portalPending.target = null; return; }
+  const distance = node03ClientDistance(target);
+  if (distance !== null && distance <= portalUseRange(target)) {
+    portalPending.target = null;
+    openPortalTarget(target);
+  }
+}
+
 function portalRuntimeTargets() {
   const list = state.node03.snapshot?.portals?.list;
   if (!Array.isArray(list) || !list.length) return [];
   return list.map(function (portal) {
     const entityId = "portal_entity." + portal.id;
-    return {
+    return node03TargetWithClientRange({
       instanceId: "portal_target." + portal.id, portalId: portal.id, entityKind: "portal_gate", targetKind: "portal_gate",
       action: "portal_map", prompt: "Reizen", displayName: portal.displayName || "Portal",
-      x: num(portal.x, 0), y: num(portal.y, 0), z: num(portal.z, 0), radius: 1.5, range: 3, available: true,
+      x: num(portal.x, 0), y: num(portal.y, 0), z: num(portal.z, 0), radius: 1.5, range: 3,
+      interactMeters: Math.max(1, num(portal.interactMeters, 10)), available: true,
       visualEntityId: entityId, linkedEntityId: entityId, entityRef: entityId, linkedEntity: { entityId: entityId, nodeId: entityId },
       // Kevin 8-11: geen blauw blokje; de portal zelf is het klikvlak (klikvlak meet zich aan het portal-model).
       renderBody: false
-    };
+    });
   });
 }
 
@@ -9538,10 +9602,10 @@ function refreshGameplayClientRanges(now = performance.now()) {
   const node05Due = refreshNode05ClientRanges(now, options) === true;
   if (node03Due || node04Due || node05Due) syncRuntimeTargets();
   maybeRunPendingNode03TargetAction("gameplay-range");
+  maybeOpenPendingPortal(now);
   maybeReadPendingLore(now);
   maybeNpcChatter(now);
   maybeWorldSounds(now);
-  maybeWalkerTalk(now);
 }
 
 // Werkbank Fase 10: een NPC zegt soms een praatje (ballon boven zijn hoofd) als je binnen 12 m bent, om de 25-50 s.
@@ -11933,11 +11997,14 @@ function ensureRuntime(world) {
       hudPanelAdapter: createRuntimeHudPanelAdapter(),
       externalPlayerAuthority: true,
       localPlayerDisplayName: state.player?.displayName || state.player?.id || "",
-      // De 2D-namen moeten in exact dezelfde animatiebeurt als de 3D-camera
-      // worden geplaatst. Een losse HUD-loop gaf vooral zijwaarts één frame
-      // verschil, wat eruitzag als tearing/wazige tekst.
-      onRenderFrame: function () {
-        if (gkHud) gkHud.frame(performance.now());
+      // Eerst de vijanden/NPC's en HUD-indeling, dan de camera en het 3D-beeld.
+      onBeforeRenderFrame: function ({ now }) {
+        if (actorPresentation.frame(state.runtime, now)) syncRuntimeTargets();
+        if (gkHud) gkHud.prepareFrame(now);
+      },
+      // Alleen schermprojectie na het tekenen; hier geen camera of indeling meer wijzigen.
+      onRenderFrame: function ({ now }) {
+        if (gkHud) gkHud.frame(now);
       },
       onLoadErrors: function (errors) {
         if (errors.length) showHudError("Asset kon niet laden: " + errors[0]);
@@ -12186,6 +12253,10 @@ function currentMoveVector() {
         }
         clearMovementInput("click-target-arrived", { finalPointerTarget: localStopPointForServer() });
         maybeRunPendingNode03TargetAction("arrived");
+        // Client-only interacties (verhaal/portal) hebben geen node-actie die de aankomst opvangt.
+        // Voer ze hier direct uit voordat stepMovement door de nulvector vroegtijdig terugkeert.
+        maybeOpenPendingPortal(performance.now());
+        maybeReadPendingLore(performance.now());
         return { x: 0, z: 0 };
       }
       if (length > 0.0001) {
@@ -12956,7 +13027,11 @@ function handleSocketMessage(raw) {
     if (message.target && message.tone === "levelup") {
       const mine = message.target === state.player?.id;
       state.runtime?.playLevelUpFx?.(mine ? "self" : "player:" + message.target);
-      if (mine) scheduleNode03ImmediateRefresh();
+      if (mine) {
+        const newLevel = Number(message.level);
+        if (Number.isFinite(newLevel) && newLevel >= 1 && gkHud?.levelUp) gkHud.levelUp(newLevel, num(state.node03.snapshot?.progression?.level, newLevel - 1));
+        scheduleNode03ImmediateRefresh();
+      }
       return;
     }
     if (message.target && message.tone === "heal" && message.by) {
@@ -13530,11 +13605,15 @@ function stepMovement(now) {
     return;
   }
 
+  // Ook zonder loopinput moet het gesprek de wachtstand van de NPC blijven vernieuwen.
+  maybeWalkerTalk(now);
   if (state.minimapHud.elements && (state.minimapHud.dirty || state.minimapFog.dirty === true)) {
     drawGameMinimapIfDue(now);
   }
   if (!hasMovementInput()) {
     if (maybeRunPendingNode03TargetAction("idle")) return;
+    maybeOpenPendingPortal(now);
+    maybeReadPendingLore(now);
     if (state.lastAnimationState !== "idle") {
       clearMovementInput("movement-settled");
     }
@@ -13648,6 +13727,8 @@ function stepMovement(now) {
     if (state.pointer.blockedSince && now - state.pointer.blockedSince >= CLICK_MOVE_BLOCKED_TIMEOUT_MS) {
       if (maybeRunPendingNode03TargetAction("blocked")) return;
       clearMovementInput("click-target-blocked");
+      maybeOpenPendingPortal(now);
+      maybeReadPendingLore(now);
       return;
     }
   }
@@ -14503,6 +14584,13 @@ function ensureGkHud() {
     loreBook: loadLoreReads,
     playerPosition: partyPlayerPosition,
     activate: activateRuntimeTargetDirect,
+    // Zowel klikken, E als aankomen na het lopen begint in HUD.talkTo.
+    beginNpcTalk: function (target) {
+      const entityId = [target?.entityRef, target?.linkedEntityId, target?.linkedEntity?.entityId, target?.visualEntityId]
+        .find(function (id) { return String(id || "").startsWith("npc_entity."); });
+      const npcId = target?.npcId || (entityId ? String(entityId).slice("npc_entity.".length) : "");
+      if (npcId && actorPresentation.walkerPose(npcId)) startWalkerTalk(npcId);
+    },
     walkTo: function (x, z, target) { return startClickToMoveTarget(num(x, 0), num(z, 0), "hud-talk", { arrivalRadius: targetArrivalRadius(target) }); },
     walkToMap: function (x, z) { return startClickToMoveTarget(num(x, 0), num(z, 0), "hud-minimap"); },
     isWalkingTo: isWalkingToTarget,

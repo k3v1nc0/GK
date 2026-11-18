@@ -95,6 +95,7 @@ export function publicPortalState(world, unlocked, playerId, flags, position, co
     list: portals.map((portal) => ({
       id: portal.id, displayName: portal.displayName || portal.id, x: num(portal.x), y: num(portal.y), z: num(portal.z),
       unlockMeters: Math.max(1, num(portal.unlockMeters, 4)), unlocked: isUnlocked(portal, unlocked),
+      interactMeters: Math.max(1, num(portal.interactMeters, 10)),
       respawnHere: portal.respawnHere !== false,
       cost: travelCost(rules, position, portal, Boolean(atPortal))
     })),

@@ -199,7 +199,7 @@
 @keyframes gkAreaTitle { 0% { opacity: 0; } 10% { opacity: 1; } 80% { opacity: 1; } 100% { opacity: 0; } }
 
 /* knoppen onderin */
-.gkActions { right: var(--gk-edge); bottom: var(--gk-edge); display: flex; align-items: flex-end; gap: 10px; pointer-events: none; }
+.gkActions { right: var(--gk-edge); bottom: var(--gk-edge); display: flex; align-items: flex-end; gap: 10px; pointer-events: none; transform-origin: right bottom; }
 .gkAct { position: relative; width: var(--gk-btn); height: var(--gk-btn); border-radius: 50%; padding: 0; pointer-events: auto; border: 3px solid #e08a2c;
   background: radial-gradient(circle at 50% 35%, #5a2a10, #1c0f08 72%); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6), inset 0 0 12px rgba(255, 140, 40, 0.35); }
 .gkAct .gkIco { padding: 20%; box-sizing: border-box; }
@@ -229,8 +229,8 @@
 
 /* Namen blijven bestaan bij HUD-overlap, maar liggen visueel achter de panelen. */
 .gkLabels { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 0; }
-.gkLabel { position: absolute; left: 0; top: 0; height: auto; overflow: visible; padding: 0 2px 4px; white-space: nowrap; font-size: 13px; font-weight: 700; letter-spacing: 0.01em; color: #e6edf5;
-  background: transparent; border: 0; box-shadow: none; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9); transform: translate(-50%, -100%); }
+.gkLabel { position: absolute; left: 0; top: 0; width: max-content; height: auto; overflow: visible; padding: 0 2px 4px; white-space: nowrap; font-size: 13px; font-weight: 700; letter-spacing: 0.01em; color: #e6edf5;
+  background: transparent; border: 0; box-shadow: none; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9); will-change: transform; }
 .gkLabelHead { display: flex; align-items: center; justify-content: center; gap: 4px; }
 .gkLabelName { display: inline-block; }
 .gkLabel--npc { color: #ffd34d; }
@@ -618,6 +618,10 @@
 @media (prefers-reduced-motion: reduce) {
   .gkHud *, .gkHud *::before, .gkHud *::after {  animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
   .gkHud[data-low="1"] .gkVignette { animation: none; opacity: 0.5; }
+  /* Deze animaties eindigen transparant. Inkorten naar 1 ms verbergt de melding meteen;
+     zonder animatie blijft zij zichtbaar totdat haar eigen timer haar verwijdert. */
+  .gkHud .gkLevelUp, .gkHud .gkQuestDone, .gkHud .gkQuestDoneRays,
+  .gkHud .gkAreaTitle { animation: none; }
 }
 
 /* Het oude regiolabel bovenin staat nu onder de minimap. */
@@ -847,25 +851,27 @@
 .gkPortalAsk .gkInviteText small { display: block; margin-top: 2px; font-size: 12px; opacity: 0.8; }
 .gkPortalAsk .gkInviteYes { background: linear-gradient(180deg, #8a4fd0, #5c2f99); border-color: rgba(199, 125, 255, 0.85); }
 /* Fase 8 herstel 2 (Kevin 12-11): buitvenster (kies wat je meeneemt) en "Hier ligt ..." bij een pickup. */
-.gkLootCard { top: 24%; z-index: 7; width: min(340px, calc(100% - 2 * var(--gk-edge))); border-color: rgba(255, 200, 87, 0.7);
+.gkLootCard { position: relative; inset: auto; z-index: 7; width: 100%; margin: 0; padding: 7px 8px 6px; gap: 5px; box-sizing: border-box; border-color: rgba(255, 200, 87, 0.7);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55), 0 0 18px rgba(255, 200, 87, 0.25); }
-.gkHud[data-orient="port"] .gkLootCard { top: 30%; }
-.gkLootHead { display: flex; align-items: center; gap: 8px; font-size: 14px; }
-.gkLootHead .gkIco { width: 24px; height: 24px; flex: none; }
+.gkHud[data-orient="port"] .gkLootCard { top: auto; }
+.gkLootHead { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.gkLootHead .gkIco { width: 18px; height: 18px; flex: none; }
 .gkLootHead b { color: var(--gk-gold); }
 .gkLootHead small { margin-left: auto; font-size: 11px; color: var(--gk-muted); }
-.gkLootList { display: grid; gap: 8px; max-height: min(40vh, 300px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.gkLootList { display: grid; gap: 4px; max-height: min(26vh, 210px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 .gkLootPart { display: grid; gap: 4px; }
 .gkLootFrom { font-size: 11px; color: var(--gk-muted); }
-.gkLootRow { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto auto; align-items: center; gap: 8px; font-size: 13px; }
-.gkLootRow .gkCell { width: 36px; height: 36px; padding: 4px; border-radius: 8px; }
+.gkLootRow { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto auto; align-items: center; gap: 5px; font-size: 11px; }
+.gkLootRow .gkCell { width: 28px; height: 28px; padding: 3px; border-radius: 7px; }
 .gkLootName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
 .gkLootRow small { font-weight: 800; color: var(--gk-text); }
-.gkLootTake { min-height: 32px; padding: 0 10px; font-size: 12px; }
-.gkLootNote { font-size: 11px; color: var(--gk-muted); }
+.gkLootTake { min-height: 26px; padding: 0 7px; font-size: 10px; }
+.gkLootNote { font-size: 9px; color: var(--gk-muted); }
+.gkLootCard .gkInviteBtns { gap: 5px; }
+.gkLootCard .gkInviteBtns button { min-height: 30px; font-size: 11px; border-radius: 8px; }
 /* Herstel 4: kaartje "In je tas" (één soort, los item): even zien wat het was; klikken gaat erdoorheen naar de wereld. */
 .gkLootCard.gkLootFlash { width: min(260px, calc(100% - 2 * var(--gk-edge))); pointer-events: none; animation: gkPop 0.14s ease-out; }
-.gkLootCard.gkLootSmall { top: calc(var(--gk-edge) + var(--gk-portrait) + 20px); width: max-content; padding: 0; background: none; border: 0; box-shadow: none; }
+.gkLootCard.gkLootSmall { top: auto; width: max-content; padding: 0; background: none; border: 0; box-shadow: none; }
 .gkLootOpen { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px; border-radius: 18px; font-weight: 800; font-size: 13px;
   color: var(--gk-text); background: var(--gk-bg); border: 1px solid rgba(255, 200, 87, 0.7); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5); }
 .gkLootOpen .gkIco { width: 20px; height: 20px; flex: none; }
@@ -913,6 +919,11 @@
 .gkChatFeed { box-sizing: border-box; min-height: 0; max-width: 100%; overflow-y: auto; display: grid; gap: 3px; justify-items: start; pointer-events: auto; }
 .gkChatFeed[hidden] { display: none; }
 .gkChatFeed .gkChatLine { padding: 3px 8px; border-radius: 8px; background: rgba(6, 10, 18, 0.62); transition: opacity 1.5s ease; }
+/* Ingeklapt blijft elke melding één compacte regel met …; via Alles wordt de
+   volledige tekst weer normaal over meerdere regels getoond. */
+.gkChatFeed:not(.gkFeedOpen) { width: 100%; }
+.gkChatFeed:not(.gkFeedOpen) .gkChatLine { box-sizing: border-box; display: flex; align-items: center; width: 100%; min-width: 0; overflow: hidden; white-space: nowrap; }
+.gkChatFeed:not(.gkFeedOpen) .gkChatLine > span:last-of-type { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gkChatFeed .gkChatLine.gkOld { opacity: 0; }
 .gkChatLine { font-size: 12px; line-height: 1.35; color: #e8eef8; overflow-wrap: anywhere; text-shadow: 0 1px 2px #000; }
 .gkChatWho { font: inherit; font-weight: 800; color: #ffe08a; background: none; border: 0; padding: 0; cursor: pointer; text-shadow: inherit; }
@@ -925,6 +936,7 @@
 .gkChatFeed .gkFeedQuest { pointer-events: auto; cursor: pointer; border: 1px solid rgba(246, 197, 68, 0.35); }
 .gkChatFeed .gkFeedQuest:hover { background: rgba(40, 30, 8, 0.85); }
 .gkChatFeed .gkFeedQuest { display: flex; align-items: center; gap: 6px; }
+.gkChatFeed:not(.gkFeedOpen) .gkChatLine.gkFeedQuest { width: fit-content; max-width: 100%; }
 .gkFeedClose { flex: none; width: 20px; height: 20px; margin-right: -4px; padding: 0; border: 0; border-radius: 6px; background: rgba(255, 255, 255, 0.1); color: #fff3d6; font-size: 11px; line-height: 20px; cursor: pointer; }
 .gkFeedClose:hover { background: rgba(255, 90, 90, 0.45); }
 .gkChatBox { box-sizing: border-box; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 6px 8px 8px; animation: gkPop 0.14s ease-out; }
@@ -1010,14 +1022,18 @@
 .gkCard.gkMaker strong { display: flex; align-items: center; gap: 6px; }
 .gkCard.gkMaker strong .gkIco { width: 18px; height: 18px; }
 .gkFx--skill { color: #ffb347; font-size: 13px; }
-/* Kevin 10-11: telefoon rechtop: de knoppen in een blokje rechtsonder (vak 3 en 2 boven, tas/doen/aanvallen onder),
-   zodat er links ruimte blijft voor de meldingen en je de game nog ziet. */
-.gkHud[data-orient="port"] .gkActions { display: grid; grid-template-columns: repeat(3, auto); grid-template-areas: ". s3 s2" "bag do atk"; gap: 8px; align-items: center; justify-items: center; }
+/* Telefoon rechtop: één smalle kolom rechtsonder. Zo blijft links daarvan een vaste
+   strook vrij voor quest en feed; die hoeven nooit boven de actieknoppen te schuiven. */
+.gkHud[data-orient="port"] .gkActions { display: grid; grid-template-columns: auto; grid-template-areas: "s3" "s2" "bag" "do" "atk"; gap: 8px; align-items: center; justify-items: center; }
 .gkHud[data-orient="port"] .gkActions > .gkAct--bag { grid-area: bag; }
 .gkHud[data-orient="port"] .gkActions > .gkAct--do { grid-area: do; }
 .gkHud[data-orient="port"] .gkActions > .gkAct--attack { grid-area: atk; }
 .gkHud[data-orient="port"] .gkActions > .gkAct--skill[data-id="2"] { grid-area: s2; }
 .gkHud[data-orient="port"] .gkActions > .gkAct--skill[data-id="3"] { grid-area: s3; }
+/* Past de verticale kolom niet onder de HUD, dan eerst 2×2 voordat de knoppen
+   kleiner worden. Met de tas zichtbaar is een derde rij onvermijdelijk. */
+.gkHud[data-orient="port"][data-actioncompact="1"] .gkActions { grid-template-columns: repeat(2, auto); grid-template-areas: "s3 s2" "do atk"; }
+.gkHud[data-orient="port"][data-actioncompact="1"][data-actionbag="1"] .gkActions { grid-template-areas: "bag s3" "s2 do" ". atk"; }
 /* De naamjes boven de knoppen zouden over de bovenste rij vallen; de naam staat al boven het doel in de wereld. */
 .gkHud[data-orient="port"] .gkActions .gkActLabel { display: none; }
 

@@ -4803,6 +4803,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let onTransformEnd = options.onTransformEnd || function () {};
   let onTransformChange = options.onTransformChange || function () {};
   let onModelLoadTiming = options.onModelLoadTiming || function () {};
+  const onBeforeRenderFrame = typeof options.onBeforeRenderFrame === "function" ? options.onBeforeRenderFrame : function () {};
   let onRenderFrame = typeof options.onRenderFrame === "function" ? options.onRenderFrame : function () {};
   const loadErrors = [];
   let editorViewInitialized = false;
@@ -8748,6 +8749,8 @@ function resolveChunkDebugCenter(policy) {
     const delta = Math.min(0.05, rawDelta);
     const animationDelta = rawDelta;
     lastTime = time;
+    // Interpolatie en HUD-indeling moeten klaar zijn vóór animaties, camera en tekenen.
+    try { onBeforeRenderFrame({ now: time }); } catch {}
     waterLayer.update(time);
     perfHudFrameMs = perfHudWarmup ? perfHudFrameMs * 0.85 + frameMs * 0.15 : frameMs;
     perfHudWarmup = true;
@@ -8816,14 +8819,15 @@ function resolveChunkDebugCenter(policy) {
     if (combatFx.length) updateCombatFx(performance.now());
     if (flyerRoots.length && shouldAnimateModels) updateFlyers(false);
     if (dangerZones.size) updateDangerZones(performance.now());
+    // Een pixelratio-wijziging kan het canvas wissen: voer die vóór het tekenen uit.
+    maybeAdaptPixelRatio(time);
     if (gpuFrameTimer) gpuFrameTimer.begin();
     renderer.render(scene, camera);
     if (gpuFrameTimer) gpuFrameTimer.end();
     frameTiming.renderMs = round(performance.now() - sectionStart);
     renderCpuEmaMs = renderCpuEmaMs > 0 ? renderCpuEmaMs * 0.9 + frameTiming.renderMs * 0.1 : frameTiming.renderMs;
-    maybeAdaptPixelRatio(time);
     try {
-      onRenderFrame({ timing: frameTiming });
+      onRenderFrame({ now: time, timing: frameTiming });
     } catch {}
     sectionStart = performance.now();
     if (mode === "game") updatePerformanceHud(time);
@@ -16270,7 +16274,10 @@ function resolveChunkDebugCenter(policy) {
 
   function runtimeTargetLabelPoint(root, target, point) {
     const measured = runtimeTargetVisualMeasurement(root, target);
-    point.set(measured.centerX, measured.topY, measured.centerZ);
+    // Vijanden en lopende NPC's draaien hun model binnen het doel. Het gemeten midden draait
+    // niet mee, dus voor hen: recht boven hun eigen positie (zoals naamplaatjes in MMO's).
+    const moving = target?.actorTarget === true && String(target?.entityKind || "") !== "resource";
+    point.set(moving ? 0 : measured.centerX, measured.topY, moving ? 0 : measured.centerZ);
     root.localToWorld(point);
     point.y += runtimeTargetPresentationConfig().labelOffsetMeters;
     return point;
@@ -16319,13 +16326,15 @@ function resolveChunkDebugCenter(policy) {
       const attachedEntityId = runtimeTargetAttachedEntityId(target);
       // Kevin 16-11: een NPC die rondloopt is verborgen op zijn vaste plek; daar hoort dan ook geen naam (die loopt met hem mee).
       if (attachedEntityId && escortHiddenEntityIds.has(attachedEntityId)) continue;
-      const placeKey = "place:" + name.toLocaleLowerCase() + ":"
+      // Vijanden en lopende NPC's zijn elk een eigen wezen: nooit samenvoegen op naam en plek.
+      // Anders verloor een van twee dicht op elkaar lopende "Vijand"-en zijn naam of knipperde die.
+      const placeKey = target.actorTarget === true ? "" : "place:" + name.toLocaleLowerCase() + ":"
         + Math.round(num(root.position?.x, 0) * 5) + ":"
         + Math.round(num(root.position?.z, 0) * 5);
       const entityKey = attachedEntityId ? "entity:" + attachedEntityId : "";
-      if ((entityKey && seenWorldLabels.has(entityKey)) || seenWorldLabels.has(placeKey)) continue;
+      if ((entityKey && seenWorldLabels.has(entityKey)) || (placeKey && seenWorldLabels.has(placeKey))) continue;
       if (entityKey) seenWorldLabels.add(entityKey);
-      seenWorldLabels.add(placeKey);
+      if (placeKey) seenWorldLabels.add(placeKey);
       runtimeTargetLabelPoint(root, target, point);
       push(id, name, String(target.entityKind || target.targetKind || ""), {
         action: String(target.action || ""), selected: target.selected === true, available: target.available !== false,
@@ -17216,6 +17225,11 @@ function resolveChunkDebugCenter(policy) {
 
   function createRuntimeTargetRoot(target) {
     const root = new THREE.Group();
+    // De klikbox meet meteen het gekoppelde model en bewaart die lokale maten.
+    // Zet eerst de positie: meten vanaf (0,0,0) telt anders de wereldafstand dubbel
+    // zodra updateRuntimeTargetRoot het doel verplaatst (afhankelijk van laadvolgorde).
+    const targetPosition = runtimeTargetPosition(target);
+    root.position.set(targetPosition.x, targetPosition.y, targetPosition.z);
     root.name = "node03-runtime-target:" + String(target?.instanceId || "target");
     const editorSelectableId = runtimeTargetEditorSelectableId(target);
     root.userData.transformable = runtimeTargetEditorTransformable(target);

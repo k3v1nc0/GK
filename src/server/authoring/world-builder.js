@@ -802,7 +802,7 @@ function withGame(world, source, options) {
       rotationY: portal.rotationY, scale: portal.scale, flagId: editor ? null : portal.flagId, flagOn: portal.flagOn }));
     if (!editor && portal.flagId) flagGates.push({ entityId, npcId: null, flagId: portal.flagId, on: portal.flagOn !== false });
     portals.push(Object.assign({ id: portal.portalId, displayName: portal.displayName, x: Number(portal.x) || 0, y: Number(portal.y) || 0, z: Number(portal.z) || 0,
-      rotationY: portal.rotationY, unlockMeters: portal.unlockMeters, arriveMeters: portal.arriveMeters, startUnlocked: portal.startUnlocked === true,
+      rotationY: portal.rotationY, unlockMeters: portal.unlockMeters, interactMeters: portal.interactMeters, arriveMeters: portal.arriveMeters, startUnlocked: portal.startUnlocked === true,
       respawnHere: portal.respawnHere !== false }, portal.flagId ? { flag: { id: portal.flagId, on: portal.flagOn !== false } } : {}));
   }
   // In de editor: vijand- en grondstofplekken als model (de game toont ze via de vijandenserver).

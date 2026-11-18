@@ -26,6 +26,7 @@ test("portal-kaart en Instellingen > Portals zijn geldig en komen in de game-sec
   const dorp = portals.find((portal) => portal.portalId === "portal.dorp");
   assert.equal(dorp.startUnlocked, true);
   assert.equal(dorp.unlockMeters, 4);
+  assert.equal(dorp.interactMeters, 10);
   assert.equal(section.server.portalRules.costCurrencyId, "goud");
   assert.equal(section.server.portalRules.cooldownSeconds, 30);
   assert.equal(section.server.portalRules.travelFrom, "anywhere");

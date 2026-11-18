@@ -346,7 +346,8 @@ export function compileGameSection(documents, options = {}) {
     return Object.assign({
       portalId: doc.body.portalId, displayName: doc.body.displayName, modelAssetId: doc.body.modelAssetId || null,
       scale: Number(doc.body.scale) || 1, rotationY: Number(doc.body.rotationY) || 0,
-      unlockMeters: meters(doc.body.unlockMeters, 4, 1, 50), arriveMeters: meters(doc.body.arriveMeters, 2.5, 0, 30),
+      unlockMeters: meters(doc.body.unlockMeters, 4, 1, 50), interactMeters: meters(doc.body.interactMeters, 10, 1, 100),
+      arriveMeters: meters(doc.body.arriveMeters, 2.5, 0, 30),
       startUnlocked: doc.body.startUnlocked === true, respawnHere: doc.body.respawnHere !== false,
       x: doc.body.x, y: Number(doc.body.y) || 0, z: doc.body.z
     }, flagGateOf(doc.body));

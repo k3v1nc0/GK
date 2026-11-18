@@ -8,6 +8,7 @@
 import { ICON_PATHS } from "./gk-icon-paths.js?v=20261110-fase5b";
 import { createHudMinimap } from "./gk-minimap.js?v=20261117-minimap-edge1";
 import { formatDuration } from "../../shared/effect-math.js?v=20261102-heal2";
+import { labelOffset } from "./label-placement.js?v=20261118-label-lock1";
 
 const STORE_KEY = "gk:hud:v1";
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -54,9 +55,9 @@ const TABS = [
   // Werkbank Fase 10: vrienden (O) en het 📚 kennisboek (J) met de verhalen die je las.
   { id: "friends", icon: "shaking-hands", title: "Vrienden", module: null, key: "KeyO" },
   { id: "lore", icon: "open-book", title: "Kennisboek", module: null, key: "KeyJ" },
-  { id: "chars", icon: "pointy-hat", title: "Characters", module: null, key: "KeyP" },
+  { id: "chars", icon: "pointy-hat", title: "Characters", module: null, key: "KeyP", nested: true },
   { id: "settings", icon: "cog", title: "Instellingen", module: null, key: null },
-  { id: "logout", icon: "exit-door", title: "Uitloggen", module: null, key: null }
+  { id: "logout", icon: "exit-door", title: "Uitloggen", module: null, key: null, nested: true }
 ];
 // Werkbank Fase 10: waarom je een speler meldt (dezelfde sleutels als de server, zie chat-runtime REPORT_REASONS).
 const REPORT_REASONS = [["abuse", "Schelden of pesten"], ["spam", "Spam"], ["cheat", "Vals spelen"], ["name", "Nare naam"], ["other", "Iets anders"]];
@@ -345,6 +346,9 @@ export function createGkHud(api) {
   const ui = {
     celebrations: [],       // Kevin 6-11: Quest voltooid en Level omhoog na elkaar (niet over elkaar)
     celebrating: false,
+    completedQuestKeys: null,
+    questCelebratedAt: new Map(),
+    levelCelebratedAt: new Map(),
     questFeed: [],          // Kevin 6-11: de laatste 3 questmeldingen linksonder (blijven staan, de oudste gaat eruit)
     eventFocus: "",         // Kevin 8-11: aangeklikt wereld-event (gebied op de kaart en in de questregel) zolang je niet meedoet
     eventGone: {},          // Kevin 8-11: weggeklikte wereld-events: questId -> welke keer (begintijd)
@@ -374,6 +378,7 @@ export function createGkHud(api) {
     lastLevel: null,
     lastHitAt: 0,
     combatAt: -1e9,
+    makerLevelPending: 0,
     toasts: [],
     jobsTold: new Set(),
     sig: {},
@@ -567,6 +572,7 @@ export function createGkHud(api) {
   const portalCard = h("div", { class: "gkInvite gkPortalAsk", hidden: true, role: "dialog", "aria-live": "polite" });
   // Fase 8 herstel 2 (Kevin 12-11): buitvenster (na vijand/grondstof) en "Hier ligt ..." bij een pickup.
   const lootCard = h("div", { class: "gkInvite gkLootCard", hidden: true, role: "dialog", "aria-live": "polite" });
+  playerStatus.append(lootCard);
   const menuShade = h("div", { class: "gkMenuShade", hidden: true });
   const menuCard = h("div", { class: "gkMenu", hidden: true, role: "menu" });
   // MMO stap 2 (3-11): chat linksonder (boven het verbindingslampje) en ballonnen boven het hoofd van wie praat.
@@ -593,7 +599,7 @@ export function createGkHud(api) {
   const railPost = h("button", { type: "button", class: "gkTab gkTabDock", "data-act": "dock", "data-id": "post", title: "Post" }, [ico("envelope"), railPostDot]);
   const railSwapDot = h("span", { class: "gkDot", hidden: true });
   const railSwap = h("button", { type: "button", class: "gkTab gkTabDock", "data-act": "dock", "data-id": "swap", title: "Ruilen" }, [ico("swap-bag"), railSwapDot]);
-  game.append(labels, bubbleLayer, fxLayer, playerStatus, mapWrap, bagBtn, actions, death, lowLeft, feedStack, inviteCard, lootCard, menuShade, menuCard);
+  game.append(labels, bubbleLayer, fxLayer, playerStatus, mapWrap, bagBtn, actions, death, lowLeft, feedStack, inviteCard, menuShade, menuCard);
 
   // Grote kaart: noorden boven, begint ingezoomd op jou. Slepen = schuiven, scrollen/knijpen/+− = zoomen.
   // Tik op een portal = reizen, op iets anders = naam, op een lege plek = je pin. Rechts: legenda met vinkjes en schuiven.
@@ -729,7 +735,7 @@ export function createGkHud(api) {
   }
   function visibleTabs() {
     return TABS.filter(function (tab) {
-      return !tab.module || has(tab.module);
+      return !tab.nested && (!tab.module || has(tab.module));
     });
   }
   function healthOf(s03) {
@@ -762,7 +768,14 @@ export function createGkHud(api) {
     return { active, startsAt, endsAt, nextAt, key: String(nextAt) };
   }
   function eventJoined(ev) {
-    return Boolean(ev?.joined) && (ev.status === "active" || ev.status === "ready_to_turn_in");
+    if (!ev?.questId) return false;
+    if (Boolean(ev.joined) && (ev.status === "active" || ev.status === "ready_to_turn_in")) return true;
+    // De actieve questlijst is leidend. Die kan al bijgewerkt zijn terwijl het losse
+    // worldEvents-item nog één snapshot achterloopt, wat anders een dubbele melding geeft.
+    const active = data().s04?.quests?.active;
+    return Array.isArray(active) && active.some(function (quest) {
+      return quest?.questId === ev.questId && (quest.status === "active" || quest.status === "ready_to_turn_in");
+    });
   }
   function eventNear(ev) {
     const position = api.live().position;
@@ -912,6 +925,7 @@ export function createGkHud(api) {
   // ---- rendering ----
   function render() {
     watchQuestStarts();
+    watchQuestCompletions();
     watchTrade();
     watchMail();
     applyLayout();
@@ -955,7 +969,7 @@ export function createGkHud(api) {
     // Klap of genezing: zwevend getal bij de levensbalk (alleen bij echte verandering, niet bij de eerste keer).
     if (s03 && ui.lastHp !== null && health.max > 0 && health.cur !== ui.lastHp) {
       const delta = Math.round(health.cur - ui.lastHp);
-      if (delta < 0 && !d.defeated) {
+      if (delta < 0 && !d.defeated && ui.makerLevelPending <= 0) {
         ui.combatAt = performance.now();
         if (performance.now() - ui.lastHitAt > 1200) hitFeedback(-delta);
       } else if (delta > 0 && health.cur < health.max + 1) {
@@ -975,6 +989,12 @@ export function createGkHud(api) {
     // Kevin 11-11: nieuwe spullen in de tas: een melding, een teller op de tas en een "nieuw"-stempel op het vakje.
     if (s03) trackLoot(d);
     if (s03 && ui.lastLevel !== null && num(progression.level, 1) > ui.lastLevel) levelUp(num(progression.level, 1), ui.lastLevel);
+    else if (s03 && ui.lastLevel !== null && num(progression.level, 1) < ui.lastLevel) {
+      // De maker kan terugzetten en hetzelfde level daarna opnieuw testen.
+      for (const celebratedLevel of ui.levelCelebratedAt.keys()) {
+        if (celebratedLevel > num(progression.level, 1)) ui.levelCelebratedAt.delete(celebratedLevel);
+      }
+    }
     if (s03) { ui.lastXp = num(progression.xp); ui.lastLevel = num(progression.level, 1); }
     root.dataset.low = !d.defeated && health.max > 0 && health.pct < 0.3 ? "1" : "0";
     if (ui.sig.unit === signature) return;
@@ -1611,8 +1631,53 @@ export function createGkHud(api) {
     if (open) chatFeed.scrollTop = chatFeed.scrollHeight;
   }
   // De chat zelf staat onderin het paneel (Kevin 3-11). Hier alleen nog:
-  // - chat dicht: de laatste regels linksonder, naast of boven de actieknoppen (nooit eroverheen);
+  // - chat dicht: de laatste regels linksonder, altijd naast de actieknoppen (nooit eroverheen of erboven);
   // - met de vinger aan het typen: de chat net boven het toetsenbord.
+  function fitActionBar() {
+    const area = game.getBoundingClientRect();
+    const edge = 10;
+    const visibleButtons = [bagAct, doBtn, slotUi[3].btn, slotUi[2].btn, attackBtn].filter(function (button) {
+      return button.offsetWidth > 0 && button.offsetHeight > 0;
+    });
+    const topLimitForWidth = function (width) {
+      const right = area.right - edge;
+      const left = right - width;
+      let top = area.top + edge;
+      // Alleen HUD-blokken die horizontaal in de actiekolom komen tellen mee.
+      for (const blocker of [mapWrap, playerStatus]) {
+        const rect = blocker.getBoundingClientRect();
+        if (!rect.width || !rect.height || left >= rect.right + 6 || right <= rect.left - 6) continue;
+        top = Math.max(top, rect.bottom + 8);
+      }
+      return top;
+    };
+    // Tussenstap voor een laag staand spelgebied: behoud de normale knopmaat en
+    // zet de zichtbare acties eerst in twee kolommen.
+    let compact = false;
+    const bagVisible = visibleButtons.includes(bagAct);
+    if (root.dataset.orient === "port" && visibleButtons.length >= 3) {
+      const verticalWidth = Math.max(...visibleButtons.map(function (button) { return button.offsetWidth; }));
+      const verticalHeight = visibleButtons.reduce(function (sum, button) { return sum + button.offsetHeight; }, 0) + (visibleButtons.length - 1) * 8;
+      const verticalRoom = Math.max(0, area.bottom - edge - topLimitForWidth(verticalWidth));
+      compact = verticalHeight > verticalRoom;
+    }
+    if (compact) root.dataset.actioncompact = "1";
+    else delete root.dataset.actioncompact;
+    if (compact && bagVisible) root.dataset.actionbag = "1";
+    else delete root.dataset.actionbag;
+
+    const naturalWidth = actions.offsetWidth;
+    const naturalHeight = actions.offsetHeight;
+    if (!area.width || !area.height || !naturalWidth || !naturalHeight) {
+      if (actions.style.transform) actions.style.transform = "";
+      return;
+    }
+    const topLimit = topLimitForWidth(naturalWidth);
+    const availableHeight = Math.max(0, area.bottom - edge - topLimit);
+    const scale = Math.min(1, availableHeight / naturalHeight);
+    const transform = scale < 0.999 ? "scale(" + Math.floor(scale * 1000) / 1000 + ")" : "";
+    if (actions.style.transform !== transform) actions.style.transform = transform;
+  }
   function chatSpace() {
     const edge = 10;
     const area = game.getBoundingClientRect();
@@ -1621,13 +1686,14 @@ export function createGkHud(api) {
     const low = lowLeft.getBoundingClientRect();
     const above = low.width > 0 && low.height > 0 ? area.bottom - low.top + 6 : edge;
     const besideRoom = hasActions ? act.left - area.left - 2 * edge : area.width - 2 * edge;
-    // Kevin 10-11: op de telefoon liever smal naast de knoppen dan over de hele breedte erboven.
-    const beside = besideRoom >= (coarsePointer() ? 150 : 300);
-    // De tekst boven de actieknoppen steekt ook buiten hun rechthoek uit.
-    const bottom = beside || !hasActions ? above : Math.max(above, area.bottom - act.top + 30);
+    // De feed blijft onderaan links. Als de knoppen zichtbaar zijn, krijgt hij uitsluitend
+    // de ruimte links daarvan; te weinig ruimte maakt hem smaller, maar verplaatst hem niet omhoog.
+    const beside = hasActions;
+    const bottom = above;
     return { edge, area, bottom, beside, besideRoom };
   }
   function placeChat() {
+    fitActionBar();
     const area = game.getBoundingClientRect();
     const statusRect = playerStatus.getBoundingClientRect();
     const mapBottom = Math.max(mapWrap.getBoundingClientRect().bottom, mapTools.getBoundingClientRect().bottom);
@@ -2280,6 +2346,9 @@ export function createGkHud(api) {
   }
   // Fase 6: level omhoog laat ook zien wat je erbij kreeg (klasse: groei per level) en welke vaardigheid nu vrij is.
   function levelUp(newLevel, oldLevel) {
+    const now = performance.now();
+    if (now - num(ui.levelCelebratedAt.get(newLevel), -Infinity) < 5000) return;
+    ui.levelCelebratedAt.set(newLevel, now);
     const d = data();
     const from = Math.min(newLevel - 1, Math.max(1, num(oldLevel, newLevel - 1)));
     const steps = Math.max(1, newLevel - from);
@@ -2304,6 +2373,10 @@ export function createGkHud(api) {
   function questDone(info) {
     const title = String(info?.title || "");
     if (!title) return;
+    const questId = String(info?.questId || "");
+    const now = performance.now();
+    if (questId && now - num(ui.questCelebratedAt.get(questId), -Infinity) < 5000) return;
+    if (questId) ui.questCelebratedAt.set(questId, now);
     const rewards = (Array.isArray(info.rewards) ? info.rewards : []).map(String).slice(0, 6);
     celebrate(0, 4300, function () {
       return h("div", { class: "gkQuestDone", role: "status" }, [
@@ -2315,7 +2388,7 @@ export function createGkHud(api) {
         rewards.length ? h("span", { class: "gkQuestDoneRewards", text: rewards.join("  ·  ") }) : null
       ]);
     });
-    chatNotice("🏆 Quest voltooid: " + title + (rewards.length ? " (" + rewards.join(", ") + ")" : ""), "", true, String(info.questId || ""));
+    chatNotice("🏆 Quest voltooid: " + title + (rewards.length ? " (" + rewards.join(", ") + ")" : ""), "", true, questId);
   }
 
   // Quest Builder stap 8: wat een NPC zegt die je begeleidt: een ballon boven zijn hoofd (8 s) en een regel in de chat.
@@ -2389,6 +2462,24 @@ export function createGkHud(api) {
   // Brief: klik op de brief in de tas = de brief in het gesprek met de knop Quest accepteren.
   // Gebied of vanzelf: de quest is al begonnen = het verhaal in het gesprek met Op pad!. Daarna Menu > Quests bij die quest.
   const STORY_LOOK = { item: ["Brief", "scroll-unfurled"], area: ["In de buurt", "position-marker"], auto: ["Nieuwe opdracht", "star-medal"], lore: ["Verhaal", "open-book"] };
+  // Het losse quest:completed-bericht kan bij een korte reconnect gemist worden.
+  // De queststand is daarom de betrouwbare terugval. Bij de eerste stand na laden
+  // tonen we niets ouds; alleen een nieuwe overgang naar voltooid krijgt de medaille.
+  function watchQuestCompletions() {
+    const completed = data().s04?.quests?.completed;
+    if (!Array.isArray(completed)) return;
+    const next = new Set(completed.map(function (quest) {
+      return String(quest?.questId || "") + "|" + String(quest?.completedAt || "");
+    }));
+    if (ui.completedQuestKeys) {
+      for (const quest of completed) {
+        const key = String(quest?.questId || "") + "|" + String(quest?.completedAt || "");
+        if (!quest?.questId || ui.completedQuestKeys.has(key)) continue;
+        questDone({ questId: quest.questId, title: quest.displayName || quest.questId, rewards: [] });
+      }
+    }
+    ui.completedQuestKeys = next;
+  }
   function watchQuestStarts() {
     const active = data().s04?.quests?.active;
     if (!Array.isArray(active)) return;
@@ -2555,7 +2646,7 @@ export function createGkHud(api) {
     const p = root.dataset.panel;
     const m = root.dataset.mode;
     const tabs = visibleTabs();
-    if (!tabs.some(function (tab) { return tab.id === store.tab; })) store.tab = tabs[0]?.id || "bag";
+    if (!TABS.some(function (tab) { return tab.id === store.tab && (!tab.module || has(tab.module)); })) store.tab = tabs[0]?.id || "bag";
     const questDot = (data().s04?.quests?.active || []).some(function (quest) { return quest.activeStep?.complete; });
     // Fase 8 herstel: een stip op 📬 Post zolang er ongelezen post is.
     const postDot = num(data().s05?.mail?.unreadCount) > 0;
@@ -2568,7 +2659,7 @@ export function createGkHud(api) {
     const handleTitle = dockNow === "talk" ? "Gesprek sluiten" : p === "open" ? "Kleiner (alleen iconen)" : p === "dock" ? "Chat dicht" : "Dicht";
     const items = [h("button", { type: "button", class: "gkTab gkHandle", "data-act": "handle", title: handleTitle }, [h("b", { text: "›" })])];
     for (const tab of tabs) {
-      const on = p === "open" && tab.id === store.tab;
+      const on = p === "open" && (tab.id === store.tab || (tab.id === "settings" && (store.tab === "chars" || store.tab === "logout")));
       items.push(h("button", { type: "button", class: "gkTab" + (on ? " gkOn" : ""), "data-act": "tab", "data-id": tab.id, title: tab.title + (tab.key ? " (" + tab.key.slice(3) + ")" : ""), "aria-pressed": on ? "true" : "false" },
         [ico(tab.icon), tab.id === "quests" && questDot ? h("span", { class: "gkDot" }) : null]));
     }
@@ -3638,14 +3729,43 @@ export function createGkHud(api) {
     ]);
   }
   function makerBox(level) {
+    const progression = data().s03?.progression || {};
+    const xpLeft = Math.max(0, num(progression.nextLevelXp) - num(progression.xp));
+    const atMax = num(progression.level, 1) >= num(progression.maxLevel, Infinity);
     return h("div", { class: "gkCard gkMaker" }, [
       h("strong", null, [ico("crown"), "Maker"]),
       h("div", { class: "gkBtns" }, [
         h("button", { type: "button", class: "gkBtn", "data-act": "maker-level", "data-id": String(Math.max(1, level - 1)), title: "Een level omlaag" }, ["Level −"]),
         h("button", { type: "button", class: "gkBtn gkGo", "data-act": "maker-level", "data-id": String(level + 1), title: "Een level omhoog" }, ["Level +"]),
         h("button", { type: "button", class: "gkBtn", "data-act": "maker-xp", "data-id": "100", title: "100 XP erbij" }, ["+100 XP"])
-      ])
+      ]),
+      h("small", { text: atMax ? "Hoogste level bereikt." : "Nog " + fmt(xpLeft) + " XP tot level " + (level + 1) + "." })
     ]);
+  }
+  function runMakerProgress(action, payload, suppressHpDrop = false) {
+    const beforeLevel = Math.max(1, num(data().s03?.progression?.level, 1));
+    const keepPanelOpen = root.dataset.panel === "open";
+    const keepTab = store.tab;
+    if (suppressHpDrop) ui.makerLevelPending += 1;
+    const finish = function (result, showLevelUp) {
+      const afterLevel = Math.max(1, num(result?.snapshot?.progression?.level, num(data().s03?.progression?.level, beforeLevel)));
+      if (showLevelUp && afterLevel > beforeLevel) levelUp(afterLevel, beforeLevel);
+      if (suppressHpDrop) ui.makerLevelPending = Math.max(0, ui.makerLevelPending - 1);
+      // Een level omlaag verlaagt ook de maximale levens. Dat mag op kleine schermen niet als
+      // gevecht worden gezien en het geopende Vaardigheden-tabblad inklappen.
+      if (keepPanelOpen) {
+        store.panel = "open";
+        store.tab = keepTab;
+        ui.combatAt = -1e9;
+        ui.effective = "";
+        render();
+      }
+    };
+    Promise.resolve(api.run03(action, null, Object.assign({ skipMoveToTarget: true }, payload))).then(function (result) {
+      finish(result, true);
+    }, function () {
+      finish(null, false);
+    });
   }
 
   // Characters: per klasse een eigen character met eigen tas, level en plek. Wisselen laadt de game opnieuw.
@@ -3770,6 +3890,13 @@ export function createGkHud(api) {
     if (!loreId || !(data().lore || {})[loreId]) return;
     store.item = null;
     ui.story = { kind: "lore", loreId: String(loreId), first: options.first === true, fromBook: options.fromBook === true };
+    if (options.fromBook !== true && Number.isFinite(Number(options.sourceX)) && Number.isFinite(Number(options.sourceZ))) {
+      ui.talkAnchor = {
+        x: Number(options.sourceX),
+        z: Number(options.sourceZ),
+        leaveMeters: Math.max(1, num(options.leaveMeters, TALK_LEAVE_M))
+      };
+    }
     ui.dockPick = "talk";
     save();
     applyLayout();
@@ -3823,6 +3950,10 @@ export function createGkHud(api) {
     const list = h("div", { class: "gkList" }, [
       h("div", { class: "gkRow" }, [ico("magic-portal"), h("span", null, ["Vastgelopen?", h("small", { text: "Terug naar je laatste portal of respawnplek." })]),
         h("button", { type: "button", class: "gkBtn", "data-act": "unstuck", disabled: d.busy?.n03 || d.defeated }, ["Unstuck"])]),
+      h("div", { class: "gkRow" }, [ico("pointy-hat"), h("span", null, ["Characters", h("small", { text: "Kies of wissel van character." })]),
+        h("button", { type: "button", class: "gkBtn", "data-act": "tab", "data-id": "chars" }, ["Openen"])]),
+      h("div", { class: "gkRow" }, [ico("exit-door"), h("span", null, ["Uitloggen", h("small", { text: "Stoppen met spelen; je voortgang blijft bewaard." })]),
+        h("button", { type: "button", class: "gkBtn gkWarn", "data-act": "tab", "data-id": "logout" }, ["Openen"])]),
       toggle("autoLoot", "chest", "Automatisch buit pakken", "Aan = alle buit gaat meteen in je tas. Uit = bij een mix (bijv. goud én een vacht) kies je zelf wat je meeneemt; één soort gaat altijd meteen in je tas.", store.autoLoot === true),
       sectionGroup("settings-server", "Serverstatus onderin", serverRows, true),
       sectionGroup("settings-view", "Spelbeeld", viewRows, true),
@@ -3835,7 +3966,7 @@ export function createGkHud(api) {
     return [head("exit-door", "Uitloggen"), h("div", { class: "gkBody" }, [h("div", { class: "gkList" }, [
       emptyNote("exit-door", "Wil je stoppen met spelen? Je character, tas en plek blijven bewaard."),
       h("div", { class: "gkBtns" }, [h("button", { type: "button", class: "gkBtn gkWarn", "data-act": "logout" }, [ico("exit-door", "plain"), "Uitloggen"]),
-        h("button", { type: "button", class: "gkBtn", "data-act": "close" }, [ico("check-mark", "plain"), "Blijven"])])
+        h("button", { type: "button", class: "gkBtn", "data-act": "tab", "data-id": "settings" }, [ico("check-mark", "plain"), "Terug"])])
     ])])];
   }
 
@@ -4106,12 +4237,16 @@ export function createGkHud(api) {
     syncConnectionMetricVisibility();
   }
 
-  // ---- elk frame (gedoseerd): minimap, knoppen, doelwit en het meeschuivende beeld ----
+  // Na het tekenen: labels gebruiken de camera en modelposities van precies dat beeld.
   function frame(now = performance.now()) {
     const anchors = typeof api.labelAnchors === "function" ? api.labelAnchors() : [];
     drawLabels(now, anchors);
     drawFloats(now, anchors);
     drawBubbles(now, anchors);
+  }
+
+  // Vóór het tekenen: HUD-indeling en camerauitsnede mogen hier nog veranderen.
+  function prepareFrame(now = performance.now()) {
     if (now - (ui.secAt || 0) >= 250) {
       ui.secAt = now;
       renderChatFeed(now);
@@ -4177,7 +4312,7 @@ export function createGkHud(api) {
     if (action === "node04:start_dialogue" || action === "node05:focus_service") return "talk";
     if (target?.entityKind === "pickup" || action === "pickup") return "pickup";
     if (target?.entityKind === "resource" || action === "gather") return "gather";
-    if (action === "travel") return "travel";
+    if (action === "travel" || action === "portal_map") return "travel";
     // Werkbank Fase 10 (10b): een model met een verhaal (E = lezen).
     if (action === "lore_read") return "read";
     return "";
@@ -4251,18 +4386,11 @@ export function createGkHud(api) {
 
   // 2D-naamlabels: elke beurt de schermplek bijwerken (geen nieuwe elementen als het niet hoeft).
   let labelRect = null;
-  let labelRectAt = 0;
-  function snapToScreenPixel(value) {
-    // Op een HiDPI-scherm is een halve CSS-pixel vaak precies één fysieke pixel.
-    // Afronden op CSS-pixels liet de namen zichtbaar hokken; een doorlopende
-    // translate3d maakte Chrome's gerasterde tekst tijdens het lopen wazig.
-    const ratio = Math.max(1, Number(window.devicePixelRatio) || 1);
-    return Math.round(value * ratio) / ratio;
-  }
   function drawLabels(now, anchors) {
     if (!anchors.length && !labelPool.size) return;
-    if (!labelRect || now - labelRectAt > 1000) { labelRect = labels.getBoundingClientRect(); labelRectAt = now; }
+    labelRect = labels.getBoundingClientRect();
     const seen = new Set();
+    const placements = [];
     for (const anchor of anchors) {
       const own = anchor.entityKind === "self" ? "self" : anchor.entityKind === "player" ? "player" : "";
       if (own === "self" ? !store.nameSelf : own === "player" ? !store.namePlayers : !store.nameWorld) continue;
@@ -4287,16 +4415,17 @@ export function createGkHud(api) {
         if (hasHp) children.push(h("span", { class: "gkHealth" }, [h("span", { class: "gkHealthFill" }), healthText]));
         el.replaceChildren(...children);
         el.gkHealthText = healthText;
+        el.gkSizeKey = "";
       }
       const fontSize = Math.max(8, Math.min(48, num(anchor.fontSizePx, 13)));
       const fontSizeCss = fontSize + "px";
-      if (el.style.fontSize !== fontSizeCss) el.style.fontSize = fontSizeCss;
+      if (el.style.fontSize !== fontSizeCss) { el.style.fontSize = fontSizeCss; el.gkSizeKey = ""; }
       // Naam-tags niet verbergen bij overlap met de HUD; ze horen altijd zichtbaar te blijven.
       if (el.style.visibility) el.style.visibility = "";
       const kind = own || (anchor.entityKind === "escort" ? "escort" : markerKind(anchor)) || "other";
       // Niet `gkHp`: die klasse hoort bij de grote spelerbalk en knipt de naamtag op 18 px af.
       const className = "gkLabel gkLabel--" + kind + (anchor.selected ? " gkOn" : "") + (anchor.available === false ? " gkDim" : "") + (anchor.shield ? " gkShield" : "") + (hasHp ? " gkHasHealth" : "");
-      if (el.className !== className) el.className = className;
+      if (el.className !== className) { el.className = className; el.gkSizeKey = ""; }
       // Stap 8: levensbalk onder de naam van een NPC die je begeleidt (Kevin 10-11: en van elke vijand).
       if (hasHp) {
         const hp = Math.round(anchor.health * 100) + "%";
@@ -4304,25 +4433,50 @@ export function createGkHud(api) {
         const current = Number.isFinite(Number(anchor.healthCurrent)) ? Math.max(0, Math.round(Number(anchor.healthCurrent))) : Math.round(anchor.health * 100);
         const maximum = Number.isFinite(Number(anchor.healthMax)) ? Math.max(1, Math.round(Number(anchor.healthMax))) : 100;
         const value = current + "/" + maximum;
-        if (el.gkHealthText && el.gkHealthText.textContent !== value) el.gkHealthText.textContent = value;
+        if (el.gkHealthText && el.gkHealthText.textContent !== value) { el.gkHealthText.textContent = value; el.gkSizeKey = ""; }
       }
-      const left = snapToScreenPixel(anchor.x - labelRect.left) + "px";
-      const top = snapToScreenPixel(anchor.y - labelRect.top) + "px";
-      if (el.style.left !== left) el.style.left = left;
-      if (el.style.top !== top) el.style.top = top;
+      placements.push({ el, anchor });
     }
     for (const [id, el] of labelPool) {
       if (!seen.has(id)) { el.remove(); labelPool.delete(id); }
     }
+    // Verplaatsen gaat met translate3d, net als de schadegetallen: de browser schuift dan alleen
+    // de al getekende labellaag op. Met left/top moest hij elk frame alles opnieuw indelen en
+    // tekenen; op een tragere pc bleven de namen daardoor hangen en sprongen ze later bij.
+    // De maat meten we alleen als de inhoud verandert (of hooguit eens per seconde).
+    const sizeKey = (root.dataset.size || "") + "|" + (window.devicePixelRatio || 1);
+    for (const { el } of placements) {
+      if (el.gkSizeKey !== sizeKey || !(now - num(el.gkMeasuredAt, -Infinity) < 1000)) el.gkSizeKey = "";
+    }
+    for (const { el } of placements) {
+      if (el.gkSizeKey) continue;
+      const rect = el.getBoundingClientRect();
+      el.gkWidth = rect.width;
+      el.gkHeight = rect.height;
+      el.gkSizeKey = sizeKey;
+      el.gkMeasuredAt = now;
+    }
+    const ratio = window.devicePixelRatio || 1;
+    for (const { el, anchor } of placements) {
+      const at = labelOffset(anchor.x, anchor.y, el.gkWidth, el.gkHeight, labelRect.left, labelRect.top, ratio);
+      const transform = "translate3d(" + at.x + "px," + at.y + "px,0)";
+      if (el.gkTransform !== transform) {
+        el.gkTransform = transform;
+        el.style.transform = transform;
+      }
+    }
   }
 
-  // Weglopen bij een NPC sluit het gesprek: meer dan TALK_LEAVE_M van de plek waar het begon.
+  // Weglopen bij een NPC of een verhaalbron sluit het gespreksvenster. Een verhaal uit het
+  // kennisboek heeft geen wereldbron en blijft daarom gewoon open.
   function checkTalkDistance() {
-    const talking = Boolean(data().dialogue || ui.serviceTalk);
+    const readingWorldLore = ui.story?.kind === "lore" && ui.story.fromBook !== true;
+    const talking = Boolean(data().dialogue || ui.serviceTalk || readingWorldLore);
     const position = api.live().position;
     if (!talking || !position) { if (!talking) ui.talkAnchor = null; return; }
     if (!ui.talkAnchor) { ui.talkAnchor = { x: num(position.x), z: num(position.z) }; return; }
-    if (Math.hypot(num(position.x) - ui.talkAnchor.x, num(position.z) - ui.talkAnchor.z) <= TALK_LEAVE_M) return;
+    const leaveMeters = readingWorldLore ? Math.max(1, num(ui.talkAnchor.leaveMeters, TALK_LEAVE_M)) : TALK_LEAVE_M;
+    if (Math.hypot(num(position.x) - ui.talkAnchor.x, num(position.z) - ui.talkAnchor.z) <= leaveMeters) return;
     ui.talkAnchor = null;
     closeTalk();
   }
@@ -4851,6 +5005,7 @@ export function createGkHud(api) {
   // Praten met een NPC: het gesprek van de NPC-kaart, plus zijn winkel/werkplaats op dezelfde plek.
   // Heeft hij geen gesprek, dan een korte strook met alleen Handelen en/of Maken.
   function talkTo(target) {
+    api.beginNpcTalk?.(target);
     // Te ver weg: eerst erheen lopen; aangekomen gaat het gesprek vanzelf open.
     if (target?.inRange === false) {
       ui.pendingTalk = { id: String(target.instanceId || ""), at: performance.now() };
@@ -5358,8 +5513,8 @@ export function createGkHud(api) {
       case "skill": useSlot(Number(id)); break;
       case "skill-put": putSkill(Number(el.dataset.slot), id); break;
       case "skill-locked": { const entry = skillById(id); if (entry) toast(entry.displayName + ": " + lockLine(entry) + ".", { icon: "padlock", ms: 2500 }); break; }
-      case "maker-level": api.run03("maker_level", null, { level: Number(id), skipMoveToTarget: true }); break;
-      case "maker-xp": api.run03("maker_xp", null, { xp: Number(id), skipMoveToTarget: true }); break;
+      case "maker-level": runMakerProgress("maker_level", { level: Number(id) }, true); break;
+      case "maker-xp": runMakerProgress("maker_xp", { xp: Number(id) }); break;
       case "do": interact(); break;
       case "map": {
         const zooms = Array.isArray(store.map.zoomLevels) && store.map.zoomLevels.length ? store.map.zoomLevels : ZOOMS;
@@ -5844,7 +5999,7 @@ export function createGkHud(api) {
     if (code === "KeyM") { cycleMap(); return true; }
     if (ui.bigMap && (code === "Equal" || code === "NumpadAdd")) { zoomBigTo(bigSpan() / 1.5, null); return true; }
     if (ui.bigMap && (code === "Minus" || code === "NumpadSubtract")) { zoomBigTo(bigSpan() * 1.5, null); return true; }
-    const tab = visibleTabs().find(function (entry) { return entry.key === code; });
+    const tab = TABS.find(function (entry) { return entry.key === code && (!entry.module || has(entry.module)); });
     if (tab) { openTab(tab.id); return true; }
     return false;
   }
@@ -5926,6 +6081,7 @@ export function createGkHud(api) {
 
   return {
     render,
+    prepareFrame,
     frame,
     handleKey,
     toast,
@@ -5935,6 +6091,7 @@ export function createGkHud(api) {
     areaTitle,
     readLore,
     questDone,
+    levelUp,
     npcSay,
     // Kevin 16-11: praat de speler nu met een NPC (op weg erheen, gesprek, winkel, werkplek of markt open)?
     talking() { return Boolean(ui.pendingTalk || ui.serviceTalk || ui.trade || ui.craft || ui.market || data().dialogue); },
