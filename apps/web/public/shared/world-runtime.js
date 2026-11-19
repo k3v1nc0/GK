@@ -4905,6 +4905,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
     radius: 0.5,
     speed: 6,
     sprint: 1.6,
+    alwaysRun: false,
     turnSpeed: 600,
     animationState: "idle",
     displayName: String(options.localPlayerDisplayName || options.playerDisplayName || "").trim(),
@@ -15012,7 +15013,8 @@ function resolveChunkDebugCenter(policy) {
     const state = String(stateName || "").trim().toLowerCase();
     const data = root?.userData || {};
     if (!Array.isArray(clips) || !clips.length) return null;
-    // Fase 05: vijanden noemen hun animaties zelf (idle/walk/attack/death); onbekend -> gewone regels.
+    // Een expliciet gekozen clip wint altijd. De oude volgorde controleerde eerst of de naam bij de
+    // status leek te passen; daardoor werd bijv. Walk = "Archer Run" alsnog hardcoded "Archer Walk".
     const explicitClip = data.actorClips && data.actorClips[state] ? findClipName(clips, data.actorClips[state]) : null;
     if (explicitClip) return explicitClip;
     if (state === "attack" || state === "death") return resolveClipNameForState(root, clips, "idle", assetMetadata);
@@ -15025,12 +15027,11 @@ function resolveChunkDebugCenter(policy) {
       return clipNameMatchesState(resolved, desiredState) ? resolved : null;
     };
     if (state === "walk") {
-      return pick(data.walkAnimation, "walk")
+      return findClipName(clips, data.walkAnimation)
         || pick("Walk", "walk")
         || pick(data.animationClip, "walk")
         || pick(defaultName, "walk")
         || pick(data.idleAnimation, "idle")
-        || findClipName(clips, data.walkAnimation)
         || findClipName(clips, data.animationClip)
         || findClipName(clips, defaultName)
         || findClipName(clips, "Walk")
@@ -15040,12 +15041,11 @@ function resolveChunkDebugCenter(policy) {
         || null;
     }
     if (state === "run") {
-      return pick(data.runAnimation, "run")
+      return findClipName(clips, data.runAnimation)
         || pick("Run", "run")
         || pick(data.animationClip, "run")
         || pick(defaultName, "run")
         || pick(data.walkAnimation, "walk")
-        || findClipName(clips, data.runAnimation)
         || findClipName(clips, data.animationClip)
         || findClipName(clips, defaultName)
         || findClipName(clips, "Run")
@@ -15054,7 +15054,7 @@ function resolveChunkDebugCenter(policy) {
         || firstName
         || null;
     }
-    return pick(data.idleAnimation, "idle")
+    return findClipName(clips, data.idleAnimation)
       || pick(defaultName, "idle")
       || pick("Idle", "idle")
       || pick(data.animationClip, "idle")
@@ -15090,20 +15090,27 @@ function resolveChunkDebugCenter(policy) {
   function playAnimationState(root, stateName, fadeSeconds = 0.15) {
     const record = animationMixers.get(root);
     if (!record || !Array.isArray(record.clips) || !record.clips.length) return null;
-    const clipName = resolveClipNameForState(root, record.clips, stateName, record.assetMetadata || {});
+    const normalizedState = String(stateName || "idle").trim().toLowerCase() || "idle";
+    const movementState = normalizedState === "idle" || normalizedState === "walk" || normalizedState === "run";
+    if (movementState) {
+      root.userData.movementAnimationState = normalizedState;
+      const lockedUntil = Number(root.userData.actionAnimationUntil) || 0;
+      if (lockedUntil === Infinity || lockedUntil > performance.now()) return record.currentClipName;
+    }
+    const clipName = resolveClipNameForState(root, record.clips, normalizedState, record.assetMetadata || {});
     if (!clipName) return null;
     const nextAction = getAnimationAction(record, clipName);
     if (!nextAction) return null;
     const nextClip = (record.clips || []).find(function (candidate) {
       return String(candidate?.name || "").trim() === clipName;
     }) || null;
-    const playbackScale = resolveAnimationPlaybackScale(root, nextClip, stateName, record);
+    const playbackScale = resolveAnimationPlaybackScale(root, nextClip, normalizedState, record);
     nextAction.setEffectiveTimeScale(playbackScale);
     if (record.currentClipName === clipName) return clipName;
     const previousAction = record.currentAction;
     nextAction.reset();
     nextAction.enabled = true;
-    const playOnce = String(stateName || "").toLowerCase() === "death";
+    const playOnce = ["attack", "cast", "block", "roll", "hit", "stunned", "death"].includes(normalizedState);
     nextAction.setLoop(playOnce ? THREE.LoopOnce : THREE.LoopRepeat, playOnce ? 1 : Infinity);
     nextAction.clampWhenFinished = playOnce;
     if (previousAction && previousAction !== nextAction) {
@@ -15120,6 +15127,46 @@ function resolveChunkDebugCenter(policy) {
     record.currentAction = nextAction;
     record.currentClipName = clipName;
     return clipName;
+  }
+
+  function animationRootForKey(id) {
+    const key = String(id || "");
+    if (key === "self") return player.root;
+    if (key.startsWith("player:")) return remotePlayers.get(key.slice(7))?.root || null;
+    return runtimeTargetModelGroup(runtimeTargetRoots.get(key)) || null;
+  }
+
+  function playActionAnimation(id, stateName, options = {}) {
+    const root = animationRootForKey(id);
+    const stateKey = String(stateName || "").trim().toLowerCase();
+    const configured = root?.userData?.actorClips?.[stateKey];
+    const record = root ? animationMixers.get(root) : null;
+    if (!root || !configured || !record) return false;
+    const clipName = findClipName(record.clips, configured);
+    const clip = clipName ? record.clips.find((entry) => String(entry?.name || "").trim() === clipName) : null;
+    if (!clip) return false;
+    const hold = options.hold === true || stateKey === "death";
+    const durationMs = hold ? Infinity : Math.max(180, Math.min(5000, Number(clip.duration) * 1000 || Number(options.durationMs) || 650));
+    const token = (Number(root.userData.actionAnimationToken) || 0) + 1;
+    root.userData.actionAnimationToken = token;
+    root.userData.actionAnimationUntil = hold ? Infinity : performance.now() + durationMs;
+    playAnimationState(root, stateKey, Number(options.fadeSeconds) >= 0 ? Number(options.fadeSeconds) : 0.08);
+    if (!hold) window.setTimeout(function () {
+      if (root.userData?.runtimeAlive === false || root.userData.actionAnimationToken !== token) return;
+      root.userData.actionAnimationUntil = 0;
+      playAnimationState(root, root.userData.movementAnimationState || "idle", 0.1);
+    }, durationMs);
+    requestRender("player-action-animation");
+    return true;
+  }
+
+  function clearActionAnimation(id = "self") {
+    const root = animationRootForKey(id);
+    if (!root) return false;
+    root.userData.actionAnimationToken = (Number(root.userData.actionAnimationToken) || 0) + 1;
+    root.userData.actionAnimationUntil = 0;
+    playAnimationState(root, root.userData.movementAnimationState || "idle", 0.1);
+    return true;
   }
 
   function getAnimationDebugForRoot(root) {
@@ -15652,7 +15699,8 @@ function resolveChunkDebugCenter(policy) {
     if (!def || !spawn) return;
     const groundY = num(worldData?.ground?.y, 0);
     player.speed = Math.max(0.1, num(def.moveSpeed, 6));
-    player.sprint = Math.min(2.5, Math.max(1, num(def.sprintMultiplier, 1.6)));
+    player.sprint = Math.min(10, Math.max(1, num(def.sprintMultiplier, 1.6)));
+    player.alwaysRun = def.alwaysRun === true;
     player.turnSpeed = num(def.turnSpeed, 600);
     player.radius = num(def.collisionRadius, 0.5);
     player.facing = num(spawn.facing, 0) * DEG_TO_RAD;
@@ -15666,6 +15714,7 @@ function resolveChunkDebugCenter(policy) {
     root.userData.idleAnimation = def.idleAnimation || null;
     root.userData.walkAnimation = def.walkAnimation || null;
     root.userData.runAnimation = def.runAnimation || null;
+    if (def.animationProfile && typeof def.animationProfile === "object") root.userData.actorClips = Object.assign({}, def.animationProfile);
     root.position.copy(player.pos);
     root.rotation.y = player.facing;
     const scale = num(def.scale, 1);
@@ -15844,6 +15893,13 @@ function resolveChunkDebugCenter(policy) {
     return next;
   }
 
+  function animationProfileForAppearance(worldData, selectedCharacterId, modelAssetId) {
+    const characters = worldData?.gameProject?.catalogs?.playableCharacters || {};
+    const character = selectedCharacterId ? characters[selectedCharacterId] : null;
+    const profile = character?.animationProfiles?.[modelAssetId];
+    return profile && typeof profile === "object" ? profile : null;
+  }
+
   function createRemotePlayerRoot(remotePlayer, worldData) {
     const root = new THREE.Group();
     root.name = "remote-player:" + String(remotePlayer?.playerId || crypto.randomUUID());
@@ -15853,16 +15909,18 @@ function resolveChunkDebugCenter(policy) {
     root.userData.transformable = false;
     root.userData.snapToGround = false;
     root.userData.runtimeAlive = true;
+    const fallbackModel = worldData?.player?.defaultModelAssetId !== undefined ? worldData.player.defaultModelAssetId : (worldData?.player?.modelAssetId || null);
+    const modelAssetId = remotePlayer?.modelAssetId || fallbackModel || null;
+    const profile = animationProfileForAppearance(worldData, remotePlayer?.selectedCharacterId, modelAssetId);
     root.userData.animationClip = remotePlayer?.animationClip || worldData?.player?.animationClip || null;
-    root.userData.idleAnimation = remotePlayer?.idleAnimation || worldData?.player?.idleAnimation || null;
-    root.userData.walkAnimation = remotePlayer?.walkAnimation || worldData?.player?.walkAnimation || null;
-    root.userData.runAnimation = remotePlayer?.runAnimation || worldData?.player?.runAnimation || null;
+    root.userData.idleAnimation = profile?.idle || remotePlayer?.idleAnimation || worldData?.player?.idleAnimation || null;
+    root.userData.walkAnimation = profile?.walk || remotePlayer?.walkAnimation || worldData?.player?.walkAnimation || null;
+    root.userData.runAnimation = profile?.run || remotePlayer?.runAnimation || worldData?.player?.runAnimation || null;
+    if (profile) root.userData.actorClips = Object.assign({}, profile);
     const scale = num(remotePlayer?.scale, num(worldData?.player?.scale, 1));
     root.scale.set(scale, scale, scale);
     updateRemotePlayerNameplate(root, remotePlayer?.displayName || remotePlayer?.playerId || "Player");
     // Klassen: elke speler zijn eigen uiterlijk; anders het standaard-spelermodel van de wereld.
-    const fallbackModel = worldData?.player?.defaultModelAssetId !== undefined ? worldData.player.defaultModelAssetId : (worldData?.player?.modelAssetId || null);
-    const modelAssetId = remotePlayer?.modelAssetId || fallbackModel || null;
     if (modelAssetId && assetById(worldData, modelAssetId)?.sourcePath) {
       loadModelInto(root, modelAssetId, worldData, null, {
         castShadow: true,
@@ -15961,6 +16019,7 @@ function resolveChunkDebugCenter(policy) {
       };
       remotePlayers.set(playerId, record);
     }
+    const previousCharacterId = record.selectedCharacterId || null;
     record.userId = remotePlayer?.userId || record.userId || null;
     record.displayName = String(remotePlayer?.displayName || record.displayName || playerId).trim() || playerId;
     record.selectedCharacterId = remotePlayer?.selectedCharacterId || record.selectedCharacterId || null;
@@ -15971,7 +16030,7 @@ function resolveChunkDebugCenter(policy) {
     // Klassen: het uiterlijk van de klasse van deze speler. Komt het later binnen of verandert het, dan
     // wordt het poppetje opnieuw gebouwd (anders bleef het standaard-spelermodel van de kaart Wereld staan).
     const nextModelAssetId = remotePlayer?.modelAssetId || record.modelAssetId || null;
-    if (record.root && nextModelAssetId !== (record.modelAssetId || null)) {
+    if (record.root && (nextModelAssetId !== (record.modelAssetId || null) || (record.selectedCharacterId || null) !== previousCharacterId)) {
       if (record.root.parent) record.root.parent.remove(record.root);
       const counts = countObjectTree(record.root);
       runtimeStats.sceneObjects = Math.max(0, runtimeStats.sceneObjects - (counts.objects || 0));
@@ -17379,10 +17438,9 @@ function resolveChunkDebugCenter(policy) {
   }
   function combatFxPoint(id) {
     const key = String(id || "");
-    let root = null;
-    if (key === "self") root = player.root;
-    else if (key.startsWith("player:")) root = remotePlayers.get(key.slice(7))?.root || null;
-    else root = runtimeTargetRoots.get(key) || null;
+    const root = key === "self" ? player.root
+      : key.startsWith("player:") ? remotePlayers.get(key.slice(7))?.root || null
+        : runtimeTargetRoots.get(key) || null;
     if (!root || root.visible === false) return null;
     return new THREE.Vector3(root.position.x, root.position.y + 1.1, root.position.z);
   }
@@ -17418,6 +17476,10 @@ function resolveChunkDebugCenter(policy) {
     const color = options.tone === "heal" ? 0x6ee77a : 0xffa53a;
     const now = performance.now();
     const style = ["slash", "cast", "shot"].includes(options.style) ? options.style : "slash";
+    if (options.animate !== false) {
+      if (options.from) playActionAnimation(options.from, style === "cast" ? "cast" : "attack");
+      if (options.to && options.tone !== "heal") playActionAnimation(options.to, options.targetAnimation || "hit", { hold: options.targetAnimation === "death" });
+    }
     const travel = style === "slash" ? 0 : style === "cast" ? 260 : 170;
     if (from && to && from.distanceToSquared(to) > 0.01) {
       if (style === "slash") addCombatFxMesh(shapes.arc, color, now, 230, "arc", from, to);
@@ -18157,7 +18219,7 @@ function resolveChunkDebugCenter(policy) {
       moveVector.normalize();
       // Sprint applies to click-to-walk too, not just WASD - holding the sprint key
       // should keep the player running no matter how movement is currently driven.
-      const wantsSprint = isActionPressed("sprint");
+      const wantsSprint = player.alwaysRun || isActionPressed("sprint");
       const speed = player.speed * (wantsSprint ? player.sprint : 1);
       movementTarget.set(player.pos.x + moveVector.x * speed * delta, player.pos.y, player.pos.z + moveVector.z * speed * delta);
       resolveCollision(movementTarget);
@@ -19808,6 +19870,8 @@ function resolveChunkDebugCenter(policy) {
     findPlayerMovementPath: findPlayerMovementPath,
     cancelPlayerMovementPath: function () { playerPathClient?.cancel(); },
     setPlayerAnimationState: setPlayerAnimationState,
+    playActionAnimation: playActionAnimation,
+    clearActionAnimation: clearActionAnimation,
     setLocalPlayerDisplayName: setLocalPlayerDisplayName,
     upsertRemotePlayer: upsertRemotePlayer,
     removeRemotePlayer: removeRemotePlayer,

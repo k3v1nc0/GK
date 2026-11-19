@@ -1,4 +1,4 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261118-label-lock1";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261118-player-animation1";
 import { nextPlayerRouteWaypoint } from "../shared/player-path-client.js?v=20261108-roads9";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20261106-perf1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
@@ -384,7 +384,8 @@ function handleActorMessage(message) {
     else playCombatFxFor(String(message.by), String(message.id), message.ab || null, message.sk === 1, message.sb === 1, "damage");
   } else if (message.e === "attack" && message.target && state.runtime && typeof state.runtime.playCombatFx === "function") {
     const target = String(message.target);
-    state.runtime.playCombatFx({ from: String(message.id), to: target === state.player?.id ? "self" : target.startsWith("actor:") ? target : "player:" + target, style: "slash", tone: "damage" });
+    state.runtime.playCombatFx({ from: String(message.id), to: target === state.player?.id ? "self" : target.startsWith("actor:") ? target : "player:" + target,
+      style: "slash", tone: "damage", targetAnimation: message.defeated ? "death" : "hit" });
   }
   // Kevin 10-11: word je aangevallen en sla je zelf nog niemand, dan sla je vanzelf terug.
   if (message.e === "attack" && message.target && String(message.target) === String(state.player?.id || "") && !message.defeated) retaliateAgainst(String(message.id));
@@ -7684,6 +7685,9 @@ async function runNode03Action(action, targetId, extra = {}) {
       // Een vaardigheid op een vijand zet ook de auto-aanval op hem (zoals in andere MMO's).
       if (!state.node03.autoAttack.targetId && !data.stop) { startAutoAttack(String(data.targetId)); scheduleAutoAttack(num(state.node03.snapshot?.skills?.auto?.cooldownMs, 1500)); }
     }
+    if (normalizedAction === "skill" && data.performed === true && data.action === "heal" && state.runtime?.playActionAnimation) {
+      state.runtime.playActionAnimation("self", "cast");
+    }
     if (normalizedAction === "skill" && data.performed !== true && num(data.cooldownMs, 0) > 0 && gkHud && typeof gkHud.skillFailed === "function") gkHud.skillFailed(Number(extra.slot));
     if (isTravel) {
       applyInstantTravelResponse(data);
@@ -7897,7 +7901,9 @@ function refreshGameDefeatState(options = {}) {
   if (defeatOverlay) defeatOverlay.hidden = !defeated;
   if (defeated && (changed || options.forceStop === true)) {
     clearLocalMovementForDefeat({ force: true, sendStop: options.sendStop !== false });
+    if (changed && state.runtime?.playActionAnimation) state.runtime.playActionAnimation("self", "death", { hold: true });
   }
+  if (!defeated && changed && state.runtime?.clearActionAnimation) state.runtime.clearActionAnimation("self");
   return defeated;
 }
 
@@ -12284,8 +12290,12 @@ function currentMoveVector() {
 function currentSpeed() {
   const player = state.gameWorld?.player || {};
   const moveSpeed = Math.max(0.1, num(player.moveSpeed, 6));
-  const sprintMultiplier = Math.min(2.5, Math.max(1, num(player.sprintMultiplier, 1.6)));
-  return moveSpeed * (state.input.sprint ? sprintMultiplier : 1);
+  const sprintMultiplier = Math.min(10, Math.max(1, num(player.sprintMultiplier, 1.6)));
+  return moveSpeed * (sprintActive() ? sprintMultiplier : 1);
+}
+
+function sprintActive() {
+  return state.gameWorld?.player?.alwaysRun === true || state.input.sprint === true;
 }
 
 function currentCollisionRadius() {
@@ -12373,13 +12383,28 @@ function applyRuntimePosition(position, options = {}) {
   });
 }
 
-// Klassen: je eigen character heeft zijn eigen uiterlijk. Het spelermodel van de wereld blijft de standaard
-// voor andere spelers zonder eigen model (player.defaultModelAssetId).
+function animationProfileForCharacter(gameWorld, player, modelAssetId) {
+  const classId = player?.selectedCharacterId || null;
+  const characters = gameWorld?.gameProject?.catalogs?.playableCharacters || {};
+  const character = classId ? characters[classId] : null;
+  const profile = character?.animationProfiles?.[modelAssetId];
+  return profile && typeof profile === "object" ? Object.assign({}, profile) : null;
+}
+
+// Klassen: je eigen character heeft zijn eigen uiterlijk én animatieprofiel. Het spelermodel van de
+// wereld blijft de standaard voor spelers zonder eigen model.
 function withOwnCharacterModel(gameWorld, player) {
   const own = player?.modelAssetId || null;
-  if (!gameWorld?.player || !own || gameWorld.player.modelAssetId === own) return gameWorld;
+  if (!gameWorld?.player || !own) return gameWorld;
   const base = gameWorld.player.defaultModelAssetId !== undefined ? gameWorld.player.defaultModelAssetId : (gameWorld.player.modelAssetId || null);
-  return Object.assign({}, gameWorld, { player: Object.assign({}, gameWorld.player, { modelAssetId: own, defaultModelAssetId: base }) });
+  const profile = animationProfileForCharacter(gameWorld, player, own);
+  const animation = profile ? {
+    animationProfile: profile,
+    idleAnimation: profile.idle || gameWorld.player.idleAnimation || null,
+    walkAnimation: profile.walk || gameWorld.player.walkAnimation || null,
+    runAnimation: profile.run || gameWorld.player.runAnimation || null
+  } : {};
+  return Object.assign({}, gameWorld, { player: Object.assign({}, gameWorld.player, animation, { modelAssetId: own, defaultModelAssetId: base }) });
 }
 
 function primeHttpSnapshotState(snapshot) {
@@ -13370,7 +13395,8 @@ function buildCurrentInputState(options = {}) {
   const currentVector = override && Number.isFinite(Number(override.moveX)) && Number.isFinite(Number(override.moveZ))
     ? { x: num(override.moveX, 0), z: num(override.moveZ, 0) }
     : currentMoveVector();
-  const sprint = override && typeof override.sprint === "boolean" ? override.sprint : state.input.sprint === true;
+  const sprint = state.gameWorld?.player?.alwaysRun === true
+    || (override && typeof override.sprint === "boolean" ? override.sprint : state.input.sprint === true);
   const pointerTarget = stop
     ? null
     : override && override.pointerTarget !== undefined
@@ -13453,7 +13479,7 @@ function sendInputState(options = {}) {
         stop: input.stop === true
       },
       moving: moving,
-      animationState: moving ? (state.input.sprint ? "run" : "walk") : "idle",
+      animationState: moving ? (sprintActive() ? "run" : "walk") : "idle",
       sentAt: sentAt || nowWall,
       controllerEpoch: controllerEpoch,
       clientSessionId: clientSessionId,
@@ -13736,7 +13762,7 @@ function stepMovement(now) {
     state.predictedPosition = clonePosition(nextPosition);
   }
   scheduleMinimapFogDiscovery("movement");
-  setMovementAnimationState(collisionBlocked ? "idle" : (state.input.sprint ? "run" : "walk"));
+  setMovementAnimationState(collisionBlocked ? "idle" : (sprintActive() ? "run" : "walk"));
   if (netSettings.predictionEnabled !== false) {
     applyRuntimePosition(nextPosition, { immediate: true, animationState: state.lastAnimationState });
   }

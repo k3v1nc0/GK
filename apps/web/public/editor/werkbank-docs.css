@@ -106,6 +106,12 @@
 .wbdLootChance .wbdSliderRow { flex: 1; grid-template-columns: minmax(40px, 1fr) 76px; }
 .wbdQty { width: 52px; padding: 4px; }
 .wbdMini { width: 24px; height: 24px; border: 0; border-radius: 6px; background: #2a3644; color: #c9d4dc; cursor: pointer; }
+.wbdAnimationProfiles { display: grid; gap: 8px; }
+.wbdAnimationProfile { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--wbd-line); border-radius: 8px; background: #0b121b; }
+.wbdAnimationProfileTitle { color: var(--wbd-text); font-weight: 700; }
+.wbdAnimationProfileRows { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 6px; }
+.wbdAnimationProfileRow { display: grid; gap: 3px; }
+.wbdAnimationProfileState { color: var(--wbd-muted); font-size: 11px; }
 
 .wbdMoreToggle { justify-self: start; border: 1px solid var(--wbd-line); background: transparent; color: var(--wbd-muted); border-radius: 7px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
 .wbdMoreToggle:hover, .wbdMoreToggle[aria-expanded="true"] { color: var(--wbd-text); border-color: #4a5a6a; }

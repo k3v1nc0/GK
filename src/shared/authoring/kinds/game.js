@@ -62,6 +62,19 @@ const SHIELD_GROUP = "🛡️ Schild van sterkere vijanden";
 // Werkbank Fase 10: een model dat rondjes vliegt (vogels, draak).
 const FLY_GROUP = "🦅 Vliegen";
 const FLY_ON = Object.freeze({ key: "fly", is: [true] });
+const PLAYER_LOOK_GROUP = "🧍 Uiterlijk en animaties";
+const PLAYER_ANIMATION_STATES = Object.freeze([
+  { key: "idle", label: "Idle", icon: "🧍" },
+  { key: "walk", label: "Walk", icon: "🚶" },
+  { key: "run", label: "Run", icon: "🏃" },
+  { key: "attack", label: "Attack", icon: "⚔️" },
+  { key: "cast", label: "Cast / skill", icon: "✨" },
+  { key: "block", label: "Block", icon: "🛡️" },
+  { key: "roll", label: "Roll", icon: "🔄" },
+  { key: "hit", label: "Hit", icon: "💥" },
+  { key: "stunned", label: "Stunned", icon: "💫" },
+  { key: "death", label: "Death", icon: "💀" }
+]);
 // Werkbank Fase 10 (Kevin 16-11): een eigen route (tekenen in de 3D-view zoals de Weg), voor een NPC en voor vliegers.
 const WALK_GROUP = "🚶 Lopen";
 const WALKS = Object.freeze({ key: "walkMode", is: ["wander", "route"] });
@@ -503,8 +516,11 @@ export const GAME_KINDS = {
         help("Wat een nieuw character van deze klasse één keer krijgt (onder ⚙️ meer).", "Bijv. een zwaard voor de DPS en een schild voor de Tank. Uitrusting wordt meteen aangedaan.", "Character krijgt niets → kies hier iets. Bestaande characters krijgen het niet nog eens."),
         { ui: ui("🎒", "refList", "instellingen", { more: true }) }),
       models: { type: "assetList", assetType: "model", required: false, minItems: 0, maxItems: 40, maxLength: 160, audience: "client", label: "Uiterlijk",
-        ui: ui("🧍", "assetList", "instellingen"), default: [],
-        help: help("De modellen waaruit een speler van deze klasse zijn uiterlijk kiest.", "Sleep modellen uit de Bibliotheek hierop, bijv. 10 tovenaars voor DPS, elfen voor Healer, dwergen voor Tank. De eerste is de standaard.", "Speler ziet er standaard uit → sleep hier minstens één model op.") }
+        ui: ui("🧍", "assetList", "instellingen", { group: PLAYER_LOOK_GROUP }), default: [],
+        help: help("De modellen waaruit een speler van deze klasse zijn uiterlijk kiest.", "Sleep modellen uit de Bibliotheek hierop, bijv. 10 tovenaars voor DPS, elfen voor Healer, dwergen voor Tank. De eerste is de standaard.", "Speler ziet er standaard uit → sleep hier minstens één model op.") },
+      animationProfiles: { type: "animationProfiles", required: false, maxItems: 40, maxLength: 120, states: PLAYER_ANIMATION_STATES,
+        audience: "client", label: "Animaties per uiterlijk", ui: ui("🎞️", "animationProfiles", "instellingen", { group: PLAYER_LOOK_GROUP }), default: null,
+        help: help("Welke animatie ieder uiterlijk van deze klasse gebruikt voor bewegen en vechten.", "Kies per model Idle, Walk, Run, Attack, Cast/skill, Block, Roll, Hit, Stunned en Death uit de clips van dat model.", "Een uiterlijk gebruikt de verkeerde beweging → wijzig alleen de dropdowns van dat uiterlijk.") }
     }
   },
   // Healing (2-11): de regels voor regeneratie, effecten, doodgaan en level omhoog. Gelden voor alle klassen.

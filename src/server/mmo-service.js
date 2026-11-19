@@ -645,6 +645,7 @@ export function publicRemotePlayerSnapshot(profile, position, connectedSessionCo
   return {
     playerId: profile.id,
     displayName: profile.display_name,
+    selectedCharacterId: profile.selected_character_id || null,
     modelAssetId: modelAssetId || null,
     position: {
       x: round(position.x),
@@ -2750,7 +2751,7 @@ export class MmoService {
 
   simulatePlayerTick(state, inputState, worldContext, tickDeltaMs, tickInfo = {}) {
     const baseSpeed = Math.max(0.1, num(worldContext.world?.player?.moveSpeed, 6));
-    const sprintMultiplier = Math.min(2.5, Math.max(1, num(worldContext.world?.player?.sprintMultiplier, 1.6)));
+    const sprintMultiplier = Math.min(10, Math.max(1, num(worldContext.world?.player?.sprintMultiplier, 1.6)));
     const radius = Math.max(0.05, num(worldContext.world?.player?.collisionRadius, 0.5));
     const currentPosition = { x: num(state.x, 0), y: num(state.y, 0), z: num(state.z, 0) };
     const dtSeconds = clamp(Number(tickDeltaMs || WORLD_TICK_MS) / 1000, 0.01, 0.1);

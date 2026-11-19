@@ -32,7 +32,8 @@ test("zonder kaarten is er toch een speelbare basiswereld", () => {
 });
 
 test("de kaart Wereld stuurt grond, startplek, speler, camera en lucht", () => {
-  const settings = { groundSize: 300, groundColor: "#224422", startX: 12, startZ: -8, playerSpeed: 9, cameraDistance: 30, skyColor: "#102030" };
+  const settings = { groundSize: 300, groundColor: "#224422", startX: 12, startZ: -8, playerSpeed: 9, playerWalkAnimation: "Walk cycle",
+    playerRunSpeedPct: 1000, playerAlwaysRun: true, playerRunAnimation: "Run cycle", cameraDistance: 30, skyColor: "#102030" };
   assert.equal(validateDocument("world_settings", settings).ok, true);
   assert.equal(validateDocument("world_settings", { skyColor: "blauw" }).ok, false, "kleur moet #rrggbb zijn");
   const world = buildRuntimeWorld(serverData([doc("world_settings", "world_settings", settings), doc("project_settings", "project_settings", { gameName: "Testwereld" })]));
@@ -40,6 +41,10 @@ test("de kaart Wereld stuurt grond, startplek, speler, camera en lucht", () => {
   assert.equal(world.ground.materialColor, "#224422");
   assert.deepEqual([world.spawn.x, world.spawn.z], [12, -8]);
   assert.equal(world.player.moveSpeed, 9);
+  assert.equal(world.player.sprintMultiplier, 10);
+  assert.equal(world.player.alwaysRun, true);
+  assert.equal(world.player.walkAnimation, "Walk cycle");
+  assert.equal(world.player.runAnimation, "Run cycle");
   assert.equal(world.camera.distance, 30);
   assert.equal(world.world.backgroundColor, "#102030");
   assert.equal(world.gameProject.project.gameName, "Testwereld");

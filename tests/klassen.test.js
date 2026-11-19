@@ -30,7 +30,11 @@ const base = () => [
 ];
 const klasse = (id, name, values) => doc("player_class", "player_class:" + id, Object.assign({ classId: id, displayName: name }, values));
 const drie = () => [
-  klasse("class.dps", "DPS", { healthMax: 80, attackPower: 10, armor: 0, healPower: 5, startItems: [{ ref: "item_definition:item.zwaard", amount: 1 }], models: ["asset.wizard_1", "asset.wizard_2"] }),
+  klasse("class.dps", "DPS", { healthMax: 80, attackPower: 10, armor: 0, healPower: 5, startItems: [{ ref: "item_definition:item.zwaard", amount: 1 }],
+    models: ["asset.wizard_1", "asset.wizard_2"], animationProfiles: {
+      "asset.wizard_1": { idle: "Wizard Idle", walk: "Wizard Walk", run: "Wizard Run", attack: "Wizard Attack", cast: "Wizard Cast", block: "Wizard Block", roll: "Wizard Roll", hit: "Wizard Hit", stunned: "Wizard Stunned", death: "Wizard Death" },
+      "asset.wizard_2": { idle: "Mage Idle", walk: "Mage Walk" }
+    } }),
   klasse("class.healer", "Healer", { healthMax: 60, attackPower: 5, armor: 0, healPower: 10, models: ["asset.elf_1"] }),
   klasse("class.tank", "Tank", { healthMax: 100, attackPower: 5, armor: 10, healPower: 5, startItems: [{ ref: "currency:currency.goud", amount: 30 }] })
 ];
@@ -55,6 +59,8 @@ test("DPS, Healer en Tank: eigen levens, kracht, pantser, heal-kracht, start-spu
   assert.deepEqual(characters["class.dps"].startingItemGrants, [{ itemRef: "item.zwaard", amount: 1 }]);
   assert.deepEqual(characters["class.tank"].startingCurrencyGrants, [{ currencyRef: "currency.goud", amountMinor: 30 }]);
   assert.deepEqual(characters["class.dps"].modelAssetIds, ["asset.wizard_1", "asset.wizard_2"]);
+  assert.equal(characters["class.dps"].animationProfiles["asset.wizard_1"].death, "Wizard Death");
+  assert.equal(characters["class.dps"].animationProfiles["asset.wizard_2"].walk, "Mage Walk");
   // Uiterlijk: alleen een model uit de lijst van de klasse; anders het eerste.
   assert.equal(characterModelFor(built, { selected_character_id: "class.dps", model_asset_id: "asset.wizard_2" }), "asset.wizard_2");
   assert.equal(characterModelFor(built, { selected_character_id: "class.dps", model_asset_id: "asset.elf_1" }), "asset.wizard_1");

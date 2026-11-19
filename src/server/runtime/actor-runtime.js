@@ -1827,7 +1827,7 @@ export class ActorRuntime {
   playerSpeed(sprint = false) {
     const player = this.worldContextRef?.world?.player || {};
     const speed = Math.max(1, Number(player.moveSpeed) || 6);
-    return sprint ? speed * Math.min(2.5, Math.max(1, Number(player.sprintMultiplier) || 1.6)) : speed;
+    return sprint ? speed * Math.min(10, Math.max(1, Number(player.sprintMultiplier) || 1.6)) : speed;
   }
 
   escortActor(group) {

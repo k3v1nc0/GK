@@ -98,7 +98,9 @@ export function compileGameSection(documents, options = {}) {
       // Fase 6: groei per level.
       healthPerLevel: values.healthPerLevel, attackPerLevel: values.attackPerLevel, armorPerLevel: values.armorPerLevel,
       manaPerLevel: values.manaPerLevel, healPerLevel: values.healPerLevel,
-      startGrants: grants(values.startItems), models: Array.isArray(values.models) ? values.models.slice() : [] };
+      startGrants: grants(values.startItems), models: Array.isArray(values.models) ? values.models.slice() : [],
+      animationProfiles: values.animationProfiles && typeof values.animationProfiles === "object"
+        ? JSON.parse(JSON.stringify(values.animationProfiles)) : {} };
   };
   const classDocs = of("player_class").slice().sort((a, b) => String(a.body.displayName).localeCompare(String(b.body.displayName)) || a.docKey.localeCompare(b.docKey));
   const classes = classDocs.map((doc) => {

@@ -585,6 +585,48 @@ export function createDocBench(options = {}) {
     return wrap;
   }
 
+  // Klassen: ieder uiterlijk kan een andere rig en andere clipnamen hebben. Daarom staan de
+  // speleranimaties per model, in plaats van één set animaties voor de hele wereld of klasse.
+  function animationProfilesControl(field, value, body, onChange) {
+    const modelIds = Array.isArray(body.models) ? body.models : [];
+    if (!modelIds.length) return el("div", { class: "wbdNote", text: "Voeg eerst één of meer modellen toe bij Uiterlijk." });
+    const profiles = value && typeof value === "object" && !Array.isArray(value) ? clone(value) : {};
+    const states = Array.isArray(field.states) ? field.states : [];
+    const box = el("div", { class: "wbdAnimationProfiles" });
+    const save = (assetId, stateKey, clip) => {
+      const profile = Object.assign({}, profiles[assetId] || {});
+      if (clip) profile[stateKey] = clip; else delete profile[stateKey];
+      if (Object.keys(profile).length) profiles[assetId] = profile; else delete profiles[assetId];
+      onChange(Object.keys(profiles).length ? profiles : null);
+    };
+    for (const assetId of modelIds) {
+      const asset = getAssets().find((entry) => entry.id === assetId) || null;
+      // getAssets() bevat de volledige bibliotheek-assets; GLB-clips staan daar onder metadata.
+      // De compacte workspace-samenvatting gebruikt animations direct, dus ondersteun beide vormen.
+      const animations = Array.isArray(asset?.metadata?.animations) ? asset.metadata.animations : (asset?.animations || []);
+      const clips = animations.map((entry) => typeof entry === "string" ? entry : entry?.name).filter(Boolean);
+      const profile = profiles[assetId] || {};
+      const rows = el("div", { class: "wbdAnimationProfileRows" });
+      for (const state of states) {
+        const current = profile[state.key] || "";
+        const select = el("select", { class: "wbdSelect" }, [el("option", { value: "", text: "Automatisch" })]
+          .concat(clips.map((clip) => el("option", { value: clip, text: clip }))));
+        if (current && !clips.includes(current)) select.append(el("option", { value: current, text: "⚠️ " + current }));
+        select.value = current;
+        select.addEventListener("change", () => save(assetId, state.key, select.value || null));
+        rows.append(el("label", { class: "wbdAnimationProfileRow" }, [
+          el("span", { class: "wbdAnimationProfileState", text: (state.icon || "🎞️") + " " + state.label }),
+          select
+        ]));
+      }
+      box.append(el("section", { class: "wbdAnimationProfile" }, [
+        el("div", { class: "wbdAnimationProfileTitle", text: "🧍 " + (asset?.name || assetId) }),
+        clips.length ? rows : el("div", { class: "wbdNote", text: "Dit model heeft geen gevonden animatieclips." })
+      ]));
+    }
+    return box;
+  }
+
   function lootControl(field, value, onChange) {
     const rows = Array.isArray(value) ? value.map((entry) => Object.assign({}, entry)) : [];
     const wrap = el("div", { class: "wbdLoot" });
@@ -867,6 +909,7 @@ export function createDocBench(options = {}) {
     if (type === "loot") return lootControl(field, value, onChange);
     if (type === "refList") return refListControl(field, value, onChange);
     if (type === "assetList") return modelListControl(field, value, onChange);
+    if (type === "animationProfiles") return animationProfilesControl(field, value, body, onChange);
     if (type === "color") {
       const input = el("input", { type: "color", class: "wbdColor" });
       input.value = emptyValue(value) ? (field.default || "#888888") : value;
@@ -1045,6 +1088,11 @@ export function createDocBench(options = {}) {
           else if (key !== spec.presetField && Object.values(presetField.presets).some((values) => Object.prototype.hasOwnProperty.call(values, key))) body[spec.presetField] = "custom";
         }
         if (emptyValue(next)) delete body[key]; else body[key] = next;
+        if (kind === "player_class" && key === "models" && body.animationProfiles) {
+          const allowed = new Set(Array.isArray(next) ? next : []);
+          const profiles = Object.fromEntries(Object.entries(body.animationProfiles).filter(([assetId]) => allowed.has(assetId)));
+          if (Object.keys(profiles).length) body.animationProfiles = profiles; else delete body.animationProfiles;
+        }
         if (isNew && key === spec.idField) bench.draft.idTouched = true;
         if (key === "displayName" && isNew && spec.idField && !bench.draft.idTouched) {
           const prefix = { item_definition: "item", ability: "ability", loot_table: "loot", resource_definition: "resource", actor_archetype: "actor",
@@ -1086,7 +1134,7 @@ export function createDocBench(options = {}) {
       const fieldControl = lockedRoadType
         ? el("div", { class: "wbdNote", text: "🛣️ Weg is een vast type en kan niet in een ander vlak worden veranderd." })
         : control(key, field, body, isNew, onChange);
-      const row = fieldRow(key, shown, fieldControl, ["loot", "refList", "assetList", "curve", "route"].includes(field.ui?.control) || field.ui?.multiline);
+      const row = fieldRow(key, shown, fieldControl, ["loot", "refList", "assetList", "animationProfiles", "curve", "route"].includes(field.ui?.control) || field.ui?.multiline);
       if (field.ui?.group) groupBox(field.ui.group).fields.append(row);
       else (field.ui?.more && !bare ? more : visible).append(row);
     }

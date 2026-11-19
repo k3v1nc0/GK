@@ -1,7 +1,7 @@
 // Werkbank Fase 1 (bouwrecept §0b): hulpjes om de UI-beschrijving per veld kort te schrijven.
 // Alleen data: elk veld krijgt ui (icoon, bediening, plek, stap, eenheid), default en help (Ⓘ).
 //
-// ui.control: text | id | slider | toggle | select | asset | ref | refList | tags | loot | points | areaSettings | color | terrain
+// ui.control: text | id | slider | toggle | select | asset | ref | refList | tags | loot | points | areaSettings | animationProfiles | color | terrain
 // terrain / terrainPaint: hoogte en verf van de grond (vakken), alleen te tekenen in de editor-tab Terrein.
 // refList: een lijst regels { ref, ...getallen } (bijv. startitems: item of valuta + aantal). Velden: refKinds, columns.
 // ui.soorten: alleen tonen bij deze Area-soorten (Ombouw stap 2).
@@ -24,7 +24,7 @@ export const help = (waarvoor, goed, probleem) => Object.freeze({ waarvoor, goed
 
 export const ui = (icon, control, place, extra = {}) => Object.freeze(Object.assign({ icon, control, place }, extra));
 
-export const FIELD_CONTROLS = Object.freeze(["text", "id", "slider", "toggle", "select", "asset", "assetList", "ref", "refList", "tags", "loot", "points", "areaSettings", "color", "terrain", "terrainPaint", "questSteps", "questStart", "questSpawns", "curve", "route"]);
+export const FIELD_CONTROLS = Object.freeze(["text", "id", "slider", "toggle", "select", "asset", "assetList", "ref", "refList", "tags", "loot", "points", "areaSettings", "animationProfiles", "color", "terrain", "terrainPaint", "questSteps", "questStart", "questSpawns", "curve", "route"]);
 export const FIELD_PLACES = Object.freeze(["werkbank", "instellingen", "terrein", "viewport", "relaties", "questbuilder"]);
 export const KIND_PLACES = Object.freeze(["werkbank", "instellingen", "terrein"]);
 
@@ -45,6 +45,7 @@ export const CONTROL_FOR_TYPE = Object.freeze({
   pointList: ["points", "curve"],
   linkList: ["points"],
   areaSettings: ["areaSettings"],
+  animationProfiles: ["animationProfiles"],
   color: ["color"],
   terrainChunks: ["terrain"],
   terrainPaint: ["terrainPaint"],

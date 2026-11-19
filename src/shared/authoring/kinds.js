@@ -427,6 +427,24 @@ export function validateDocument(kind, body) {
       else if (new Set(value).size !== value.length) issues.push(issue(key, "FIELD_DUPLICATE", field.label + " bevat hetzelfde model twee keer."));
       continue;
     }
+    if (field.type === "animationProfiles") {
+      if (typeof value !== "object" || Array.isArray(value)) { issues.push(issue(key, "FIELD_TYPE", field.label + " moet een object zijn.")); continue; }
+      const entries = Object.entries(value);
+      const allowedStates = new Set((field.states || []).map((state) => state.key));
+      if (entries.length > (field.maxItems || 40)) issues.push(issue(key, "FIELD_LIST_SIZE", field.label + ": hooguit " + (field.maxItems || 40) + " uiterlijken."));
+      for (const [assetId, profile] of entries) {
+        if (!ASSET_PATTERN.test(assetId) || assetId.length > 160 || !profile || typeof profile !== "object" || Array.isArray(profile)) {
+          issues.push(issue(key, "FIELD_ANIMATION_PROFILE", field.label + " bevat een ongeldig uiterlijk."));
+          continue;
+        }
+        const unknown = Object.keys(profile).filter((state) => !allowedStates.has(state));
+        if (unknown.length) issues.push(issue(key, "FIELD_UNKNOWN", field.label + ": onbekende animatie " + unknown.join(", ") + "."));
+        if (Object.values(profile).some((clip) => typeof clip !== "string" || !clip.trim() || clip.length > (field.maxLength || 120))) {
+          issues.push(issue(key, "FIELD_ANIMATION_PROFILE", field.label + ": animatienamen moeten tekst van hooguit " + (field.maxLength || 120) + " tekens zijn."));
+        }
+      }
+      continue;
+    }
     if (field.type === "tagList") {
       if (!Array.isArray(value)) { issues.push(issue(key, "FIELD_TYPE", field.label + " moet een lijst zijn.")); continue; }
       if (value.length > field.maxItems) issues.push(issue(key, "FIELD_TOO_LONG", field.label + ": maximaal " + field.maxItems + "."));
@@ -612,6 +630,12 @@ function shapeIssues(kind, body, issues) {
   }
   if (kind === "item_definition") {
     // Uitrusting stapelt nooit: de build maakt er vanzelf een los stuk van (runtime-overlay), dus geen blokkade hier.
+    return;
+  }
+  if (kind === "player_class") {
+    const models = new Set(Array.isArray(body.models) ? body.models : []);
+    const profiles = body.animationProfiles && typeof body.animationProfiles === "object" ? Object.keys(body.animationProfiles) : [];
+    if (profiles.some((assetId) => !models.has(assetId))) issues.push(issue("animationProfiles", "ANIMATION_MODEL_UNKNOWN", "Animaties horen bij een uiterlijk dat niet meer in deze klasse staat."));
     return;
   }
   if (kind === "terrain_texture") {

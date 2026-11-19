@@ -279,7 +279,9 @@ export function baseRuntimeWorld(data = {}, options = {}) {
       performance: Object.assign(clone(PERFORMANCE), { shared: { worldId: WORLD_ID, displayName: gameName, backgroundColor: sky, fogColor: sky, fogDensity: 0, smoothShading: true } }, gameShadowOf(settings)) },
     ground,
     camera: Object.assign({ mode: "top-down" }, camera),
-    player: { id: "player", modelAssetId: settings.playerModelAssetId || null, moveSpeed: Number(settings.playerSpeed), sprintMultiplier: 1.6,
+    player: { id: "player", modelAssetId: settings.playerModelAssetId || null, moveSpeed: Number(settings.playerSpeed), sprintMultiplier: Number(settings.playerRunSpeedPct) / 100,
+      alwaysRun: settings.playerAlwaysRun === true,
+      walkAnimation: settings.playerWalkAnimation || null, runAnimation: settings.playerRunAnimation || null,
       turnSpeed: 540, collisionRadius: 0.5, scale: Number(settings.playerScale), showNameplate: true },
     spawn: { spawnId: WORLD_SPAWN_ID, role: "zone_default", zoneRef: WORLD_ZONE_ID, x: spawnPoint.x, y: 0, z: spawnPoint.z, facing: spawnPoint.facing },
     // Werkbank Fase 10: dag en nacht (de game rekent het licht uit de tijd van de server; shared/day-night.js).
@@ -700,7 +702,8 @@ function withGame(world, source, options) {
       const blockId = PLAYER_STAT_BLOCK_ID + "." + entry.classId;
       catalogs.statBlocks[blockId] = statBlock(blockId, entry);
       catalogs.playableCharacters[entry.classId] = character(entry.classId, entry.displayName, blockId, entry,
-        { classChoice: true, description: entry.description || "", sortOrder: index, modelAssetIds: (entry.models || []).slice() });
+        { classChoice: true, description: entry.description || "", sortOrder: index, modelAssetIds: (entry.models || []).slice(),
+          animationProfiles: clone(entry.animationProfiles || {}) });
     }
   } else {
     catalogs.playableCharacters = { [PLAYER_CHARACTER_ID]: character(PLAYER_CHARACTER_ID, "Speler", PLAYER_STAT_BLOCK_ID, player) };
