@@ -19838,7 +19838,7 @@ function resolveChunkDebugCenter(policy) {
   }
 
   // Werkbank Fase 10: hoe licht het is (0-1, 1 = dag) en de kleur van de lucht. Alleen bij een echte verandering
-  // (de game roept dit hooguit 1x per seconde aan; zuinig voor de oude laptop).
+  // (de game roept dit 10x per seconde aan voor een vloeiende schemering).
   function setDaylight(level, skyColor) {
     const next = Math.max(0.02, Math.min(1, Number(level) || 0));
     const sky = colorOrDefault(skyColor, "");

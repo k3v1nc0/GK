@@ -7,7 +7,7 @@ import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolatio
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createWorldSounds } from "./world-sounds.js?v=20261116-herstel1";
 import { createActorPresentation } from "./actor-presentation.js?v=20261116-herstel1";
-import { createGkHud } from "./hud/gk-hud.js?v=20261118-label-lock1";
+import { createGkHud } from "./hud/gk-hud.js?v=20261119-compact1";
 import { dayNightState, mixColor } from "../shared/day-night.js?v=20261115-fase10";
 import { node05ActionBody, node05OperationId } from "./node05-request.js?v=20261113-fase8d";
 import {
@@ -4370,7 +4370,7 @@ function updateDayNight() {
   const clock = dayNightState(estimateServerEpochNow(), cfg);
   const k = clock.nightLight >= 1 ? 0 : (1 - clock.light) / (1 - clock.nightLight);
   state.runtime.setDaylight(clock.light, mixColor(cfg.daySkyColor || "#8fb8de", cfg.nightSkyColor || "#0e1a33", k));
-  state.dayNight = { isDay: clock.isDay, msToSwitch: clock.msToSwitch, always: !Number(cfg.nightMinutes) };
+  state.dayNight = { isDay: clock.isDay, isLightDay: clock.light >= (1 + clock.nightLight) / 2, msToSwitch: clock.msToSwitch, always: !Number(cfg.nightMinutes) };
 }
 
 function estimateServerEpochNow(now = performance.now()) {
@@ -14765,7 +14765,7 @@ async function start() {
   window.setInterval(pollVersion, 2500);
   // Werkbank Fase 10: dag en nacht, 1x per seconde (het licht verandert alleen in de schemer echt).
   updateDayNight();
-  window.setInterval(updateDayNight, 1000);
+  window.setInterval(updateDayNight, 100);
   await loadCanonicalClientBuild();
   window.setInterval(checkCanonicalBuild, 30000);
 }

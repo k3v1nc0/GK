@@ -73,7 +73,6 @@ const CATEGORY_ICON = { consumable: "bread", material: "wood-pile", equipment: "
 const CATEGORY_LABEL = { consumable: "Eten/drinken", material: "Materiaal", equipment: "Uitrusting", quest: "Quest", misc: "Overig", custom: "Eigen" };
 const RARITY_LABEL = { common: "Gewoon", uncommon: "Ongewoon", rare: "Zeldzaam", epic: "Episch", legendary: "Legendarisch", quest: "Quest" };
 const SLOT_ICON = { head: "barbute", chest: "chest-armor", hands: "gauntlet", legs: "leg-armor", feet: "leather-boot", main_hand: "broadsword", off_hand: "round-shield", neck: "gem-pendant", ring: "ring" };
-const RIGHT_SLOTS = new Set(["main_hand", "off_hand", "neck", "ring"]);
 const ZOOMS = [30, 60, 120];
 const ATTACK_RANGE_M = 25;
 const DO_RANGE_M = 9;
@@ -81,7 +80,7 @@ const TALK_LEAVE_M = 6;      // zo ver weglopen sluit een gesprek
 const COMBAT_MS = 6000;
 
 const DEFAULTS = { panel: null, tab: "bag", filter: "all", scroll: {}, item: null, quest: null, done: false,
-  minimap: true, zoom: 1, size: "m", music: true, combatFold: true, debug: false, icoSize: "m", icoAnim: true, icoColor: "color", map: null,
+  minimap: true, zoom: 1, size: "m", music: true, combatFold: false, debug: false, icoSize: "m", panelScale: 1, icoAnim: true, icoColor: "color", map: null,
   // Een gesplitste gewone stapel blijft één serverstapel; alleen de twee tasvakjes worden lokaal onthouden.
   stackSplits: {},
   // Alleen waarden die de speler zelf in de game wijzigt mogen een gepubliceerde
@@ -654,19 +653,19 @@ export function createGkHud(api) {
     const height = game.clientHeight;
     if (!width || !height) return;
     const compact = width < 600;
-    const key = [width, height, store.map.miniSizePx, store.map.miniViewportPercent, store.size, store.minimap].join("|");
+    const key = [width, height, store.map.miniSizePx, store.map.miniViewportPercent, store.size, store.minimap, interfaceScale()].join("|");
     if (ui.sig.mapLayout === key) return;
     ui.sig.mapLayout = key;
     root.dataset.mapcompact = compact ? "1" : "0";
     const desired = Math.min(width, height) * store.map.miniViewportPercent / 100;
     // De pixelmaat is een harde bovengrens. Laat ook bij een hoog percentage
     // ruimte over voor portret/balken en de kaartknoppen naast de kaart.
-    const toolsWidth = compact ? 0 : mapTools.getBoundingClientRect().width + 8;
+    const toolsWidth = compact ? 0 : (mapTools.getBoundingClientRect().width / interfaceScale()) + 8;
     const room = Math.max(64, width - 30 - toolsWidth - 156);
     const size = Math.floor(Math.min(store.map.miniSizePx, room, Math.max(64, desired)));
     root.style.setProperty("--gk-map", size + "px");
-    const rightWidth = store.minimap ? Math.max(size, compact ? mapTools.getBoundingClientRect().width : 0) + toolsWidth
-      : Math.max(size, mapTools.getBoundingClientRect().width) + toolsWidth;
+    const rightWidth = store.minimap ? Math.max(size, compact ? (mapTools.getBoundingClientRect().width / interfaceScale()) : 0) + toolsWidth
+      : Math.max(size, (mapTools.getBoundingClientRect().width / interfaceScale())) + toolsWidth;
     root.style.setProperty("--gk-map-reserve", rightWidth + "px");
     ui.mapAt = 0;
   }
@@ -1367,15 +1366,16 @@ export function createGkHud(api) {
     if (!items.length) menuCard.append(h("div", { class: "gkMenuNote", text: "Meer opties komen later." }));
     // Naast de vinger of muis (niet eronder) en altijd binnen het scherm.
     const area = game.getBoundingClientRect();
-    const width = menuCard.offsetWidth || 230;
-    const height = menuCard.offsetHeight || 120;
+    const zoom = interfaceScale();
+    const width = (menuCard.offsetWidth || 230) * zoom;
+    const height = (menuCard.offsetHeight || 120) * zoom;
     let left = m.x - area.left + 14;
     let top = m.y - area.top - height - 14;
     if (top < 8) top = m.y - area.top + 18;
     left = Math.max(8, Math.min(area.width - width - 8, left));
     top = Math.max(8, Math.min(area.height - height - 8, top));
-    menuCard.style.left = Math.round(left) + "px";
-    menuCard.style.top = Math.round(top) + "px";
+    menuCard.style.left = Math.round(left / zoom) + "px";
+    menuCard.style.top = Math.round(top / zoom) + "px";
   }
   function cancelMateHold() {
     const hold = ui.mateHold;
@@ -1634,6 +1634,7 @@ export function createGkHud(api) {
   // - chat dicht: de laatste regels linksonder, altijd naast de actieknoppen (nooit eroverheen of erboven);
   // - met de vinger aan het typen: de chat net boven het toetsenbord.
   function fitActionBar() {
+    const zoom = interfaceScale();
     const area = game.getBoundingClientRect();
     const edge = 10;
     const visibleButtons = [bagAct, doBtn, slotUi[3].btn, slotUi[2].btn, attackBtn].filter(function (button) {
@@ -1656,8 +1657,8 @@ export function createGkHud(api) {
     let compact = false;
     const bagVisible = visibleButtons.includes(bagAct);
     if (root.dataset.orient === "port" && visibleButtons.length >= 3) {
-      const verticalWidth = Math.max(...visibleButtons.map(function (button) { return button.offsetWidth; }));
-      const verticalHeight = visibleButtons.reduce(function (sum, button) { return sum + button.offsetHeight; }, 0) + (visibleButtons.length - 1) * 8;
+      const verticalWidth = Math.max(...visibleButtons.map(function (button) { return button.offsetWidth * zoom; }));
+      const verticalHeight = visibleButtons.reduce(function (sum, button) { return sum + button.offsetHeight * zoom; }, 0) + (visibleButtons.length - 1) * 8 * zoom;
       const verticalRoom = Math.max(0, area.bottom - edge - topLimitForWidth(verticalWidth));
       compact = verticalHeight > verticalRoom;
     }
@@ -1666,8 +1667,8 @@ export function createGkHud(api) {
     if (compact && bagVisible) root.dataset.actionbag = "1";
     else delete root.dataset.actionbag;
 
-    const naturalWidth = actions.offsetWidth;
-    const naturalHeight = actions.offsetHeight;
+    const naturalWidth = actions.offsetWidth * zoom;
+    const naturalHeight = actions.offsetHeight * zoom;
     if (!area.width || !area.height || !naturalWidth || !naturalHeight) {
       if (actions.style.transform) actions.style.transform = "";
       return;
@@ -1700,16 +1701,16 @@ export function createGkHud(api) {
     // Kevin 7-11: de korte meldingen staan nu onderin de stapel linksonder (niet meer rechtsboven).
     if (!questLine.hidden || !eventLine.hidden || !chatFeed.hidden || !stackMore.hidden || toasts.childElementCount) {
       const space = chatSpace();
-      const width = Math.max(0, space.beside ? Math.min(380, space.besideRoom) : space.area.width - 2 * space.edge);
-      feedStack.style.bottom = Math.round(space.bottom) + "px";
-      feedStack.style.width = Math.floor(width) + "px";
+      const width = Math.max(0, space.beside ? Math.min(380 * interfaceScale(), space.besideRoom) : space.area.width - 2 * space.edge);
+      feedStack.style.bottom = Math.round(space.bottom / interfaceScale()) + "px";
+      feedStack.style.width = Math.floor(width / interfaceScale()) + "px";
       // Bij weinig hoogte krijgt de berichtenlijst een scrollgebied; de quest
       // blijft erboven staan en schuift niet over spelersbalken of minimap heen.
       const crossesMap = area.left + space.edge + width > mapWrap.getBoundingClientRect().left - 8;
       const top = Math.max(statusRect.bottom, crossesMap ? mapBottom : area.top) + 12;
       // Kevin 10-11: op de telefoon hooguit 40 % van het scherm, zodat je de game blijft zien (de rest kun je scrollen).
       const room = Math.floor(area.bottom - space.bottom - top);
-      feedStack.style.maxHeight = Math.max(0, coarsePointer() ? Math.min(room, Math.floor(area.height * 0.4)) : room) + "px";
+      feedStack.style.maxHeight = (Math.max(0, coarsePointer() ? Math.min(room, Math.floor(area.height * 0.4)) : room) / interfaceScale()) + "px";
     }
     const typing = chatShown() && coarsePointer() && document.activeElement === chatInput;
     chatBox.classList.toggle("gkChatTop", typing);
@@ -1922,7 +1923,7 @@ export function createGkHud(api) {
     chatInput.blur();
   }, true);
   // Snelle berichten (en tabjes): met de vinger schuiven kan al; met de muis slepen of het muiswiel gaat nu ook.
-  function dragScroll(strip) {
+  function dragScroll(strip, scale = () => 1) {
     let drag = null;
     strip.addEventListener("pointerdown", function (event) {
       if (event.pointerType !== "mouse" || event.button !== 0 || strip.scrollWidth <= strip.clientWidth) return;
@@ -1933,7 +1934,7 @@ export function createGkHud(api) {
       const dx = event.clientX - drag.x;
       if (!drag.moved && Math.abs(dx) < 6) return;
       if (!drag.moved) { drag.moved = true; try { strip.setPointerCapture(event.pointerId); } catch {} }
-      strip.scrollLeft = drag.left - dx;
+      strip.scrollLeft = drag.left - dx / scale();
     });
     const end = function () {
       if (drag?.moved) { strip.dataset.dragged = "1"; window.setTimeout(function () { delete strip.dataset.dragged; }, 0); }
@@ -1951,10 +1952,75 @@ export function createGkHud(api) {
   }
   dragScroll(chatQuick);
   dragScroll(chatTabs);
+  function interfaceScale() {
+    return Math.max(0.65, Math.min(1.3, num(store.panelScale, 1)));
+  }
+  function interfaceScaleControl(className = "gkScaleControl") {
+    return h("label", { class: className, title: "Grootte interface" }, [
+      h("input", { type: "range", min: 65, max: 130, step: 5, value: Math.round(interfaceScale() * 100),
+        "data-interface-scale": "", "aria-label": "Grootte interface" }),
+      h("output", { text: Math.round(interfaceScale() * 100) + "%" })
+    ]);
+  }
+  function applyInterfaceScale() {
+    root.style.setProperty("--gk-interface-scale", String(interfaceScale()));
+    for (const input of root.querySelectorAll("[data-interface-scale]")) {
+      input.value = String(Math.round(interfaceScale() * 100));
+      input.nextElementSibling.textContent = input.value + "%";
+    }
+  }
+  function pinScaleControl() {
+    const drag = ui.scaleDrag;
+    if (!drag || !drag.control.isConnected) return;
+    const control = drag.control;
+    // Compenseer alleen deze bediening; de rest van de interface blijft live schalen.
+    control.style.zoom = String(drag.scale / interfaceScale());
+    control.style.transform = "none";
+    const rect = control.getBoundingClientRect();
+    control.style.transform = "translate(" + ((drag.rect.left - rect.left) / drag.scale) + "px, " + ((drag.rect.top - rect.top) / drag.scale) + "px)";
+  }
+  root.addEventListener("pointerdown", function (event) {
+    if (!event.target.matches("[data-interface-scale]") || event.button !== 0 || ui.scaleDrag) return;
+    const control = event.target.parentElement;
+    const drag = { control, rect: control.getBoundingClientRect(), scale: interfaceScale(), frame: 0 };
+    ui.scaleDrag = drag;
+    control.style.display = "flex";
+    control.style.zIndex = "10";
+    control.style.position = "relative";
+    const tick = function () {
+      pinScaleControl();
+      drag.frame = requestAnimationFrame(tick);
+    };
+    const finish = function (end) {
+      if (end.pointerId !== event.pointerId) return;
+      cancelAnimationFrame(drag.frame);
+      ui.scaleDrag = null;
+      for (const property of ["zoom", "transform", "display", "z-index", "position"]) control.style.removeProperty(property);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+    };
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+    tick();
+  });
+  // Pictogramacties behouden hun uitleg voor toetsenbord, aanraken en schermlezers.
+  function compactAction(button, fallback = "check-mark") {
+    const label = button.title || button.textContent.trim();
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    button.dataset.label = label;
+    button.classList.add("gkIconAction");
+    for (const node of Array.from(button.childNodes)) {
+      if (node.nodeType === 3) node.remove();
+    }
+    if (!button.querySelector(".gkIco")) button.prepend(ico(fallback, "plain"));
+    return button;
+  }
+
   // Grootte van het hele paneel. De CSS-standaard blijft gelden totdat de speler de rand versleept.
   function panelSizeBounds(vertical) {
     const total = vertical ? root.clientHeight : root.clientWidth;
-    const wantedMin = vertical ? 220 : 280;
+    const wantedMin = (vertical ? 160 : 220) * interfaceScale();
     const min = Math.min(wantedMin, Math.max(1, total));
     return { min, max: Math.max(min, total - 64) };
   }
@@ -1972,7 +2038,7 @@ export function createGkHud(api) {
     if (saved > 0) {
       const bounds = panelSizeBounds(vertical);
       const size = Math.round(Math.max(bounds.min, Math.min(bounds.max, saved)));
-      root.style.setProperty(property, size + "px");
+      root.style.setProperty(property, (size / interfaceScale()) + "px");
       panelResize.setAttribute("aria-valuemin", String(bounds.min));
       panelResize.setAttribute("aria-valuemax", String(bounds.max));
       panelResize.setAttribute("aria-valuenow", String(size));
@@ -2532,17 +2598,23 @@ export function createGkHud(api) {
     talk.classList.remove("gkTalk--service");
     const look = STORY_LOOK[view.mode];
     const art = api.assetUrl(view.imageAssetId, false);
+    talk.classList.add("gkTalk--story");
     talk.replaceChildren(h("div", { class: "gkStoryCard gkStory--" + view.mode, "aria-label": view.displayName }, [
-      h("div", { class: "gkStoryArt" }, [art ? h("img", { src: art, alt: "" }) : ico(look[1])]),
-      h("div", { class: "gkStoryHead" }, [h("small", { text: view.small || look[0] }), h("strong", { text: view.displayName }),
-        view.afterQuest ? h("em", null, [ico("check-mark"), view.afterQuest + " afgerond"]) : null]),
-      h("button", { type: "button", class: "gkClose", "data-act": "talk-close", title: "Sluiten (Esc)" }, [ico("cancel")]),
-      view.description ? h("div", { class: "gkStoryText", text: view.description }) : null,
-      view.goals.length ? h("div", { class: "gkStoryGoals" }, [h("b", { text: "Wat moet je doen" })].concat(view.goals.map(function (goal) { return h("span", { text: goal }); }))) : null,
-      h("div", { class: "gkStoryBtns" }, [h("button", { type: "button", class: "gkBtn gkGo", "data-act": view.button[0], "data-id": view.questId, "data-item": view.itemId,
-        disabled: busy && view.button[0] === "story-accept" ? true : null }, [ico(view.button[2], "plain"), view.button[1]])])
+      h("div", { class: "gkStoryToolbar" }, [
+        h("div", { class: "gkStoryArt" }, [art ? h("img", { src: art, alt: "" }) : ico(look[1])]),
+        h("div", { class: "gkStoryHead" }, [h("strong", { text: view.displayName }),
+          view.afterQuest ? h("em", null, [ico("check-mark"), view.afterQuest + " afgerond"]) : null]),
+        view.button[0] !== "talk-close" ? compactAction(h("button", { type: "button", class: "gkBtn gkGo", "data-act": view.button[0], "data-id": view.questId, "data-item": view.itemId,
+          disabled: busy && view.button[0] === "story-accept" ? true : null }, [ico(view.button[2], "plain"), view.button[1]])) : null,
+        h("button", { type: "button", class: "gkClose", "data-act": "talk-close", title: "Sluiten (Esc)", "aria-label": "Sluiten" }, [ico("cancel")])
+      ]),
+      h("div", { class: "gkStoryContent" }, [
+        view.description ? h("div", { class: "gkStoryText", text: view.description }) : null,
+        view.goals.length ? h("div", { class: "gkStoryGoals" }, view.goals.map(function (goal) { return h("span", { text: goal }); })) : null
+      ])
     ]));
   }
+
   function closeStory() {
     ui.story = null;
     applyLayout();
@@ -2566,6 +2638,7 @@ export function createGkHud(api) {
 
   // Gezicht, tekst, gesprekskeuzes én winkel/werkplaats blijven in hetzelfde onderdeel Gesprek.
   function renderTalk() {
+    talk.classList.toggle("gkTalk--story", Boolean(ui.story && !data().dialogue && !ui.serviceTalk && !ui.trade && !ui.craft && !ui.market));
     const d = data();
     if (ui.story && !d.dialogue && !ui.serviceTalk && !ui.trade && !ui.craft && !ui.market) {
       const view = storyView();
@@ -2664,7 +2737,7 @@ export function createGkHud(api) {
         [ico(tab.icon), tab.id === "quests" && questDot ? h("span", { class: "gkDot" }) : null]));
     }
     // Kevin (3-11): onderin wat geen tabblad is: Chat en (tijdens een gesprek) Gesprek.
-    items.push(h("span", { class: "gkRailGap" }));
+    items.push(h("div", { class: "gkRailGap" }, [interfaceScaleControl("gkPanelScale")]));
     railPost.classList.toggle("gkOn", dockNow === "post");
     railPostDot.hidden = !postDot;
     items.push(railPost);
@@ -2824,9 +2897,10 @@ export function createGkHud(api) {
       sheet.replaceChildren(...built);
       return;
     }
-    const oldIcon = oldDetail.querySelector(":scope > .gkDetailIcon");
+    const oldIcon = oldDetail.querySelector(".gkDetailIcon");
+    const newIcon = newDetail.querySelector(".gkDetailIcon");
+    if (oldIcon && newIcon) newIcon.replaceWith(oldIcon);
     const newChildren = Array.from(newDetail.children);
-    if (oldIcon && newChildren[0]?.classList.contains("gkDetailIcon")) newChildren[0] = oldIcon;
     oldDetail.replaceChildren(...newChildren);
     for (const child of Array.from(sheet.children)) if (child !== oldDetail) child.remove();
     for (const child of built) if (child !== newDetail) sheet.insertBefore(child, oldDetail);
@@ -2996,6 +3070,7 @@ export function createGkHud(api) {
     });
     filterButtons.push(h("button", { type: "button", class: "gkFilter gkBagSelect" + (ui.bagSelect ? " gkOn" : ""), "data-act": "bag-select", title: ui.bagSelect ? "Selecteren stoppen" : "Meerdere spullen selecteren" }, [ico("check-mark")]));
     const filters = h("div", { class: "gkFilters", role: "tablist" }, filterButtons);
+    dragScroll(filters, interfaceScale);
     const shown = all.filter(function (item) { return filterMatch(item.category, store.filter); });
     const body = h("div", { class: "gkBody" });
     if (!all.length) body.append(emptyNote("knapsack", "Je tas is nog leeg. Pak iets op of verzamel iets in de wereld."));
@@ -3013,9 +3088,8 @@ export function createGkHud(api) {
         return bagCell(item, { on: item.key === store.item, drag: !canGive ? null : ui.trade ? "sell:" + item.key : giveTo ? "give:" + item.key : null });
       }).concat(emptyCells(shown.length))));
     }
-    const parts = [head("knapsack", "Tas", filters), body];
+    const parts = [head("knapsack", "Tas", filters), bagFoot(all.length, all.reduce(function (sum, item) { return sum + bagEntryQuantity(item); }, 0)), body];
     if (ui.bagSelect) parts.push(bagSelectionBar(all, context));
-    parts.push(bagFoot(all.length, all.reduce(function (sum, item) { return sum + bagEntryQuantity(item); }, 0)));
     const detail = itemDetail(store.item);
     if (detail) parts.push(detail);
     return parts;
@@ -3033,11 +3107,11 @@ export function createGkHud(api) {
     const saved = Math.round(num(store.stackSplits?.[splitId], 0));
     const value = saved > 0 && saved < total ? saved : Math.max(1, Math.floor(total / 2));
     return h("div", { class: "gkStackSplit" }, [
-      h("label", null, [h("span", { "data-stack-split-label": "", text: "Verdeling: " + value + " / " + (total - value) }),
+      h("label", null, [h("span", { "data-stack-split-label": "", text: value + " / " + (total - value) }),
         h("input", { type: "range", min: 1, max: total - 1, step: 1, value, "data-stack-split": splitId, "data-total": total })]),
       h("div", { class: "gkStackSplitBtns" }, [
-        h("button", { type: "button", class: "gkBtn", "data-act": "stack-split", "data-key": item.key }, saved ? "Verdeling aanpassen" : "In twee stapels"),
-        saved ? h("button", { type: "button", class: "gkBtn", "data-act": "stack-join", "data-id": splitId }, "Samenvoegen") : null
+        compactAction(h("button", { type: "button", class: "gkBtn", "data-act": "stack-split", "data-key": item.key }, saved ? "Verdeling aanpassen" : "In twee stapels"), "expand"),
+        saved ? compactAction(h("button", { type: "button", class: "gkBtn", "data-act": "stack-join", "data-id": splitId }, "Samenvoegen"), "contract") : null
       ])
     ]);
   }
@@ -3118,15 +3192,21 @@ export function createGkHud(api) {
     }
     const qty = item ? bagEntryQuantity(item) : 1;
     const line = [RARITY_LABEL[rarity] || "", CATEGORY_LABEL[def.category] || "", qty > 1 ? qty + " stuks" : "", equipped ? "Gedragen: " + (equipped.slotName || "") : ""].filter(Boolean).join(" · ");
-    return h("div", { class: "gkDetail", role: "dialog", "data-key": key, "data-item-id": itemId }, [
-      h("div", { class: "gkDetailIcon" }, [h("div", { class: "gkCell", "data-rarity": rarity }, [itemVisual(itemId, equipped?.slotId)])]),
-      h("h3", { class: "gkRarity-" + rarity }, [h("span", { text: title }), h("button", { type: "button", class: "gkClose", "data-act": "detail-close", title: "Sluiten" }, [ico("cancel")])]),
-      h("p", { text: line }),
-      stats.length ? h("div", { class: "gkStats" }, stats) : null,
-      stackSplitControl(item),
-      buttons.length ? h("div", { class: "gkBtns" }, buttons) : null
+    return h("div", { class: "gkDetail", role: "dialog", "aria-label": title, "data-key": key, "data-item-id": itemId }, [
+      h("div", { class: "gkDetailHead" }, [
+        h("div", { class: "gkDetailIcon" }, [h("div", { class: "gkCell", "data-rarity": rarity }, [itemVisual(itemId, equipped?.slotId)])]),
+        h("h3", { class: "gkRarity-" + rarity, text: title }),
+        h("div", { class: "gkDetailActions" }, buttons.map(button => compactAction(button, "two-coins"))),
+        h("button", { type: "button", class: "gkClose", "data-act": "detail-close", title: "Sluiten", "aria-label": "Sluiten" }, [ico("cancel")])
+      ]),
+      h("div", { class: "gkDetailBody" }, [
+        h("p", { text: line }),
+        stats.length ? h("div", { class: "gkStats" }, stats) : null,
+        stackSplitControl(item)
+      ])
     ]);
   }
+
   function stat(icon, text) {
     return h("span", { class: "gkStat" }, [ico(icon), text]);
   }
@@ -3145,8 +3225,6 @@ export function createGkHud(api) {
         h("span", { class: "gkSlotName", text: slot.displayName })
       ]);
     };
-    const left = slots.filter(function (slot) { return !RIGHT_SLOTS.has(slotKey(slot.slotId)); });
-    const right = slots.filter(function (slot) { return RIGHT_SLOTS.has(slotKey(slot.slotId)); });
     const portraitUrl = api.assetUrl(d.player?.modelAssetId, true);
     const bonus = { attack: 0, armor: 0 };
     for (const row of worn.values()) {
@@ -3160,13 +3238,10 @@ export function createGkHud(api) {
     const statRow = function (icon, label, value, extra) {
       return h("div", { class: "gkStat" }, [h("span", null, [ico(icon), label]), h("b", { text: value + (extra ? " (+" + extra + ")" : "") })]);
     };
-    const body = h("div", { class: "gkBody" }, [
-      h("div", { class: "gkDoll" }, [
-        h("div", { class: "gkDollCol" }, left.map(slotButton)),
-        h("div", { class: "gkDollMid" }, [h("div", { class: "gkPortrait" }, [portraitUrl ? h("img", { src: portraitUrl, alt: "" }) : ico("pointy-hat")]),
-          h("strong", { text: (d.player?.className || "") + " · Level " + (d.s03?.progression?.level || 1) })]),
-        h("div", { class: "gkDollCol" }, right.map(slotButton))
-      ]),
+    const body = h("div", { class: "gkBody gkGearBody" }, [
+      h("div", { class: "gkDollMid" }, [h("div", { class: "gkPortrait" }, [portraitUrl ? h("img", { src: portraitUrl, alt: "" }) : ico("pointy-hat")]),
+        h("strong", { text: (d.player?.className || "") + " · Level " + (d.s03?.progression?.level || 1) })]),
+      h("div", { class: "gkDoll" }, slots.map(slotButton)),
       h("div", { class: "gkStatGrid" }, [
         statRow("hearts", "Levens", fmt(health.cur) + " / " + fmt(health.max)),
         statRow("broadsword", "Kracht", fmt(base("stat.attack_power") + bonus.attack), bonus.attack),
@@ -3936,10 +4011,7 @@ export function createGkHud(api) {
         h("div", { class: "gkSeg" }, PIXEL_STEPS.map(function (step) {
           return h("button", { type: "button", class: Number(store.pixels) === step ? "gkOn" : null, "data-act": "pixels", "data-id": String(step) }, [String(step)]);
         }))]),
-      h("div", { class: "gkRow" }, [ico("knapsack"), h("span", null, ["Grootte van de iconen", h("small", { text: "Alleen de plaatjes, niet de knoppen." })]),
-        h("div", { class: "gkSeg" }, [["s", "S"], ["m", "M"], ["l", "L"]].map(function (pair) {
-          return h("button", { type: "button", class: store.icoSize === pair[0] ? "gkOn" : null, "data-act": "icosize", "data-id": pair[0] }, [pair[1]]);
-        }))]),
+      h("div", { class: "gkRow" }, [ico("knapsack"), h("span", { text: "Grootte interface" }), interfaceScaleControl()]),
       h("div", { class: "gkRow" }, [ico("palette"), h("span", null, ["Kleur van de iconen", h("small", { text: "Kleur = elk icoon zijn eigen kleur." })]),
         h("div", { class: "gkSeg" }, ICON_COLORS.map(function (pair) {
           return h("button", { type: "button", class: (store.icoColor === pair[0] ? "gkOn" : "") + " gkSwatch gkSwatch--" + pair[0], "data-act": "icocolor", "data-id": pair[0], title: pair[1] }, [pair[1]]);
@@ -4128,13 +4200,14 @@ export function createGkHud(api) {
   function renderSky() {
     const sky = data().dayNight;
     const show = Boolean(sky) && !sky.always;
-    const text = show ? (sky.isDay ? "\u2600\ufe0f" : "\ud83c\udf19") : "";
+    const lightDay = sky?.isLightDay ?? sky?.isDay;
+    const text = show ? (lightDay ? "\u2600\ufe0f" : "\ud83c\udf19") : "";
     const minutes = show ? Math.max(1, Math.ceil(num(sky.msToSwitch) / 60000)) : 0;
     const title = show ? (sky.isDay ? "Dag · nacht over " : "Nacht · dag over ") + minutes + " min" : "";
     if (mapSky.textContent !== text) mapSky.textContent = text;
     if (mapSky.title !== title) { mapSky.title = title; mapSky.setAttribute("aria-label", title); }
     mapSky.hidden = !show;
-    root.dataset.night = show && !sky.isDay ? "1" : "0";
+    root.dataset.night = show && !lightDay ? "1" : "0";
   }
 
   // Kevin 14-11: hoe ver een klus is (0-100), en elke kwartseconde de balk, de tijd en de knop bijwerken.
@@ -4222,11 +4295,12 @@ export function createGkHud(api) {
   }
 
   function syncSettings() {
-    const signature = JSON.stringify([store.pixels, store.music, store.debug && data().isAdmin, has("hotbar_hud"), has("interaction_hud"), store.icoSize, store.icoAnim, store.icoColor,
+    const signature = JSON.stringify([store.pixels, store.music, store.debug && data().isAdmin, has("hotbar_hud"), has("interaction_hud"), store.icoSize, store.panelScale, store.icoAnim, store.icoColor,
       store.healthPing, store.healthTps, store.healthMspt, store.healthCpu, store.healthGpu, store.healthPacketLoss, data().healthDefaults]);
     if (ui.sig.settings === signature) return;
     ui.sig.settings = signature;
-    root.dataset.ico = store.icoSize || "m";
+    root.dataset.ico = "m";
+    applyInterfaceScale();
     root.dataset.icoanim = store.icoAnim ? "on" : "off";
     root.dataset.icocolor = store.icoColor || "color";
     root.dataset.hotbar = has("hotbar_hud") ? "on" : "off";
@@ -6006,12 +6080,21 @@ export function createGkHud(api) {
 
   root.addEventListener("click", onClick);
   root.addEventListener("input", function (event) {
+    if (event.target.matches("[data-interface-scale]")) {
+      store.panelScale = Number(event.target.value) / 100;
+      applyInterfaceScale();
+      applyPanelSize();
+      padGrids();
+      pinScaleControl();
+      save();
+      return;
+    }
     const split = event.target && typeof event.target.closest === "function" ? event.target.closest("[data-stack-split]") : null;
     if (split && root.contains(split)) {
       const total = Math.max(0, Math.round(num(split.dataset.total, 0)));
       const value = Math.max(1, Math.min(total - 1, Math.round(num(split.value, 1))));
       const label = split.closest("label")?.querySelector("[data-stack-split-label]");
-      if (label) label.textContent = "Verdeling: " + value + " / " + (total - value);
+      if (label) label.textContent = value + " / " + (total - value);
       return;
     }
     const input = event.target && typeof event.target.closest === "function" ? event.target.closest("[data-craft-search]") : null;
