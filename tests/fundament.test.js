@@ -33,10 +33,11 @@ test("zonder kaarten is er toch een speelbare basiswereld", () => {
 
 test("de kaart Wereld stuurt grond, startplek, speler, camera en lucht", () => {
   const settings = { groundSize: 300, groundColor: "#224422", startX: 12, startZ: -8, playerSpeed: 9, playerWalkAnimation: "Walk cycle",
-    playerRunSpeedPct: 1000, playerAlwaysRun: true, playerRunAnimation: "Run cycle", cameraDistance: 30, skyColor: "#102030" };
+    playerRunSpeedPct: 1000, playerAlwaysRun: true, playerRunAnimation: "Run cycle", skyColor: "#102030" };
   assert.equal(validateDocument("world_settings", settings).ok, true);
   assert.equal(validateDocument("world_settings", { skyColor: "blauw" }).ok, false, "kleur moet #rrggbb zijn");
-  const world = buildRuntimeWorld(serverData([doc("world_settings", "world_settings", settings), doc("project_settings", "project_settings", { gameName: "Testwereld" })]));
+  // Camera-keuze (19-11): de camera-afstand staat op de kaart Project.
+  const world = buildRuntimeWorld(serverData([doc("world_settings", "world_settings", settings), doc("project_settings", "project_settings", { gameName: "Testwereld", cameraDistance: 30 })]));
   assert.equal(world.ground.maxX, 150);
   assert.equal(world.ground.materialColor, "#224422");
   assert.deepEqual([world.spawn.x, world.spawn.z], [12, -8]);

@@ -95,6 +95,8 @@ const DEFAULTS = { panel: null, tab: "bag", filter: "all", scroll: {}, item: nul
   dockSplit: 0.5,
   // Scherpte van de game: pixels per schermpunt (1 = standaard; hoger = scherper maar zwaarder).
   pixels: 1,
+  // Camera-keuze (19-11): "" = zoals de game is ingesteld, of "top-down" / "third-person" (alleen als de maker dat toestaat).
+  camera: "",
   // Healing (2-11): kleine zwevende getallen boven spelers en vijanden (aan/uit in Instellingen).
   floatNums: true,
   // Fase 8 herstel 2 (Kevin 12-11): uit = buitvenster (zelf kiezen wat je meeneemt); aan = alles meteen in je tas.
@@ -4007,6 +4009,10 @@ export function createGkHud(api) {
       toggle("music", store.music ? "musical-notes" : "speaker-off", "Muziek en geluid", null, store.music),
       toggle("combatFold", "crossed-swords", "Paneel klein tijdens gevecht", "Op een telefoon of smal venster: na het gevecht komt het terug.", store.combatFold),
       h("div", { class: "gkRow" }, [ico("resize"), h("span", null, ["Grootte van het scherm", h("small", { text: "Knoppen, kaart en paneel." })]), sizes]),
+      data().cameraChoice ? h("div", { class: "gkRow" }, [ico("compass"), h("span", null, ["Camera", h("small", { text: "Van boven: klik of tik om te lopen. Achter je: draai met de rechtermuisknop of door te slepen, loop met WASD of de joystick." })]),
+        h("div", { class: "gkSeg" }, [["", "Standaard"], ["top-down", "Van boven"], ["third-person", "Achter je"]].map(function (pair) {
+          return h("button", { type: "button", class: (store.camera || "") === pair[0] ? "gkOn" : null, "data-act": "camera", "data-id": pair[0] }, [pair[1]]);
+        }))]) : null,
       h("div", { class: "gkRow" }, [ico("sparkles"), h("span", null, ["Scherpte", h("small", { text: "1 = standaard. Hoger is scherper (fijn op een telefoon), maar zwaarder voor de computer." })]),
         h("div", { class: "gkSeg" }, PIXEL_STEPS.map(function (step) {
           return h("button", { type: "button", class: Number(store.pixels) === step ? "gkOn" : null, "data-act": "pixels", "data-id": String(step) }, [String(step)]);
@@ -4295,7 +4301,7 @@ export function createGkHud(api) {
   }
 
   function syncSettings() {
-    const signature = JSON.stringify([store.pixels, store.music, store.debug && data().isAdmin, has("hotbar_hud"), has("interaction_hud"), store.icoSize, store.panelScale, store.icoAnim, store.icoColor,
+    const signature = JSON.stringify([store.pixels, store.camera, data().cameraChoice, store.music, store.debug && data().isAdmin, has("hotbar_hud"), has("interaction_hud"), store.icoSize, store.panelScale, store.icoAnim, store.icoColor,
       store.healthPing, store.healthTps, store.healthMspt, store.healthCpu, store.healthGpu, store.healthPacketLoss, data().healthDefaults]);
     if (ui.sig.settings === signature) return;
     ui.sig.settings = signature;
@@ -4306,6 +4312,7 @@ export function createGkHud(api) {
     root.dataset.hotbar = has("hotbar_hud") ? "on" : "off";
     root.dataset.dobtn = has("interaction_hud") ? "on" : "off";
     if (typeof api.setPixels === "function") api.setPixels(PIXEL_STEPS.includes(Number(store.pixels)) ? Number(store.pixels) : 1);
+    if (typeof api.setCameraMode === "function") api.setCameraMode(data().cameraChoice ? (store.camera || null) : null);
     api.setMusic(store.music);
     api.setDebug(Boolean(store.debug && data().isAdmin), debugSlot);
     syncConnectionMetricVisibility();
@@ -5574,6 +5581,7 @@ export function createGkHud(api) {
       case "fullscreen": toggleFullscreen(); break;
       case "icosize": store.icoSize = id; save(); render(); break;
       case "pixels": store.pixels = Number(id) || 1; save(); render(); break;
+      case "camera": store.camera = id === "top-down" || id === "third-person" ? id : ""; save(); render(); break;
       case "icocolor": store.icoColor = id; save(); render(); break;
       case "respawn": api.run03("respawn", null, {}); break;
       case "story-accept": ui.focusQuest = { questId: id, until: performance.now() + 8000 }; api.run03("use", null, { itemId: el.dataset.item }); break;

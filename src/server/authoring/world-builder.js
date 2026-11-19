@@ -226,6 +226,36 @@ function campaigns() {
     questCount: 0, dialogueCount: 0, errors: [], warnings: [] };
 }
 
+// Camera-keuze (Kevin 19-11): de camera uit de kaart Project (top-down of third-person, met alle instellingen).
+// Oude projecten: camera-afstand en -hoek komen nog van de kaart Wereld (data.legacyCamera) tot Project ze heeft.
+export function cameraConfigOf(data = {}) {
+  const raw = Object.assign({}, data?.legacyCamera || {}, data?.project || {});
+  const values = settingsValues("project_settings", raw);
+  const n = (key) => Number(values[key]);
+  const has = (key) => raw[key] !== undefined && raw[key] !== null && raw[key] !== "";
+  const distance = n("cameraDistance");
+  // Zonder eigen zoomgrenzen blijven de oude grenzen gelden (10 m, of tot twee keer de startafstand).
+  const minDistance = has("cameraMinDistance") ? Math.min(n("cameraMinDistance"), distance) : Math.min(10, distance);
+  const maxDistance = has("cameraMaxDistance") ? Math.max(n("cameraMaxDistance"), distance) : Math.max(48, distance * 2);
+  const camera = { id: "main_camera", cameraId: "main_camera", pitch: n("cameraPitch"), yaw: 0, startDistance: distance,
+    distance, minDistance, maxDistance, fov: n("cameraFov"), targetHeightOffset: 1.6, follow: true, rotateSpeed: 90 };
+  const tpDistance = n("cameraTpDistance");
+  const maxPitch = n("cameraTpMaxPitch");
+  const minPitch = Math.min(n("cameraTpMinPitch"), maxPitch - 1);
+  const thirdPerson = {
+    distance: tpDistance, minDistance: Math.min(n("cameraTpMinDistance"), tpDistance), maxDistance: Math.max(n("cameraTpMaxDistance"), tpDistance),
+    height: n("cameraTpHeight"), shoulder: n("cameraTpShoulder"), pitch: Math.max(minPitch, Math.min(maxPitch, n("cameraTpPitch"))), minPitch, maxPitch,
+    fov: n("cameraTpFov"), mouseSpeed: n("cameraTpMouseSpeed") / 100, invertY: values.cameraTpInvertY === true,
+    follow: values.cameraTpFollow !== false, followDelayMs: Math.round(n("cameraTpFollowDelay") * 1000), followSpeed: n("cameraTpFollowSpeed"),
+    collision: values.cameraTpCollision !== false, clickToMove: values.cameraTpClickToMove !== false,
+    viewDistance: n("cameraTpViewDistance"), objectDistance: n("cameraTpObjectDistance")
+  };
+  const touch = { side: values.cameraTouchStickSide === "right" ? "right" : "left", size: n("cameraTouchStickSize"), x: n("cameraTouchStickX"), y: n("cameraTouchStickY"),
+    turnSpeed: n("cameraTouchTurnSpeed") / 100, runAtEdge: values.cameraTouchRunAtEdge !== false };
+  return { camera, mode: values.cameraMode === "third_person" ? "third-person" : "top-down", playerChoice: values.cameraPlayerChoice === true,
+    topDownRotate: values.cameraTopDownRotate === true, thirdPerson, touch };
+}
+
 // De basis van de wereld uit de build. data = server.json van de build (of {} als er nog geen build is).
 export function baseRuntimeWorld(data = {}, options = {}) {
   const settings = worldSettingsValues(data?.worldSettings || null);
@@ -233,8 +263,7 @@ export function baseRuntimeWorld(data = {}, options = {}) {
   const size = Number(settings.groundSize);
   const half = size / 2;
   const sky = settings.skyColor;
-  const cameraDistance = Number(settings.cameraDistance);
-  const cameraLimits = { minDistance: Math.min(10, cameraDistance), maxDistance: Math.max(48, cameraDistance * 2) };
+  const cameraConfig = cameraConfigOf(data);
 
   const ground = {
     id: "world_ground", width: size, depth: size, y: 0, materialColor: settings.groundColor, textureAssetId: settings.groundTextureAssetId || null,
@@ -244,8 +273,7 @@ export function baseRuntimeWorld(data = {}, options = {}) {
   const spawnPoint = { nodeType: "spawn_point", spawnId: WORLD_SPAWN_ID, role: "zone_default", zoneRef: WORLD_ZONE_ID, label: "Startplek",
     x: Number(settings.startX), y: 0, z: Number(settings.startZ), facing: Number(settings.startFacing), safeRadius: 1.25,
     snapToGround: true, validateCollision: true, activationConditionRef: null, priority: 0 };
-  const camera = { id: "main_camera", cameraId: "main_camera", pitch: Number(settings.cameraPitch), yaw: 0, startDistance: cameraDistance,
-    distance: cameraDistance, ...cameraLimits, fov: 50, targetHeightOffset: 1.6, follow: true, rotateSpeed: 90 };
+  const camera = cameraConfig.camera;
   const bounds = { originX: -half, originY: 0, originZ: -half, width: size, depth: size, minX: -half, minZ: -half, maxX: half, maxZ: half, minY: -100, maxY: 500 };
   const zonePackage = {
     id: WORLD_ZONE_ID + ".package", zoneId: WORLD_ZONE_ID, packageVersion: 1, includeEditorOnlyData: false,
@@ -278,7 +306,8 @@ export function baseRuntimeWorld(data = {}, options = {}) {
     world: { id: WORLD_ID, displayName: gameName, backgroundColor: sky, fogColor: sky, fogDensity: 0,
       performance: Object.assign(clone(PERFORMANCE), { shared: { worldId: WORLD_ID, displayName: gameName, backgroundColor: sky, fogColor: sky, fogDensity: 0, smoothShading: true } }, gameShadowOf(settings)) },
     ground,
-    camera: Object.assign({ mode: "top-down" }, camera),
+    camera: Object.assign({ mode: cameraConfig.mode, playerChoice: cameraConfig.playerChoice, topDownRotate: cameraConfig.topDownRotate,
+      thirdPerson: cameraConfig.thirdPerson, touch: cameraConfig.touch }, camera),
     player: { id: "player", modelAssetId: settings.playerModelAssetId || null, moveSpeed: Number(settings.playerSpeed), sprintMultiplier: Number(settings.playerRunSpeedPct) / 100,
       alwaysRun: settings.playerAlwaysRun === true,
       walkAnimation: settings.playerWalkAnimation || null, runAnimation: settings.playerRunAnimation || null,
@@ -316,9 +345,14 @@ export function baseRuntimeWorld(data = {}, options = {}) {
     publishedAt: options.publishedAt || undefined,
     readModelVersion: { interactableAssembly: 2 }
   };
+  // Third-person: je kijkt naar de horizon, dus modellen laden rondom tot "Objecten laden tot" (vakken van 14 m).
+  if (cameraConfig.mode === "third-person" || cameraConfig.playerChoice) {
+    const radius = Math.max(3, Math.ceil(cameraConfig.thirdPerson.objectDistance / CHUNK_GRID.chunkWidth));
+    Object.assign(world.chunkLoading.game, { gameViewRadiusChunks: radius, cameraOffsetZChunks: 0, maxLoadedChunks: Math.max(81, (2 * radius + 3) ** 2) });
+  }
   if (options.editor) {
-    world.editorCamera = { id: "editor_camera", cameraId: "editor_camera", target: { x: spawnPoint.x, y: 0, z: spawnPoint.z }, pitch: Number(settings.cameraPitch),
-      yaw: 0, distance: cameraDistance, ...cameraLimits, fov: 50, rotateSpeed: 90 };
+    world.editorCamera = { id: "editor_camera", cameraId: "editor_camera", target: { x: spawnPoint.x, y: 0, z: spawnPoint.z }, pitch: camera.pitch,
+      yaw: 0, distance: camera.distance, minDistance: camera.minDistance, maxDistance: camera.maxDistance, fov: 50, rotateSpeed: 90 };
   }
   return world;
 }

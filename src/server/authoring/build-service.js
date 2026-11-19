@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { kindSpec, splitByAudience } from "../../shared/authoring/kinds.js";
+import { LEGACY_WORLD_CAMERA_KEYS } from "../../shared/authoring/kinds/camera.js";
 import { parsePickupLegacyRef } from "./runtime-overlay.js";
 import { DocumentRepository } from "./document-repository.js";
 import { compileWorldSection } from "./world-compiler.js";
@@ -122,6 +123,17 @@ export function compileCanonical(documents, options = {}) {
   if (worldSettings) {
     client.worldSettings = split(worldSettings).client;
     server.worldSettings = split(worldSettings).server;
+  }
+  // Camera-keuze (19-11): camera-afstand en -hoek stonden vroeger op de kaart Wereld en staan nu op Project.
+  // Zolang Project ze nog niet heeft, gaat de oude waarde van Wereld mee (de wereldbouwer gebruikt Project eerst).
+  const legacyCamera = {};
+  for (const key of LEGACY_WORLD_CAMERA_KEYS) {
+    const value = worldSettings?.body?.[key];
+    if (typeof value === "number" && Number.isFinite(value) && (project?.body?.[key] === undefined || project?.body?.[key] === null)) legacyCamera[key] = value;
+  }
+  if (Object.keys(legacyCamera).length) {
+    client.legacyCamera = legacyCamera;
+    server.legacyCamera = legacyCamera;
   }
   // Wereld tekenen (ronde 1): de kaart "Terrein" (hoogte van de grond per vak + helling + budget).
   const terrainSettings = byKind("terrain_settings")[0] || null;

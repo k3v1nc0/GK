@@ -4945,6 +4945,28 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let camFollow = true;
   let camTargetHeightOffset = 1.6;
   let camRotateSpeed = 90;
+  // Camera-keuze (Kevin 19-11): top-down of third-person (kaart Project -> world.camera).
+  let camMode = "top-down";
+  let camModeOverride = null; // keuze van de speler in de game (alleen als playerChoice aan staat)
+  let camConfigSource = null;
+  let camPitchMin = 10;
+  let camPitchMax = 89;
+  let camShoulder = 0;
+  let camOrbitEnabled = false;
+  let camOrbitSpeed = 1;
+  let camTouchSpeed = 1;
+  let camInvertY = false;
+  let camAutoFollow = false;
+  let camFollowDelayMs = 1500;
+  let camFollowSpeed = 120;
+  let camFollowLimitDeg = 0; // de game zegt per beweging hoe ver de camera mag meedraaien (0 = niet)
+  let camCollision = false;
+  let camViewDistance = 0;
+  let camLastOrbitAt = 0;
+  let camSmoothedDistance = Infinity;
+  let camLastPositionAt = 0;
+  let camFogBackup;
+  const camLookTarget = new THREE.Vector3();
   let editorCameraSaveTimer = null;
   const camTarget = new THREE.Vector3();
   const playerCameraTargetCache = new THREE.Vector3();
@@ -8547,7 +8569,9 @@ function resolveChunkDebugCenter(policy) {
     // (externalPlayerAuthority) - anders werken min/max zoom nooit in de gepubliceerde game.
     gameWheelHandler = function (event) {
       event.preventDefault();
-      setZoom(camDistance + Math.sign(event.deltaY) * 4);
+      // Third-person: kleinere stapjes (het zoombereik is maar een paar meter).
+      const step = camMode === "third-person" ? Math.max(0.5, (camMaxDistance - camMinDistance) / 12) : 4;
+      setZoom(camDistance + Math.sign(event.deltaY) * step);
     };
     canvas.addEventListener("wheel", gameWheelHandler, { passive: false });
   }
@@ -13578,6 +13602,8 @@ function resolveChunkDebugCenter(policy) {
     const shouldApplyToViewport = mode === "game" || !editorViewInitialized;
     if (shouldApplyToViewport) {
       gameBaseFov = num(cam?.fov, mode === "editor" ? editorCameraDefaults.fov : gameCameraDefaults.fov);
+      // Camera-keuze: third-person zet eigen afstand, hoek, kijkhoek en mist (top-down houdt de waarden hierboven).
+      if (mode === "game") applyGameCameraMode(cam);
       camera.fov = gameBaseFov;
       applyGameFov();
       camera.updateProjectionMatrix();
@@ -13591,7 +13617,220 @@ function resolveChunkDebugCenter(policy) {
     }
   }
 
+  function resolvedGameCameraMode(cam) {
+    const authored = cam?.mode === "third-person" ? "third-person" : "top-down";
+    if (cam?.playerChoice === true && (camModeOverride === "third-person" || camModeOverride === "top-down")) return camModeOverride;
+    return authored;
+  }
+
+  // Zet de game-camera in de gekozen stand. Top-down: de waarden van applyCameraConfig blijven (zoals altijd).
+  function applyGameCameraMode(cam) {
+    camConfigSource = cam || null;
+    camMode = resolvedGameCameraMode(cam);
+    camSmoothedDistance = Infinity;
+    camLastOrbitAt = 0;
+    if (camMode === "third-person") {
+      const tp = cam?.thirdPerson || {};
+      camMinDistance = Math.max(0.5, num(tp.minDistance, 2));
+      camMaxDistance = Math.max(camMinDistance, num(tp.maxDistance, 14));
+      camDistance = clamp(num(tp.distance, 6), camMinDistance, camMaxDistance);
+      camPitchMax = clamp(num(tp.maxPitch, 70), -80, 89);
+      camPitchMin = clamp(num(tp.minPitch, -30), -85, camPitchMax);
+      camPitch = clamp(num(tp.pitch, 15), camPitchMin, camPitchMax);
+      camTargetHeightOffset = num(tp.height, 1.7);
+      camShoulder = num(tp.shoulder, 0.5);
+      gameBaseFov = num(tp.fov, 60);
+      camOrbitEnabled = true;
+      camOrbitSpeed = Math.max(0.05, num(tp.mouseSpeed, 1));
+      camInvertY = tp.invertY === true;
+      camAutoFollow = tp.follow !== false;
+      camFollowDelayMs = Math.max(0, num(tp.followDelayMs, 1500));
+      camFollowSpeed = Math.max(1, num(tp.followSpeed, 120));
+      camCollision = tp.collision !== false;
+      camViewDistance = Math.max(0, num(tp.viewDistance, 220));
+      // Begin achter de speler.
+      camYaw = num(player.facing, 0) / DEG_TO_RAD + 180;
+    } else {
+      camPitchMin = camPitch;
+      camPitchMax = camPitch;
+      camShoulder = 0;
+      camOrbitEnabled = cam?.topDownRotate === true;
+      camOrbitSpeed = 1;
+      camInvertY = false;
+      camAutoFollow = false;
+      camCollision = false;
+      camViewDistance = 0;
+    }
+    camTouchSpeed = Math.max(0.05, num(cam?.touch?.turnSpeed, 1));
+    applyGameCameraFog();
+  }
+
+  // Third-person kijkt naar de horizon: mist in de kleur van de lucht verbergt de rand, en wat verder weg is
+  // tekent de laptop niet (camera.far). Top-down houdt de mist van de wereld zelf.
+  function applyGameCameraFog() {
+    if (mode !== "game") return;
+    if (camMode === "third-person" && camViewDistance > 0) {
+      if (!scene.fog?.gkCamera) camFogBackup = scene.fog || null;
+      const sky = scene.background?.isColor ? scene.background.clone() : new THREE.Color("#8fb8de");
+      const fog = new THREE.Fog(sky, camViewDistance * 0.45, camViewDistance);
+      fog.gkCamera = true;
+      scene.fog = fog;
+      camera.far = camViewDistance * 1.15;
+    } else {
+      if (scene.fog?.gkCamera) scene.fog = camFogBackup || null;
+      camFogBackup = undefined;
+      camera.far = 1000000;
+    }
+    camera.updateProjectionMatrix();
+  }
+
+  // Hoogte van de grond (met terrein) op x, z.
+  function cameraGroundY(x, z) {
+    return num(world?.ground?.y, 0) + terrainLift(x, z);
+  }
+
+  // Bovenkant van een object met botsing (eenmalig gemeten aan het model; zonder model 3 m boven de grond).
+  function cameraSolidTop(solid) {
+    if (Number.isFinite(solid.cameraTop)) return solid.cameraTop;
+    const root = solid.entityId ? entityRoots.get(solid.entityId) : null;
+    if (root) {
+      const box = new THREE.Box3().setFromObject(root);
+      if (Number.isFinite(box.max.y)) {
+        solid.cameraTop = box.max.y;
+        return solid.cameraTop;
+      }
+    }
+    return cameraGroundY(solid.x, solid.z) + 3;
+  }
+
+  // Hoe ver de camera achter de speler kan staan zonder door een heuvel of een object met botsing te gaan.
+  // Goedkoop: de grond op 8 punten langs de lijn en de botscirkels die het lopen ook gebruikt (geen meshes).
+  function thirdPersonClearDistance(target, ox, oy, oz, maxDistance) {
+    let best = maxDistance;
+    const steps = 8;
+    let prevT = 0;
+    let prevGap = target.y - (cameraGroundY(target.x, target.z) + 0.35);
+    for (let i = 1; i <= steps; i += 1) {
+      const t = (i / steps) * maxDistance;
+      const gap = target.y + oy * t - (cameraGroundY(target.x + ox * t, target.z + oz * t) + 0.35);
+      if (gap < 0) {
+        best = prevGap > 0 ? prevT + (t - prevT) * (prevGap / (prevGap - gap)) : prevT;
+        break;
+      }
+      prevT = t;
+      prevGap = gap;
+    }
+    const a = ox * ox + oz * oz;
+    if (a > 0.000001) {
+      for (const solid of predictionSolids) {
+        if (!solid || solid.enabled === false) continue;
+        const r = num(solid.radius, 0) + 0.25;
+        const dx = target.x - solid.x;
+        const dz = target.z - solid.z;
+        const c = dx * dx + dz * dz - r * r;
+        if (c <= 0) continue; // de speler staat er zelf in
+        if (dx * dx + dz * dz > (best + r) * (best + r)) continue;
+        const b = 2 * (dx * ox + dz * oz);
+        const disc = b * b - 4 * a * c;
+        if (disc < 0) continue;
+        const t = (-b - Math.sqrt(disc)) / (2 * a);
+        if (t <= 0 || t >= best) continue;
+        if (target.y + oy * t > cameraSolidTop(solid)) continue;
+        best = t;
+      }
+    }
+    return Math.max(Math.min(0.6, maxDistance), best - 0.2);
+  }
+
+  function updateThirdPersonCamera() {
+    const now = performance.now();
+    const dt = camLastPositionAt ? Math.min(0.25, Math.max(0, (now - camLastPositionAt) / 1000)) : 0;
+    camLastPositionAt = now;
+    const pitchRad = camPitch * DEG_TO_RAD;
+    const yawRad = camYaw * DEG_TO_RAD;
+    const cosPitch = Math.cos(pitchRad);
+    const ox = Math.sin(yawRad) * cosPitch;
+    const oy = Math.sin(pitchRad);
+    const oz = Math.cos(yawRad) * cosPitch;
+    // Schouder: de camera en het kijkpunt schuiven samen opzij (rechts = cameraRight).
+    camLookTarget.set(camTarget.x + Math.cos(yawRad) * camShoulder, camTarget.y, camTarget.z - Math.sin(yawRad) * camShoulder);
+    const wanted = camCollision ? thirdPersonClearDistance(camLookTarget, ox, oy, oz, camDistance) : camDistance;
+    // Naar voren direct (nooit door de muur), terug naar achteren rustig.
+    if (!Number.isFinite(camSmoothedDistance) || wanted < camSmoothedDistance) camSmoothedDistance = wanted;
+    else camSmoothedDistance += (wanted - camSmoothedDistance) * Math.min(1, dt * 4);
+    const d = camSmoothedDistance;
+    camera.position.set(camLookTarget.x + ox * d, camLookTarget.y + oy * d, camLookTarget.z + oz * d);
+    const floor = cameraGroundY(camera.position.x, camera.position.z) + 0.3;
+    if (camera.position.y < floor) camera.position.y = floor;
+    camera.lookAt(camLookTarget);
+  }
+
+  // De camera rustig achter de speler draaien als die loopt (klikken, tikken, joystick). Niet als de speler
+  // naar de camera toe loopt (dan zou de camera rond blijven draaien) en niet vlak nadat de speler zelf draaide.
+  function stepThirdPersonFollow(delta) {
+    if (camMode !== "third-person" || !camAutoFollow || camFollowLimitDeg <= 0) return;
+    if (performance.now() - camLastOrbitAt < camFollowDelayMs) return;
+    if (player.animationState !== "walk" && player.animationState !== "run") return;
+    const behind = num(player.facing, 0) / DEG_TO_RAD + 180;
+    const diff = ((((behind - camYaw) % 360) + 540) % 360) - 180;
+    if (Math.abs(diff) > camFollowLimitDeg) return;
+    const step = camFollowSpeed * Math.max(0, delta);
+    camYaw += Math.abs(diff) <= step ? diff : Math.sign(diff) * step;
+  }
+
+  // Draaien met de muis of een vinger (pixels). Top-down draait alleen rond (de hoek blijft gelijk).
+  function orbitGameCamera(dxPixels, dyPixels, source = "mouse") {
+    if (mode !== "game" || !camOrbitEnabled) return false;
+    const degreesPerPixel = 0.3 * (source === "touch" ? camTouchSpeed : camOrbitSpeed);
+    camYaw -= num(dxPixels, 0) * degreesPerPixel;
+    camPitch = clamp(camPitch + (camInvertY ? -1 : 1) * num(dyPixels, 0) * degreesPerPixel, camPitchMin, camPitchMax);
+    camLastOrbitAt = performance.now();
+    requestRender("camera-orbit");
+    return true;
+  }
+
+  // Zoomen met een factor (knijpen op mobiel): < 1 = dichterbij.
+  function zoomGameCamera(factor) {
+    if (mode !== "game") return false;
+    const next = num(factor, 1);
+    if (!(next > 0)) return false;
+    setZoom(camDistance * next);
+    requestRender("camera-zoom");
+    return true;
+  }
+
+  function setGameCameraMode(next) {
+    camModeOverride = next === "third-person" || next === "top-down" ? next : null;
+    if (mode !== "game" || !camConfigSource) return camMode;
+    if (resolvedGameCameraMode(camConfigSource) !== camMode) {
+      // Top-down terug: eerst de gewone waarden van de wereld, daarna de stand.
+      if (world) applyCameraConfig(world); else applyGameCameraMode(camConfigSource);
+      requestRender("camera-mode");
+    }
+    return camMode;
+  }
+
+  function setGameCameraFollowLimit(degrees) {
+    camFollowLimitDeg = Math.max(0, num(degrees, 0));
+  }
+
+  function getGameCameraState() {
+    const cam = camConfigSource || {};
+    return {
+      mode: camMode,
+      authoredMode: cam.mode === "third-person" ? "third-person" : "top-down",
+      playerChoice: cam.playerChoice === true,
+      orbit: camOrbitEnabled,
+      clickToMove: camMode !== "third-person" || cam.thirdPerson?.clickToMove !== false,
+      touch: cam.touch || null
+    };
+  }
+
   function updateCameraPosition() {
+    if (mode === "game" && camMode === "third-person") {
+      updateThirdPersonCamera();
+      return;
+    }
     const pitchRad = camPitch * DEG_TO_RAD;
     const yawRad = camYaw * DEG_TO_RAD;
     const horizontal = Math.cos(pitchRad) * camDistance;
@@ -18159,6 +18398,12 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function updateCameraGroundBasis() {
+    if (mode === "game" && camMode === "third-person") {
+      const yawRad = camYaw * DEG_TO_RAD;
+      cameraForward.set(-Math.sin(yawRad), 0, -Math.cos(yawRad));
+      cameraRight.set(-cameraForward.z, 0, cameraForward.x);
+      return;
+    }
     const target = orbitControls ? orbitControls.target : camTarget;
     cameraForward.set(target.x - camera.position.x, 0, target.z - camera.position.z);
     if (cameraForward.lengthSq() < 0.0001) cameraForward.set(0, 0, -1);
@@ -18188,6 +18433,7 @@ function resolveChunkDebugCenter(policy) {
       player.root.position.copy(player.pos);
       player.root.rotation.y = player.facing;
       if (camFollow) camTarget.lerp(playerCameraTarget(), Math.min(1, delta * 8));
+      stepThirdPersonFollow(realDelta);
       updateCameraPosition();
       updateInteractionFocus();
       return;
@@ -19866,6 +20112,11 @@ function resolveChunkDebugCenter(policy) {
     setPlayerPixelRatio: setPlayerPixelRatio,
     getPlayerState: getPlayerState,
     getCameraGroundBasis: getCameraGroundBasis,
+    orbitGameCamera: orbitGameCamera,
+    zoomGameCamera: zoomGameCamera,
+    setGameCameraMode: setGameCameraMode,
+    setGameCameraFollowLimit: setGameCameraFollowLimit,
+    getGameCameraState: getGameCameraState,
     resolvePlayerMovementIntent: resolvePlayerMovementIntent,
     findPlayerMovementPath: findPlayerMovementPath,
     cancelPlayerMovementPath: function () { playerPathClient?.cancel(); },

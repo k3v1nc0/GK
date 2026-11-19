@@ -1,4 +1,4 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261118-player-animation1";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261119-camera1";
 import { nextPlayerRouteWaypoint } from "../shared/player-path-client.js?v=20261108-roads9";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20261106-perf1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
@@ -7,7 +7,7 @@ import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolatio
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createWorldSounds } from "./world-sounds.js?v=20261116-herstel1";
 import { createActorPresentation } from "./actor-presentation.js?v=20261116-herstel1";
-import { createGkHud } from "./hud/gk-hud.js?v=20261119-compact1";
+import { createGkHud } from "./hud/gk-hud.js?v=20261119-camera1";
 import { dayNightState, mixColor } from "../shared/day-night.js?v=20261115-fase10";
 import { node05ActionBody, node05OperationId } from "./node05-request.js?v=20261113-fase8d";
 import {
@@ -432,6 +432,18 @@ function gameFetch(input, options = {}) {
   }
   return fetch(input, requestOptions);
 }
+
+// Camera-keuze (Kevin 19-11): invoer voor de camera (zie "Camera-keuze" bij de muisbesturing).
+const CAMERA_DRAG_THRESHOLD_PX = 6;
+const cameraInput = {
+  orbit: null,
+  pinch: null,
+  stick: { active: false, pointerId: null, x: 0, y: 0, sprinting: false, lastSentAt: 0, lastSentX: 0, lastSentY: 0 },
+  joystick: null,
+  checkedAt: 0,
+  signature: "",
+  preference: null
+};
 
 const state = {
   runtime: null,
@@ -12082,7 +12094,7 @@ function showHudError(message) {
 }
 
 function hasKeyboardMovementInput() {
-  return state.input.move_forward || state.input.move_back || state.input.move_left || state.input.move_right;
+  return state.input.move_forward || state.input.move_back || state.input.move_left || state.input.move_right || hasStickMovementInput();
 }
 
 function pointerTargetDistance() {
@@ -12235,6 +12247,11 @@ function currentMoveVector() {
   let x = 0;
   let z = 0;
   if (hasKeyboardMovementInput()) {
+    // Camera-keuze: joystick (mobiel, third-person). Omhoog = vooruit in de kijkrichting van de camera.
+    if (hasStickMovementInput()) {
+      const stick = cameraInput.stick;
+      return { x: forward.x * -stick.y + right.x * stick.x, z: forward.z * -stick.y + right.z * stick.x };
+    }
     if (state.input.move_forward) { x += forward.x; z += forward.z; }
     if (state.input.move_back) { x -= forward.x; z -= forward.z; }
     if (state.input.move_left) { x -= right.x; z -= right.z; }
@@ -13562,6 +13579,17 @@ function clearMovementInput(reason, options = {}) {
   state.input.move_back = false;
   state.input.move_left = false;
   state.input.move_right = false;
+  // Camera-keuze: ook de joystick staat dan stil (de vinger mag blijven liggen; opnieuw duwen loopt weer).
+  if (cameraInput.stick.x || cameraInput.stick.y) {
+    cameraInput.stick.x = 0;
+    cameraInput.stick.y = 0;
+    const knob = cameraInput.joystick?.firstChild;
+    if (knob) knob.style.transform = "translate(-50%, -50%)";
+  }
+  if (cameraInput.stick.sprinting) {
+    cameraInput.stick.sprinting = false;
+    state.input.sprint = false;
+  }
   if (options.resetSprint) state.input.sprint = false;
   state.net.localControllerActive = false;
   state.control.passiveSince = 0;
@@ -13610,9 +13638,15 @@ function settleOnAuthoritativePositionWhenIdle() {
 }
 
 function stepMovement(now) {
+  syncGameCameraControls(now);
   if (!isMmoGameplayReady() || !state.runtime || !state.session || !state.predictedPosition) {
     state.lastFrameAt = now;
     return;
+  }
+  // Camera-keuze: hoe ver de third-person camera vanzelf achter je mag draaien. WASD = niet (je stuurt met de
+  // muis), joystick = alleen bij (schuin) vooruit, klik- of tikroute = ook bij een flinke bocht.
+  if (typeof state.runtime.setGameCameraFollowLimit === "function") {
+    state.runtime.setGameCameraFollowLimit(hasStickMovementInput() ? 80 : hasKeyboardMovementInput() ? 0 : state.pointer.active ? 150 : 0);
   }
   if (!state.lastFrameAt) state.lastFrameAt = now;
   // On a slow laptop a 50 ms cap made local prediction run at half speed (or
@@ -13905,6 +13939,12 @@ function handleGamePointerDown(event, source = "pointer") {
   // MMO (3-11): rechtsklik op een andere speler = spelermenu (uitnodigen, doel kiezen).
   if (event.pointerType === "mouse" && event.button === 2) {
     const picked = isMmoGameplayReady() ? remotePlayerAtPointer(event) : null;
+    // Camera-keuze: rechtermuisknop slepen = camera draaien; zonder slepen op een speler = spelermenu.
+    if (gameCameraState()?.orbit) {
+      event.preventDefault();
+      beginCameraOrbit(event, { picked });
+      return;
+    }
     if (picked) {
       event.preventDefault();
       openPlayerMenuFor(picked, event.clientX, event.clientY);
@@ -13919,6 +13959,8 @@ function handleGamePointerDown(event, source = "pointer") {
     renderNode04Hud();
     return;
   }
+  // Camera-keuze: tweede vinger terwijl de eerste de camera draait = knijpen (zoomen).
+  if (event.pointerType === "touch" && beginCameraPinch(event)) return;
   // Alleen een tweede vinger terwijl de eerste nog echt op het scherm staat betekent sprint.
   // Een nieuwe tik na een eerdere klikroute moet die route juist vervangen.
   if (event.pointerType === "touch" && isPointerHoldActive() && event.pointerId !== state.pointer.pointerId) {
@@ -13941,6 +13983,13 @@ function handleGamePointerDown(event, source = "pointer") {
   const heldPlayer = event.pointerType !== "mouse" ? remotePlayerAtPointer(event) : null;
   if (heldPlayer) startPlayerHold(event, heldPlayer);
   else cancelPlayerHold();
+  // Camera-keuze: in third-person sleept een vinger de camera (tik = lopen). Met de muis ook, als klikken om te
+  // lopen uit staat (linkermuisknop slepen = draaien, klik = alleen iets kiezen).
+  const cameraNow = gameCameraState();
+  if (cameraNow?.mode === "third-person" && (event.pointerType !== "mouse" || !cameraNow.clickToMove)) {
+    beginCameraOrbit(event, { tapToMove: cameraNow.clickToMove, hold: state.pointer.playerHold });
+    return;
+  }
   clearNode03PendingTargetAction();
   interruptActiveClickRoute("world-click-route-replaced");
   clearPointerTarget(false);
@@ -13973,6 +14022,7 @@ function handleGamePointerDown(event, source = "pointer") {
 }
 
 function handleGamePointerMove(event) {
+  if (moveCameraGesture(event)) return;
   const hold = state.pointer.playerHold;
   if (hold && event.pointerId === hold.pointerId && Math.hypot(event.clientX - hold.x, event.clientY - hold.y) > PLAYER_HOLD_SLOP_PX) cancelPlayerHold();
   if (!state.pointer.active || event.pointerId !== state.pointer.pointerId) return;
@@ -13996,6 +14046,7 @@ function handleGamePointerMove(event) {
 
 function releaseGamePointer(event) {
   if (state.pointer.playerHold && (!event || event.pointerId === undefined || event.pointerId === state.pointer.playerHold.pointerId)) cancelPlayerHold();
+  if (endCameraGesture(event)) return;
   if (!state.pointer.active && state.pointer.pointerId === null && state.pointer.sprintPointerId === null) return;
   if (isNode03Defeated()) {
     if (event) event.preventDefault();
@@ -14066,6 +14117,7 @@ function startPlayerHold(event, picked) {
   hold.timer = window.setTimeout(function () {
     if (state.pointer.playerHold !== hold) return;
     state.pointer.playerHold = null;
+    hold.fired = true;
     // Stilstaan en het menu openen (de vinger blijft nog even liggen; loslaten doet daarna niets meer).
     if (state.pointer.active && state.pointer.pointerId === hold.pointerId) {
       clearPointerTarget(false);
@@ -14179,6 +14231,259 @@ function partyPlayerPosition(playerId) {
   // Kevin 8-11: renderState is { position: {x, z} } (zelfde fout als bij de minimap-stipjes).
   const position = entry?.renderState?.position || entry?.position || null;
   return position && Number.isFinite(Number(position.x)) && Number.isFinite(Number(position.z)) ? { x: Number(position.x), z: Number(position.z) } : null;
+}
+
+// ---------- Camera-keuze (Kevin 19-11): draaien, knijpen en joystick ----------
+// De camera zelf zit in de runtime (top-down of third-person, kaart Project). Hier alleen de invoer:
+// rechtermuisknop slepen (pc), vinger slepen en knijpen (mobiel), en de joystick (mobiel, third-person).
+function gameCameraState() {
+  return state.runtime && typeof state.runtime.getGameCameraState === "function" ? state.runtime.getGameCameraState() : null;
+}
+
+function hasStickMovementInput() {
+  return cameraInput.stick.active === true && Math.hypot(cameraInput.stick.x, cameraInput.stick.y) > 0.15;
+}
+
+function beginCameraOrbit(event, options = {}) {
+  cameraInput.orbit = {
+    pointerId: event.pointerId,
+    touch: event.pointerType === "touch",
+    downX: event.clientX,
+    downY: event.clientY,
+    lastX: event.clientX,
+    lastY: event.clientY,
+    downAt: performance.now(),
+    moved: false,
+    picked: options.picked || null,
+    tapToMove: options.tapToMove === true,
+    hold: options.hold || null
+  };
+  if (typeof canvas?.setPointerCapture === "function") {
+    try { canvas.setPointerCapture(event.pointerId); } catch {}
+  }
+}
+
+function beginCameraPinch(event) {
+  const orbit = cameraInput.orbit;
+  if (!orbit || !orbit.touch || orbit.pointerId === event.pointerId || cameraInput.pinch) return false;
+  event.preventDefault();
+  cancelPlayerHold();
+  cameraInput.pinch = {
+    a: orbit.pointerId,
+    b: event.pointerId,
+    points: new Map([[orbit.pointerId, { x: orbit.lastX, y: orbit.lastY }], [event.pointerId, { x: event.clientX, y: event.clientY }]]),
+    distance: Math.max(1, Math.hypot(orbit.lastX - event.clientX, orbit.lastY - event.clientY))
+  };
+  orbit.moved = true;
+  if (typeof canvas?.setPointerCapture === "function") {
+    try { canvas.setPointerCapture(event.pointerId); } catch {}
+  }
+  return true;
+}
+
+function moveCameraGesture(event) {
+  const pinch = cameraInput.pinch;
+  if (pinch && (event.pointerId === pinch.a || event.pointerId === pinch.b)) {
+    event.preventDefault();
+    pinch.points.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    const a = pinch.points.get(pinch.a);
+    const b = pinch.points.get(pinch.b);
+    const distance = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+    // Vingers uit elkaar = dichterbij (kleinere afstand).
+    if (state.runtime && typeof state.runtime.zoomGameCamera === "function") state.runtime.zoomGameCamera(pinch.distance / distance);
+    pinch.distance = distance;
+    return true;
+  }
+  const orbit = cameraInput.orbit;
+  if (!orbit || event.pointerId !== orbit.pointerId) return false;
+  event.preventDefault();
+  if (!orbit.moved && Math.hypot(event.clientX - orbit.downX, event.clientY - orbit.downY) > CAMERA_DRAG_THRESHOLD_PX) {
+    orbit.moved = true;
+    cancelPlayerHold();
+  }
+  if (orbit.moved && state.runtime && typeof state.runtime.orbitGameCamera === "function") {
+    state.runtime.orbitGameCamera(event.clientX - orbit.lastX, event.clientY - orbit.lastY, orbit.touch ? "touch" : "mouse");
+    if (state.minimapHud.elements) state.minimapHud.dirty = true;
+  }
+  orbit.lastX = event.clientX;
+  orbit.lastY = event.clientY;
+  return true;
+}
+
+function endCameraGesture(event) {
+  if (!event) {
+    const had = Boolean(cameraInput.orbit || cameraInput.pinch);
+    cameraInput.orbit = null;
+    cameraInput.pinch = null;
+    return had;
+  }
+  const pointerId = event.pointerId;
+  const pinch = cameraInput.pinch;
+  if (pinch && (pointerId === pinch.a || pointerId === pinch.b || pointerId === undefined)) {
+    if (event) event.preventDefault();
+    // Na knijpen niets meer met de overgebleven vinger (geen tik-lopen, geen schok in de camera).
+    cameraInput.pinch = null;
+    cameraInput.orbit = null;
+    return true;
+  }
+  const orbit = cameraInput.orbit;
+  if (!orbit || (pointerId !== undefined && pointerId !== orbit.pointerId)) return false;
+  if (event) event.preventDefault();
+  cameraInput.orbit = null;
+  if (orbit.moved || event?.type === "pointercancel" || event?.type === "lostpointercapture") return true;
+  if (orbit.picked) {
+    openPlayerMenuFor(orbit.picked, orbit.downX, orbit.downY);
+    return true;
+  }
+  if (orbit.tapToMove && !orbit.hold?.fired && state.runtime && typeof state.runtime.screenToGround === "function") {
+    const ground = state.runtime.screenToGround(orbit.downX, orbit.downY);
+    if (ground && Number.isFinite(Number(ground.x)) && Number.isFinite(Number(ground.z))
+      && startClickToMoveTarget(Number(ground.x), Number(ground.z), "tap-third-person")) {
+      sendInputState({ force: true });
+    }
+  }
+  return true;
+}
+
+function touchScreenDevice() {
+  try {
+    return window.matchMedia("(pointer: coarse)").matches || (navigator.maxTouchPoints > 0 && !window.matchMedia("(pointer: fine)").matches);
+  } catch {
+    return false;
+  }
+}
+
+// Joystick tonen, verbergen en op de ingestelde plek zetten; de keuze van de speler toepassen. Hooguit 2x per seconde.
+function syncGameCameraControls(now) {
+  if (now - cameraInput.checkedAt < 500) return;
+  cameraInput.checkedAt = now;
+  const camera = gameCameraState();
+  if (camera && camera.playerChoice && cameraInput.preference && camera.mode !== cameraInput.preference) {
+    state.runtime.setGameCameraMode(cameraInput.preference);
+  }
+  const current = gameCameraState();
+  const touch = current?.touch || {};
+  const show = Boolean(current && current.mode === "third-person" && touchScreenDevice() && isMmoGameplayReady() && !isNode03Defeated());
+  const signature = JSON.stringify([show, touch.side, touch.size, touch.x, touch.y]);
+  if (signature === cameraInput.signature) return;
+  cameraInput.signature = signature;
+  if (!show) {
+    if (cameraInput.joystick) cameraInput.joystick.hidden = true;
+    endStickInput();
+    return;
+  }
+  const element = cameraInput.joystick || createJoystick();
+  const size = clamp(num(touch.size, 120), 60, 260);
+  element.hidden = false;
+  element.style.width = size + "px";
+  element.style.height = size + "px";
+  element.style.bottom = "calc(" + Math.max(0, num(touch.y, 40)) + "px + env(safe-area-inset-bottom, 0px))";
+  element.style.left = touch.side === "right" ? "" : "calc(" + Math.max(0, num(touch.x, 28)) + "px + env(safe-area-inset-left, 0px))";
+  element.style.right = touch.side === "right" ? "calc(" + Math.max(0, num(touch.x, 28)) + "px + env(safe-area-inset-right, 0px))" : "";
+}
+
+function createJoystick() {
+  const root = document.getElementById("gameRoot") || document.body;
+  const element = document.createElement("div");
+  element.className = "gkStick";
+  element.hidden = true;
+  const knob = document.createElement("div");
+  knob.className = "gkStickKnob";
+  element.appendChild(knob);
+  element.addEventListener("pointerdown", function (event) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!isMmoGameplayReady() || isNode03Defeated() || cameraInput.stick.active) return;
+    try { element.setPointerCapture(event.pointerId); } catch {}
+    cameraInput.stick.active = true;
+    cameraInput.stick.pointerId = event.pointerId;
+    updateStickFromEvent(event, true);
+  });
+  element.addEventListener("pointermove", function (event) {
+    if (!cameraInput.stick.active || event.pointerId !== cameraInput.stick.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    updateStickFromEvent(event, false);
+  });
+  const end = function (event) {
+    if (event.pointerId !== cameraInput.stick.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    endStickInput();
+  };
+  element.addEventListener("pointerup", end);
+  element.addEventListener("pointercancel", end);
+  element.addEventListener("lostpointercapture", end);
+  root.appendChild(element);
+  cameraInput.joystick = element;
+  return element;
+}
+
+function updateStickFromEvent(event, starting) {
+  const element = cameraInput.joystick;
+  if (!element) return;
+  const rect = element.getBoundingClientRect();
+  const radius = Math.max(1, rect.width / 2);
+  let x = (event.clientX - (rect.left + radius)) / radius;
+  let y = (event.clientY - (rect.top + radius)) / radius;
+  const length = Math.hypot(x, y);
+  if (length > 1) { x /= length; y /= length; }
+  const stick = cameraInput.stick;
+  const wasMoving = hasStickMovementInput();
+  stick.x = x;
+  stick.y = y;
+  const knob = element.firstChild;
+  if (knob) knob.style.transform = "translate(calc(-50% + " + (x * radius * 0.6).toFixed(1) + "px), calc(-50% + " + (y * radius * 0.6).toFixed(1) + "px))";
+  // Helemaal duwen = rennen (als dat aan staat op de kaart Project).
+  const runAtEdge = gameCameraState()?.touch?.runAtEdge !== false;
+  const sprint = runAtEdge && Math.hypot(x, y) > 0.92;
+  if (sprint !== stick.sprinting) {
+    stick.sprinting = sprint;
+    state.input.sprint = sprint;
+  }
+  const moving = hasStickMovementInput();
+  const now = performance.now();
+  if (moving && !wasMoving) {
+    noteLocalControlStart(false, "joystick");
+    clearPointerTarget(false);
+    state.lastFrameAt = now;
+  }
+  if (!moving && wasMoving) {
+    if (!state.pointer.active) stepMovement(now);
+    if (!hasKeyboardMovementInput()) clearMovementInput("joystick-center", { finalPointerTarget: localStopPointForServer() });
+    return;
+  }
+  // Nieuwe richting meteen naar de server als hij flink verandert (anders volgt hij met de gewone verzendtijd).
+  const turned = Math.abs(Math.atan2(x, -y) - Math.atan2(stick.lastSentX, -stick.lastSentY));
+  if (moving && (starting || !wasMoving || (turned > 0.26 && turned < Math.PI * 2 - 0.26 && now - stick.lastSentAt > 90) || sprint !== stick.lastSentSprint)) {
+    stick.lastSentAt = now;
+    stick.lastSentX = x;
+    stick.lastSentY = y;
+    stick.lastSentSprint = sprint;
+    sendInputState({ force: true });
+  }
+}
+
+function endStickInput() {
+  const stick = cameraInput.stick;
+  if (!stick.active) return;
+  const wasMoving = hasStickMovementInput();
+  if (wasMoving && !state.pointer.active) stepMovement(performance.now());
+  stick.active = false;
+  stick.pointerId = null;
+  stick.x = 0;
+  stick.y = 0;
+  if (stick.sprinting) {
+    stick.sprinting = false;
+    state.input.sprint = false;
+  }
+  const knob = cameraInput.joystick?.firstChild;
+  if (knob) knob.style.transform = "translate(-50%, -50%)";
+  if (wasMoving && !hasKeyboardMovementInput() && !state.pointer.active) {
+    clearMovementInput("joystick-up", { finalPointerTarget: localStopPointForServer() });
+  } else if (wasMoving) {
+    sendInputState({ force: true });
+  }
 }
 
 function bindPointerControls() {
@@ -14531,6 +14836,8 @@ function ensureGkHud() {
         modules: gkHudModules(),
         player: gkHudPlayer(),
         isAdmin: state.node03.snapshot?.viewer?.isAdmin === true,
+        // Camera-keuze: mag de speler zelf kiezen tussen van boven en achter je (kaart Project)?
+        cameraChoice: gameCameraState()?.playerChoice === true,
         autoAttack: state.node03.autoAttack.targetId || null,
         // MMO (3-11): je groep en openstaande uitnodigingen.
         party: state.party.view,
@@ -14638,6 +14945,12 @@ function ensureGkHud() {
     },
     setViewInset: function (right, bottom) {
       if (state.runtime && typeof state.runtime.setViewInset === "function") state.runtime.setViewInset(right, bottom);
+    },
+    setCameraMode: function (value) {
+      cameraInput.preference = value === "third-person" || value === "top-down" ? value : null;
+      cameraInput.checkedAt = 0;
+      if (state.runtime && typeof state.runtime.setGameCameraMode === "function") state.runtime.setGameCameraMode(cameraInput.preference);
+      if (state.minimapHud.elements) state.minimapHud.dirty = true;
     },
     setPixels: function (value) {
       gkHudPixels = Number(value) || 1;

@@ -1,4 +1,4 @@
-// Fundament zonder nodes: de basis van de wereld (grond, startplek, speler, camera, licht) staat in één
+// Fundament zonder nodes: de basis van de wereld (grond, startplek, speler, licht) staat in één
 // kaart "Wereld" onder Instellingen. Zonder die kaart gebruikt de build de standaardwaarden hieronder,
 // zodat een lege editor toch een speelbare wereld geeft.
 import { HELP_ID, HELP_NAME, help, ui } from "./ui.js";
@@ -68,12 +68,7 @@ export const WORLD_KINDS = {
       playerScale: num("Grootte van de speler", "📏", 1, 0.1, 10, 0.05, "×",
         help("Hoe groot het speler-model getekend wordt.", "1 = zoals het model is gemaakt.", "Speler te groot of te klein → schuif."),
         { more: true, range: [0.2, 3] }),
-      cameraDistance: num("Camera-afstand", "🎥", 24, 5, 120, 1, "m",
-        help("Hoe ver de camera bij de start van de speler af staat.", "15-30 m.", "Je ziet te weinig → verder weg."),
-        { more: true, range: [5, 60] }),
-      cameraPitch: num("Camera-hoek", "📐", 55, 10, 89, 1, "°",
-        help("Hoe schuin de camera naar beneden kijkt.", "45 tot 65 graden werkt meestal goed.", "Je kijkt te plat → hoger."),
-        { more: true }),
+      // Camera-afstand en camera-hoek staan sinds 19-11 op de kaart Project (camera-keuze, kinds/camera.js).
       skyColor: color("Kleur van de lucht", "🌤️", "#8fb8de",
         help("De achtergrondkleur boven de wereld.", "Lichtblauw voor overdag, donkerblauw voor de nacht.", "Te fel → kies een zachtere kleur."), { more: true }),
       sunStrength: num("Zon", "☀️", 1.4, 0, 5, 0.05, "",

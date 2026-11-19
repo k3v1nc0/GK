@@ -12,6 +12,7 @@ import { COMBAT_KINDS } from "./kinds/combat.js";
 import { LOOT_ENTRY_KEYS, LOOT_KINDS } from "./kinds/loot.js";
 import { HELP_ID, HELP_NAME, help, ui } from "./kinds/ui.js";
 import { WORLD_KINDS } from "./kinds/world.js";
+import { CAMERA_FIELDS } from "./kinds/camera.js";
 import { GAME_KINDS } from "./kinds/game.js";
 import { NETWORK_KINDS } from "./kinds/network.js";
 import { WATER_WALK_KINDS } from "./kinds/water-walk.js";
@@ -81,7 +82,9 @@ export const CANONICAL_KINDS = {
       // Leeg = overal "XP per level". Characters houden hun XP; hun level volgt de nieuwe lijn.
       xpCurve: { type: "pointList", required: false, minItems: 2, maxItems: XP_CURVE_MAX_POINTS, min: 1, max: 100000000, audience: "client", label: "XP-grafiek",
         ui: ui("📈", "curve", "instellingen"), default: null,
-        help: help("Hoeveel XP elk level kost, als lijn. Links de eerste levels, rechts het hoogste level. Sleep een punt omhoog om die levels langer te laten duren.", "Laag beginnen en langzaam oplopen: bijv. level 1 kost 100 XP, level 10 kost 600 en level 50 kost 5.000. Klik op de lijn voor een extra punt.", "Spelers zijn in een uur op het hoogste level → sleep de punten rechts omhoog. Characters houden hun XP; hun level past zich aan.") }
+        help: help("Hoeveel XP elk level kost, als lijn. Links de eerste levels, rechts het hoogste level. Sleep een punt omhoog om die levels langer te laten duren.", "Laag beginnen en langzaam oplopen: bijv. level 1 kost 100 XP, level 10 kost 600 en level 50 kost 5.000. Klik op de lijn voor een extra punt.", "Spelers zijn in een uur op het hoogste level → sleep de punten rechts omhoog. Characters houden hun XP; hun level past zich aan.") },
+      // Camera-keuze (Kevin 19-11): top-down of third-person, met alle camera-instellingen (kinds/camera.js).
+      ...CAMERA_FIELDS
     }
   },
   item_definition: {

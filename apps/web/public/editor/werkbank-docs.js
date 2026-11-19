@@ -1008,6 +1008,14 @@ export function createDocBench(options = {}) {
       bench.draft = { kind, body: start, idTouched: false };
     }
     const body = isNew ? bench.draft.body : clone(doc.body);
+    // Camera-keuze (19-11): camera-afstand en -hoek stonden vroeger op de kaart Wereld. Toon (en bewaar bij de
+    // volgende wijziging) die oude waarde op Project, zodat de editor hetzelfde laat zien als de game.
+    if (kind === "project_settings") {
+      const oldWorld = bench.docs("world_settings")[0]?.body || null;
+      for (const key of ["cameraDistance", "cameraPitch"]) {
+        if (emptyValue(body[key]) && oldWorld && !emptyValue(oldWorld[key])) body[key] = oldWorld[key];
+      }
+    }
     const where = place || spec.place;
     const head = el("div", { class: "wbdHead" }, [
       el("span", { class: "wbdHeadIcon", text: kind === "area" ? (spec.fields.soort.optionIcons?.[areaSoort(body)] || spec.icon) : spec.icon }),
