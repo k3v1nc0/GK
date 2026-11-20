@@ -1,4 +1,4 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261120-death-hold1";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261120-sky1";
 import { nextPlayerRouteWaypoint } from "../shared/player-path-client.js?v=20261108-roads9";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20261106-perf1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
@@ -4381,7 +4381,7 @@ function updateDayNight() {
   if (!cfg || !state.runtime || typeof state.runtime.setDaylight !== "function") return;
   const clock = dayNightState(estimateServerEpochNow(), cfg);
   const k = clock.nightLight >= 1 ? 0 : (1 - clock.light) / (1 - clock.nightLight);
-  state.runtime.setDaylight(clock.light, mixColor(cfg.daySkyColor || "#8fb8de", cfg.nightSkyColor || "#0e1a33", k));
+  state.runtime.setDaylight(clock.light, mixColor(cfg.daySkyColor || "#8fb8de", cfg.nightSkyColor || "#0e1a33", k), k);
   state.dayNight = { isDay: clock.isDay, isLightDay: clock.light >= (1 + clock.nightLight) / 2, msToSwitch: clock.msToSwitch, always: !Number(cfg.nightMinutes) };
 }
 

@@ -47,7 +47,9 @@ test("de kaart Wereld stuurt grond, startplek, speler, camera en lucht", () => {
   assert.equal(world.player.walkAnimation, "Walk cycle");
   assert.equal(world.player.runAnimation, "Run cycle");
   assert.equal(world.camera.distance, 30);
-  assert.equal(world.world.backgroundColor, "#102030");
+  // Kevin 20-11: met de lucht aan is Kleur van de lucht de bovenkant; de achtergrond (en mist) is de horizon.
+  assert.equal(world.sky.topColor, "#102030");
+  assert.equal(world.world.backgroundColor, world.sky.horizonColor);
   assert.equal(world.gameProject.project.gameName, "Testwereld");
 });
 

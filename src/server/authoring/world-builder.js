@@ -75,6 +75,21 @@ export function sunPositionOf(settings) {
   return { x: round(Math.sin(angle) * Math.cos(height) * 24), y: round(Math.sin(height) * 24), z: round(Math.cos(angle) * Math.cos(height) * 24) };
 }
 
+// Kevin 20-11: de lucht uit Instellingen > Wereld > Lucht en wolken (koepel-shader in shared/sky-render.js).
+// Procenten gaan als 0-1 mee; met de lucht uit blijft alleen de egale Kleur van de lucht over.
+export function skyConfigOf(settings) {
+  if (settings?.skyOn === false) return { enabled: false };
+  const n = (key, def) => (Number.isFinite(Number(settings?.[key])) ? Number(settings[key]) : def);
+  const pct = (key, def) => Math.max(0, Math.min(1, n(key, def) / 100));
+  return {
+    enabled: true, topColor: settings.skyColor, horizonColor: settings.skyHorizonColor,
+    nightTopColor: settings.nightSkyColor, nightHorizonColor: settings.nightHorizonColor,
+    sunColor: settings.sunColor, sunSize: n("sunSize", 4), sunGlow: pct("sunGlow", 50),
+    cloudColor: settings.cloudColor, cloudCoverage: pct("cloudCoverage", 45), cloudSoftness: pct("cloudSoftness", 35),
+    cloudSize: n("cloudSize", 100) / 100, cloudRim: pct("cloudRim", 60), windSpeed: n("windSpeed", 1), windAngle: n("windAngle", 45)
+  };
+}
+
 // Kevin 16-11: de schaduw van de game uit Instellingen (aan/uit, modellen ook, scherpte, hoe ver). De editor houdt zijn eigen beeld.
 const SHADOW_MAP_SIZES = { low: 512, medium: 1024, high: 2048 };
 export function gameShadowOf(settings) {
@@ -262,7 +277,10 @@ export function baseRuntimeWorld(data = {}, options = {}) {
   const gameName = data?.project?.gameName || "GK";
   const size = Number(settings.groundSize);
   const half = size / 2;
-  const sky = settings.skyColor;
+  const skyConfig = skyConfigOf(settings);
+  // Achtergrond en mist: met de lucht aan de horizon (dan loopt de wereld in de lucht over), anders de egale lucht.
+  const sky = skyConfig.enabled ? settings.skyHorizonColor : settings.skyColor;
+  const nightSky = skyConfig.enabled ? settings.nightHorizonColor : settings.nightSkyColor;
   const cameraConfig = cameraConfigOf(data);
 
   const ground = {
@@ -315,7 +333,8 @@ export function baseRuntimeWorld(data = {}, options = {}) {
     spawn: { spawnId: WORLD_SPAWN_ID, role: "zone_default", zoneRef: WORLD_ZONE_ID, x: spawnPoint.x, y: 0, z: spawnPoint.z, facing: spawnPoint.facing },
     // Werkbank Fase 10: dag en nacht (de game rekent het licht uit de tijd van de server; shared/day-night.js).
     dayNight: { dayMinutes: Number(settings.dayMinutes), nightMinutes: Number(settings.nightMinutes), nightLightPct: Number(settings.nightLightPct),
-      daySkyColor: sky, nightSkyColor: settings.nightSkyColor },
+      daySkyColor: sky, nightSkyColor: nightSky },
+    sky: skyConfig,
     lights: [
       { id: "ambient_light", type: "ambient", color: "#ffffff", intensity: Number(settings.lightStrength) },
       { id: "sun_light", type: "directional", color: "#ffffff", intensity: Number(settings.sunStrength), position: sunPositionOf(settings) }

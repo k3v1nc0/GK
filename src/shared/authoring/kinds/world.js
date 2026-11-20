@@ -18,6 +18,10 @@ const DAY_GROUP = "🌗 Dag en nacht";
 // Kevin 16-11: zon en schaduw zelf instellen (de game en de editor tonen dezelfde zon).
 const SUN_GROUP = "☀️ Zon en schaduw";
 const SHADOWS_ON = Object.freeze({ key: "shadowsOn", is: [true] });
+// Kevin 20-11: lucht met kleurverloop, zon en wolken (een goedkope shader, ook voor de oude laptop en mobiel).
+const SKY_GROUP = "☁️ Lucht en wolken";
+const SKY_ON = Object.freeze({ key: "skyOn", is: [true] });
+const sky = (extra = {}) => Object.assign({ group: SKY_GROUP, when: SKY_ON }, extra);
 
 export const WORLD_KINDS = {
   world_settings: {
@@ -69,8 +73,33 @@ export const WORLD_KINDS = {
         help("Hoe groot het speler-model getekend wordt.", "1 = zoals het model is gemaakt.", "Speler te groot of te klein → schuif."),
         { more: true, range: [0.2, 3] }),
       // Camera-afstand en camera-hoek staan sinds 19-11 op de kaart Project (camera-keuze, kinds/camera.js).
-      skyColor: color("Kleur van de lucht", "🌤️", "#8fb8de",
-        help("De achtergrondkleur boven de wereld.", "Lichtblauw voor overdag, donkerblauw voor de nacht.", "Te fel → kies een zachtere kleur."), { more: true }),
+      skyOn: { type: "boolean", required: false, audience: "client", label: "Lucht met zon en wolken",
+        ui: ui("🌤️", "toggle", "instellingen", { group: SKY_GROUP }), default: true,
+        help: help("Tekent een echte lucht: van de horizon naar boven een kleurverloop, de zon en drijvende wolken. Uit = één egale kleur (Kleur van de lucht).", "Aan. De lucht is licht genoeg voor een oude laptop en mobiel.", "De game hapert alleen als je veel lucht ziet → zet de wolken op 0 % of zet dit uit.") },
+      skyColor: color("Kleur van de lucht (boven)", "🎨", "#8fb8de",
+        help("De kleur recht boven je. Naar beneden loopt hij over in de Kleur van de horizon. Met de lucht uit is dit de hele achtergrond.", "Een dieper blauw dan de horizon, bijv. #5e9bd6.", "Lucht te fel → kies een zachtere kleur."), { group: SKY_GROUP }),
+      skyHorizonColor: color("Kleur van de horizon", "🌅", "#d3e4f1",
+        help("De kleur onderaan de lucht, bij de horizon. Mist en verre dingen krijgen ook deze kleur, zodat de wereld mooi in de lucht overloopt.", "Lichter en grijzer dan boven, bijv. #d3e4f1. Oranje voor een avondsfeer.", "Harde rand tussen wereld en lucht → kies een horizon die op je verre bergen lijkt."), sky()),
+      sunColor: color("Zon: kleur", "🌞", "#fff1c9",
+        help("De kleur van de zon, de gloed eromheen en de warme randjes van de wolken. De zon staat waar het zonlicht vandaan komt (Zon: richting en hoogte).", "Bijna wit met een beetje geel. Oranje voor een avondzon.", "Zon niet te zien → kijk in de richting van Zon: richting, of zet de hoogte lager."), sky()),
+      sunSize: num("Zon: grootte", "⭕", 4, 0.5, 20, 0.5, "°",
+        help("Hoe groot de zon aan de hemel is (doorsnede in graden).", "3-6°. De echte zon is maar 0,5°.", "Zon te klein om te zien → groter."), sky({ range: [1, 12] })),
+      sunGlow: num("Zon: gloed", "✨", 50, 0, 100, 5, "%",
+        help("Hoe sterk de lucht om de zon heen oplicht.", "30-60 %.", "Lucht om de zon helemaal wit → lager."), sky()),
+      cloudCoverage: num("Wolken: hoeveel", "☁️", 45, 0, 100, 5, "%",
+        help("Hoeveel van de lucht vol wolken zit. 0 % = helemaal geen wolken (en de lucht kost dan nog minder).", "30-60 % voor een mooie dag, 80 % of meer voor bewolkt.", "Lucht te leeg → hoger. Je ziet de zon nooit → lager."), sky()),
+      cloudColor: color("Wolken: kleur", "🎨", "#ffffff",
+        help("De kleur van de wolken overdag ('s nachts worden ze vanzelf donker).", "Wit, of lichtgrijs voor somber weer.", "Wolken te fel → iets grijzer."), sky()),
+      cloudSoftness: num("Wolken: zachtheid", "🌫️", 35, 0, 100, 5, "%",
+        help("Hoe zacht de randen van de wolken zijn. 0 % = scherpe randen, 100 % = heel wazig.", "25-50 %.", "Wolken zien eruit als vlekken met een harde rand → zachter."), sky()),
+      cloudSize: num("Wolken: grootte", "📏", 100, 25, 400, 5, "%",
+        help("Hoe groot de wolken zijn. 100 % = normaal.", "70-150 %.", "Wolken te druk en klein → groter."), sky()),
+      cloudRim: num("Wolken: warme rand bij de zon", "🔆", 60, 0, 100, 5, "%",
+        help("Wolken dicht bij de zon krijgen een warm randje in de kleur van de zon.", "40-80 %.", "Wolken bij de zon te fel → lager."), sky()),
+      windSpeed: num("Wind: snelheid", "💨", 1, 0, 10, 0.1, "",
+        help("Hoe snel de wolken drijven. 0 = ze staan stil.", "0,5 tot 2 voor rustig drijvende wolken.", "Wolken razen voorbij → lager."), sky({ range: [0, 5] })),
+      windAngle: num("Wind: richting", "🧭", 45, 0, 359, 1, "°",
+        help("Naar welke kant de wolken drijven. 0° = naar boven op de kaart, 90° = naar rechts (net als Zon: richting).", "Elke richting is goed.", "Wolken drijven de verkeerde kant op → draai de richting."), sky()),
       sunStrength: num("Zon", "☀️", 1.4, 0, 5, 0.05, "",
         help("Hoe fel de zon schijnt (schaduwen).", "1 tot 2 werkt meestal goed.", "Alles te donker → hoger."),
         { more: true, range: [0, 3] }),
@@ -108,7 +137,9 @@ export const WORLD_KINDS = {
         help("Hoeveel licht er 's nachts nog is, vergeleken met de dag. Het licht loopt in een paar minuten rustig over (schemer).", "30-45 %: duidelijk nacht, maar je ziet nog waar je loopt.", "Je ziet niets meer → hoger. Je merkt de nacht niet → lager."),
         { group: DAY_GROUP }),
       nightSkyColor: color("Kleur van de lucht 's nachts", "🌌", "#0e1a33",
-        help("De achtergrondkleur 's nachts. Overdag is het de Kleur van de lucht.", "Donkerblauw, bijv. #0e1a33.", "De nacht ziet er grijs uit → kies een donkerder blauw."), { group: DAY_GROUP }),
+        help("De kleur van de lucht 's nachts (boven). Overdag is het de Kleur van de lucht.", "Donkerblauw, bijv. #0e1a33.", "De nacht ziet er grijs uit → kies een donkerder blauw."), { group: DAY_GROUP }),
+      nightHorizonColor: color("Kleur van de horizon 's nachts", "🌃", "#1a2747",
+        help("De kleur onderaan de lucht 's nachts (alleen met Lucht met zon en wolken aan). Mist krijgt ook deze kleur.", "Iets lichter dan de nachtlucht, bijv. #1a2747.", "Harde rand tussen wereld en lucht 's nachts → kies een kleur die op je donkere bergen lijkt."), { group: DAY_GROUP, when: SKY_ON }),
       // Terugbouw zonder nodes: muziek voor de hele wereld (een gebied of deelgebied met eigen muziek gaat voor).
       musicAssetId: { type: "asset", assetType: "audio", required: false, maxLength: 160, audience: "client", label: "Muziek",
         ui: ui("🎵", "asset", "instellingen", { more: true }), default: null,

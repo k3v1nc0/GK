@@ -30,6 +30,7 @@ import { terrainHeightAt } from "./terrain.js";
 import { createPlayerPathClient } from "./player-path-client.js?v=20261108-roads9";
 import { createTerrainLayer, seedTerrainChunk, seedTerrainPaint } from "./terrain-render.js?v=20261120-label-occlusion2";
 import { createWaterLayer } from "./water-render.js?v=20261030-terrein6";
+import { createSkyLayer } from "./sky-render.js?v=20261120-sky1";
 export {
   effectiveGroundBounds,
   effectiveWorldGroundBounds,
@@ -4684,6 +4685,8 @@ export function createGkWorldRuntime(canvas, options = {}) {
   const terrainLayer = createTerrainLayer({ scene, mode, requestRender: function (reason) { requestRender(reason); } });
   // Ronde 3: watervlakken (los, plat) uit world.terrain.water; de editor-tab Terrein zet ze ook live.
   const waterLayer = createWaterLayer({ scene, requestRender: function (reason) { requestRender(reason); } });
+  // Kevin 20-11: lucht met zon en wolken (een goedkope koepel-shader; world.sky uit kaart Wereld).
+  const skyLayer = createSkyLayer({ scene, requestRender: function (reason) { requestRender(reason); }, lowQuality: rendererProfile.software === true });
   const content = new THREE.Group();
   scene.add(content);
 
@@ -8778,6 +8781,7 @@ function resolveChunkDebugCenter(policy) {
     // Interpolatie en HUD-indeling moeten klaar zijn vóór animaties, camera en tekenen.
     try { onBeforeRenderFrame({ now: time }); } catch {}
     waterLayer.update(time);
+    skyLayer.update(time);
     perfHudFrameMs = perfHudWarmup ? perfHudFrameMs * 0.85 + frameMs * 0.15 : frameMs;
     perfHudWarmup = true;
     collisionPerfState.checksLastFrame = 0;
@@ -11790,6 +11794,7 @@ function resolveChunkDebugCenter(policy) {
     scene.fog = null;
     const previousBackground = scene.background;
     scene.background = null;
+    const previousSkyVisible = skyLayer.setHidden(true);
 
     let outputCanvas = null;
     let bakeError = null;
@@ -11921,6 +11926,7 @@ function resolveChunkDebugCenter(policy) {
       renderer.autoClear = previousAutoClear;
       scene.fog = previousFog;
       scene.background = previousBackground;
+      skyLayer.setHidden(!previousSkyVisible);
       renderTarget.dispose();
       restoreResidentContentAfterMinimapBake(previousResidentWindowState);
       restoreTerrainVisualsAfterMinimapBake(previousTerrainVisualState);
@@ -19716,6 +19722,8 @@ function resolveChunkDebugCenter(policy) {
     addZoneEdgeFadeOverlays(world);
     addZoneCanvasBounds(world);
     addLights(world);
+    skyLayer.setSky(world?.sky);
+    skyLayer.setSunFromLight(directionalLights[0]);
     spawnPlayer(world);
     buildFlyers(world);
     if (previousGamePlayerState && player.root) {
@@ -19834,6 +19842,7 @@ function resolveChunkDebugCenter(policy) {
     disposed = true;
     terrainLayer.dispose();
     waterLayer.dispose();
+    skyLayer.dispose();
     rejectFrameProfileWaiters(new Error("runtime destroyed"));
     stopRenderLoop("destroy");
     viewportPanSession = null;
@@ -20131,10 +20140,12 @@ function resolveChunkDebugCenter(policy) {
   }
 
   // Werkbank Fase 10: hoe licht het is (0-1, 1 = dag) en de kleur van de lucht. Alleen bij een echte verandering
-  // (de game roept dit 10x per seconde aan voor een vloeiende schemering).
-  function setDaylight(level, skyColor) {
+  // (de game roept dit 10x per seconde aan voor een vloeiende schemering). nightMix (0 = dag, 1 = nacht) kleurt de
+  // lucht-koepel (zon weg, nachtkleuren, donkere wolken); skyColor is de achtergrond en de mist (de horizon).
+  function setDaylight(level, skyColor, nightMix) {
     const next = Math.max(0.02, Math.min(1, Number(level) || 0));
     const sky = colorOrDefault(skyColor, "");
+    if (skyLayer.setNight(nightMix)) requestRender("sky-night");
     if (Math.abs(next - daylightLevel) < 0.005 && (!sky || scene.background?.getHexString?.() === String(sky).replace("#", "").toLowerCase())) return;
     daylightLevel = next;
     for (const light of ambientLights) light.intensity = num(light.userData.baseIntensity, 0) * next;
