@@ -80,8 +80,18 @@ const INPUT_HOLD_MS = Math.max(0, Number(process.env.GAME_INPUT_HOLD_MS || 0));
 const EVENT_LOG_THROTTLE_MS = Math.max(0, Number(process.env.GAME_EVENT_LOG_THROTTLE_MS || 10000));
 const ANIMATION_STATES = new Set(["idle", "walk", "run"]);
 const PROTOCOL_VERSION = 3;
-// F2-E2-T03: AOI per ontvanger; standaard uit tot de browser- en botproef op :3001 groen is.
-const AOI_ENABLED = process.env.GAME_AOI_ENABLED === "1";
+// F2-E2-T03 / 100 spelers (Kevin 20-11): AOI per ontvanger staat standaard AAN. Je krijgt alleen spelers in de buurt
+// (zelfde of aangrenzend vak van 64 m: 10x per seconde, twee vakken verder: 2x per seconde, verder weg niets).
+// Terug naar het oude gedrag (iedereen naar iedereen): GAME_AOI_ENABLED=0.
+const AOI_ENABLED = process.env.GAME_AOI_ENABLED !== "0";
+// Drukte: zijn er meer spelers dichtbij dan dit, dan krijgen alleen de dichtstbijzijnde 10 updates per seconde
+// en de rest 4 per seconde. Zo blijft het verkeer per speler begrensd, ook als iedereen in één dorp staat.
+const AOI_NEAR_MAX = Math.max(4, Number(process.env.GAME_AOI_NEAR_MAX || 32));
+const AOI_CROWD_INTERVAL_MS = 249;
+// Kleine spelersupdate: naam, model en sessie gaan alleen mee als iemand verschijnt of als die gegevens veranderen;
+// verder alleen plek, draaiing, animatie en volgnummers (zie compactSnapshotRecord).
+const COMPACT_ANIMATIONS = ["idle", "walk", "run"];
+const SNAPSHOT_HEALTH_EVERY_MS = 1000;
 
 function normalizeAnimationState(value) {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -840,6 +850,7 @@ export class MmoService {
     this.aoiPendingByConnectionId = new Map();
     this.aoiSentAtByKey = new Map();
     this.aoiVisibleByConnectionId = new Map();
+    this.aoiStaticByConnectionId = new Map();
     this.wss = null;
     this.worldCache = null;
     this.connectionsById = new Map();
@@ -2001,8 +2012,11 @@ export class MmoService {
     this.pendingRemoteBroadcastByPlayerId.clear();
     for (const item of queued) {
       if (!item || !item.worldId || !item.payload) continue;
-      const stamped = eventMessage(item.payload.type || "remote_player:state_changed", item.payload.payload || item.payload, this.stampServerPayload(item.worldId, item.payload.payload || item.payload));
-      this.broadcastToWorld(item.worldId, stamped, {
+      const inner = item.payload.payload || item.payload;
+      const stamped = eventMessage(item.payload.type || "remote_player:state_changed", inner, this.stampServerPayload(item.worldId, inner));
+      const where = inner?.position || inner;
+      if (inner?.playerId && Number.isFinite(Number(where?.x)) && Number.isFinite(Number(where?.z))) this.interestIndex.update(inner.playerId, Number(where.x), Number(where.z));
+      this.broadcastToWorldNear(item.worldId, inner?.playerId || null, stamped, {
         excludeUserId: item.excludeUserId || null
       });
     }
@@ -2048,7 +2062,26 @@ export class MmoService {
         });
       }
     }
+    // AOI: alleen wie in de buurt is (anders stond een speler ver weg stil in beeld, want daarvan komen geen updates).
+    if (AOI_ENABLED && connection.player?.id && Array.isArray(snapshot.players)) {
+      if (position) this.interestIndex.update(connection.player.id, num(position.x, 0), num(position.z, 0));
+      snapshot.players = snapshot.players.filter((entry) => entry && (entry.isSelfAccount === true || this.aoiCanSee(connection.player.id, entry.playerId)));
+    }
     send(connection.ws, eventMessage("world:presence_snapshot", snapshot, this.stampServerPayload(connection.worldId, snapshot)));
+  }
+
+  // AOI: een bericht over één speler alleen naar wie hem kan zien (en naar zijn eigen account); zonder AOI naar iedereen.
+  broadcastToWorldNear(worldId, actorId, message, options = {}) {
+    if (!AOI_ENABLED || !actorId) return this.broadcastToWorld(worldId, message, options);
+    const text = JSON.stringify(message);
+    for (const connectionId of Array.from(this.connectionsByWorldId.get(worldId) || [])) {
+      const connection = this.connectionsById.get(connectionId);
+      if (!connection || connection.closed) continue;
+      if (options.excludeUserId && connection.user?.id === options.excludeUserId) continue;
+      const viewerId = connection.player?.id;
+      if (viewerId !== actorId && !this.aoiCanSee(viewerId, actorId)) continue;
+      sendText(connection.ws, text);
+    }
   }
 
   broadcastRemotePlayerJoined(connection, position) {
@@ -2056,7 +2089,8 @@ export class MmoService {
     const connectedSessionCount = this.countConnectedPlayerSessions(connection.player.id);
     const payload = publicRemotePlayerJoined(connection.player, position, connectedSessionCount, connection.worldId, this.characterModel(connection.player));
     if (!payload) return;
-    this.broadcastToWorld(connection.worldId, eventMessage("remote_player:joined", payload, this.stampServerPayload(connection.worldId, payload)), {
+    this.interestIndex.update(connection.player.id, num(position.x, 0), num(position.z, 0));
+    this.broadcastToWorldNear(connection.worldId, connection.player.id, eventMessage("remote_player:joined", payload, this.stampServerPayload(connection.worldId, payload)), {
       excludeUserId: connection.user?.id || null
     });
   }
@@ -2088,6 +2122,7 @@ export class MmoService {
     const presence = this.primaryPresenceByPlayerId.get(state.player_id) || null;
     return {
       playerId: state.player_id,
+      n: this.netIdFor(state.player_id),
       displayName: presence?.displayName || null,
       modelAssetId: presence?.modelAssetId || null,
       selectedCharacterId: presence?.selectedCharacterId || null,
@@ -2130,14 +2165,16 @@ export class MmoService {
       : nowMs();
     const snapshotSeq = ++this.snapshotSeq;
     const serverTick = Number.isFinite(Number(options.serverTick)) ? Math.max(0, Math.floor(Number(options.serverTick))) : this.serverTick;
-    const players = Array.isArray(playerStates) ? playerStates.map((state) => this.snapshotPlayerStateRecord(state, options)).filter(Boolean) : [];
+    const players = Array.isArray(options.records)
+      ? options.records
+      : Array.isArray(playerStates) ? playerStates.map((state) => this.snapshotPlayerStateRecord(state, options)).filter(Boolean) : [];
     return {
       ok: true,
       type: "mmo:snapshot",
       protocolVersion: PROTOCOL_VERSION,
       worldId: worldId || null,
       serverTick: serverTick,
-      ...this.serverHealthPayload(),
+      ...(options.withHealth === false ? {} : this.serverHealthPayload()),
       serverTimeMs: serverTimeMs,
       snapshotSeq: snapshotSeq,
       players: players
@@ -2155,14 +2192,76 @@ export class MmoService {
     return payload;
   }
 
-  // F2-E2-T03 (achter GAME_AOI_ENABLED=1): per ontvanger alleen spelers binnen de AOI, self 20 Hz,
-  // near 10 Hz, far 2 Hz. Overgeslagen updates blijven per ontvanger staan (laatste stand wint), zodat
-  // een stilstaande speler toch zijn eindpositie krijgt. Trage sockets (> 512 KiB) worden gesloten.
-  broadcastWorldSnapshotWithInterest(worldId, playerStates, options = {}) {
-    const nowMsValue = Number.isFinite(Number(options.serverTimeMs)) ? Number(options.serverTimeMs) : nowMs();
-    for (const state of playerStates || []) {
-      if (state?.player_id) this.interestIndex.update(state.player_id, num(state.x, 0), num(state.z, 0));
+  // Kort nummer per speler (in plaats van de lange speler-id) voor de kleine spelersupdate.
+  netIdFor(playerId) {
+    const key = String(playerId || "");
+    if (!key) return 0;
+    if (!this.netIdByPlayerId) {
+      this.netIdByPlayerId = new Map();
+      this.nextNetId = 1;
     }
+    let id = this.netIdByPlayerId.get(key);
+    if (!id) {
+      id = this.nextNetId++;
+      this.netIdByPlayerId.set(key, id);
+    }
+    return id;
+  }
+
+  // Wat alleen verandert bij inloggen, wisselen van character of zone: als dit gelijk blijft, gaat de kleine update.
+  snapshotStaticSignature(record) {
+    return [record.displayName, record.modelAssetId, record.selectedCharacterId, record.connectedSessionCount, record.worldId,
+      record.zoneId, record.spawnId, record.activeControllerSessionId, record.controllerEpoch].join("|");
+  }
+
+  // Kleine spelersupdate (~70 bytes i.p.v. ~520): i = kort nummer, r = draaiing, m = loopt, a = animatie (0 stil, 1 lopen,
+  // 2 rennen), v = revisie, q = laatst verwerkte invoer, t = teleport. De game vult de rest aan uit de laatste volledige.
+  compactSnapshotRecord(record) {
+    const out = { i: record.n, x: record.x, y: record.y, z: record.z, r: record.rotationY, v: record.revision, q: record.lastProcessedInputSeq };
+    if (record.moving) out.m = 1;
+    const animation = COMPACT_ANIMATIONS.indexOf(record.animationState);
+    if (animation > 0) out.a = animation;
+    if (record.teleport) out.t = 1;
+    return out;
+  }
+
+  // Volledig of klein, per ontvanger: volledig als deze ontvanger de vaste gegevens van die speler nog niet (zo) kent.
+  recordForConnection(connectionId, state, options = {}) {
+    const record = this.snapshotPlayerStateRecord(state, options);
+    if (!record) return null;
+    let known = this.aoiStaticByConnectionId.get(connectionId);
+    if (!known) {
+      known = new Map();
+      this.aoiStaticByConnectionId.set(connectionId, known);
+    }
+    const signature = this.snapshotStaticSignature(record);
+    if (known.get(record.playerId) === signature) return this.compactSnapshotRecord(record);
+    known.set(record.playerId, signature);
+    return record;
+  }
+
+  // Ziet deze kijker deze speler (zelfde, aangrenzend of twee vakken verder)?
+  aoiCanSee(viewerId, actorId) {
+    return this.interestIndex.tierBetween(viewerId, actorId) !== TIER.NONE;
+  }
+
+  // Per ontvanger alleen spelers binnen de AOI: zelf 20 Hz, dichtbij 10 Hz, verder 2 Hz, daarbuiten niets. Overgeslagen
+  // updates blijven per ontvanger staan (laatste stand wint), zodat een stilstaande speler toch zijn eindpositie krijgt.
+  // Wie in beeld komt krijgt eerst een volledige update (remote_player:spawn), wie verdwijnt een despawn. Trage sockets
+  // (> 512 KiB in de wachtrij) worden gesloten. Kevin 20-11: zichtbaarheid geldt voor ALLE spelers in de wereld (niet
+  // alleen wie deze tick veranderde; anders verdween een stilstaande speler steeds) en het werk per ontvanger gaat via
+  // de vakken rond de kijker in plaats van via iedereen.
+  broadcastWorldSnapshotWithInterest(worldId, changedStates, options = {}) {
+    const nowMsValue = Number.isFinite(Number(options.serverTimeMs)) ? Number(options.serverTimeMs) : nowMs();
+    const allStates = this.getWorldPlayerStates(worldId);
+    const stateById = new Map();
+    for (const state of allStates) {
+      if (!state?.player_id) continue;
+      stateById.set(state.player_id, state);
+      this.interestIndex.update(state.player_id, num(state.x, 0), num(state.z, 0));
+    }
+    const changedIds = [];
+    for (const state of changedStates || []) if (state?.player_id) changedIds.push(state.player_id);
     let lastPayload = null;
     for (const connectionId of Array.from(this.connectionsByWorldId.get(worldId) || [])) {
       const connection = this.connectionsById.get(connectionId);
@@ -2173,49 +2272,79 @@ export class MmoService {
         continue;
       }
       const viewerId = connection.player?.id;
-      if (!viewerId) continue;
+      if (!viewerId || !stateById.has(viewerId)) continue;
       const visibleNow = new Set();
-      const stateByActorId = new Map();
-      for (const state of playerStates || []) {
-        const actorId = state?.player_id;
-        if (!actorId) continue;
-        stateByActorId.set(actorId, state);
-        if (this.interestIndex.tierBetween(viewerId, actorId) !== TIER.NONE) visibleNow.add(actorId);
+      for (const actorId of this.interestIndex.actorsAround(viewerId)) {
+        if (actorId !== viewerId && stateById.has(actorId)) visibleNow.add(actorId);
       }
       const visibleBefore = this.aoiVisibleByConnectionId.get(connectionId) || new Set();
+      const known = this.aoiStaticByConnectionId.get(connectionId);
       for (const actorId of visibleBefore) {
-        if (actorId === viewerId || visibleNow.has(actorId)) continue;
+        if (visibleNow.has(actorId)) continue;
+        if (known) known.delete(actorId);
         const payload = { playerId: actorId, worldId: worldId, reason: "outside_aoi" };
         send(connection.ws, eventMessage("remote_player:despawn", payload, this.stampServerPayload(worldId, payload)));
       }
       for (const actorId of visibleNow) {
-        if (actorId === viewerId || visibleBefore.has(actorId)) continue;
-        const payload = this.snapshotPlayerStateRecord(stateByActorId.get(actorId), options);
-        if (payload) send(connection.ws, eventMessage("remote_player:spawn", payload, this.stampServerPayload(worldId, payload)));
+        if (visibleBefore.has(actorId)) continue;
+        const payload = this.snapshotPlayerStateRecord(stateById.get(actorId), options);
+        if (!payload) continue;
+        let staticKnown = this.aoiStaticByConnectionId.get(connectionId);
+        if (!staticKnown) {
+          staticKnown = new Map();
+          this.aoiStaticByConnectionId.set(connectionId, staticKnown);
+        }
+        staticKnown.set(actorId, this.snapshotStaticSignature(payload));
+        this.aoiSentAtByKey.set(connectionId + "|" + actorId, nowMsValue);
+        send(connection.ws, eventMessage("remote_player:spawn", payload, this.stampServerPayload(worldId, payload)));
       }
       this.aoiVisibleByConnectionId.set(connectionId, visibleNow);
       let pending = this.aoiPendingByConnectionId.get(connectionId);
       if (!pending) {
-        pending = new Map();
+        pending = new Set();
         this.aoiPendingByConnectionId.set(connectionId, pending);
       }
-      for (const state of playerStates || []) {
-        const actorId = state?.player_id;
-        if (!actorId) continue;
-        if (this.interestIndex.tierBetween(viewerId, actorId) === TIER.NONE) pending.delete(actorId);
-        else pending.set(actorId, state);
+      for (const actorId of changedIds) {
+        if (actorId === viewerId || visibleNow.has(actorId)) pending.add(actorId);
       }
-      const due = [];
-      for (const [actorId, state] of pending) {
+      for (const actorId of Array.from(pending)) {
+        if (actorId !== viewerId && !visibleNow.has(actorId)) pending.delete(actorId);
+      }
+      if (!pending.size) continue;
+      // Drukte: alleen de dichtstbijzijnde AOI_NEAR_MAX spelers krijgen de snelle (10 Hz) updates, de rest 4 Hz.
+      let crowdFar = null;
+      const viewer = stateById.get(viewerId);
+      const nearIds = [];
+      for (const actorId of visibleNow) if (this.interestIndex.tierBetween(viewerId, actorId) === TIER.NEAR) nearIds.push(actorId);
+      if (nearIds.length > AOI_NEAR_MAX) {
+        const vx = num(viewer.x, 0);
+        const vz = num(viewer.z, 0);
+        const distance = (id) => {
+          const other = stateById.get(id);
+          return Math.hypot(num(other.x, 0) - vx, num(other.z, 0) - vz);
+        };
+        nearIds.sort((a, b) => distance(a) - distance(b));
+        crowdFar = new Set(nearIds.slice(AOI_NEAR_MAX));
+      }
+      const records = [];
+      for (const actorId of pending) {
         const tier = this.interestIndex.tierBetween(viewerId, actorId);
         const key = connectionId + "|" + actorId;
-        if (!dueForTier(tier, nowMsValue, this.aoiSentAtByKey.get(key))) continue;
+        const lastSentAt = this.aoiSentAtByKey.get(key);
+        const due = crowdFar && crowdFar.has(actorId)
+          ? !Number.isFinite(lastSentAt) || nowMsValue - lastSentAt >= AOI_CROWD_INTERVAL_MS
+          : dueForTier(tier, nowMsValue, lastSentAt);
+        if (!due) continue;
         this.aoiSentAtByKey.set(key, nowMsValue);
-        due.push(state);
         pending.delete(actorId);
+        const record = this.recordForConnection(connectionId, stateById.get(actorId), options);
+        if (record) records.push(record);
       }
-      if (!due.length) continue;
-      const payload = this.buildWorldSnapshotPayload(worldId, due, options);
+      if (!records.length) continue;
+      // Serverstatus (TPS, MSPT, CPU) hooguit 1x per seconde meesturen in plaats van in elke update.
+      const withHealth = nowMsValue - (connection.lastSnapshotHealthAtMs || 0) >= SNAPSHOT_HEALTH_EVERY_MS;
+      if (withHealth) connection.lastSnapshotHealthAtMs = nowMsValue;
+      const payload = this.buildWorldSnapshotPayload(worldId, null, Object.assign({}, options, { records, withHealth }));
       lastPayload = payload;
       send(connection.ws, eventMessage("mmo:snapshot", payload, this.stampServerPayload(worldId, payload)));
     }
@@ -2233,6 +2362,14 @@ export class MmoService {
 
   sendInitialWorldSnapshot(connection, worldContext) {
     if (!connection || !connection.worldId) return null;
+    // AOI: bij (opnieuw) verbinden alleen jezelf; wie in de buurt is volgt met de volgende update als spawn.
+    // Vergeten wat deze verbinding al kende, zodat die spawn ook echt komt (na request_state ook).
+    if (AOI_ENABLED) {
+      this.aoiVisibleByConnectionId.delete(connection.id);
+      this.aoiStaticByConnectionId.delete(connection.id);
+      const self = this.getWorldPlayerStates(connection.worldId, [connection.player?.id]);
+      return this.sendWorldSnapshot(connection, self, { serverTick: this.serverTick, teleport: false });
+    }
     const players = this.getWorldPlayerStates(connection.worldId);
     return this.sendWorldSnapshot(connection, players, {
       serverTick: this.serverTick,
@@ -3276,6 +3413,7 @@ export class MmoService {
     }
     for (const queued of this.aoiPendingByConnectionId.values()) queued?.delete?.(pending.playerId);
     for (const visible of this.aoiVisibleByConnectionId.values()) visible?.delete?.(pending.playerId);
+    for (const known of this.aoiStaticByConnectionId.values()) known?.delete?.(pending.playerId);
     for (const key of this.aoiSentAtByKey.keys()) {
       if (key.endsWith("|" + pending.playerId)) this.aoiSentAtByKey.delete(key);
     }
@@ -3723,6 +3861,7 @@ export class MmoService {
     connection.closed = true;
     this.aoiPendingByConnectionId.delete(connection.id);
     this.aoiVisibleByConnectionId.delete(connection.id);
+    this.aoiStaticByConnectionId.delete(connection.id);
     for (const key of this.aoiSentAtByKey.keys()) if (key.startsWith(connection.id + "|")) this.aoiSentAtByKey.delete(key);
     const ws = connection.ws;
     const userId = connection.user?.id || null;

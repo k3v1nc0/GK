@@ -71,8 +71,9 @@ test("wereldsnapshots bevatten alleen live/grace-spelers en bewaren hun naam", f
     assert.deepEqual(mmo.getWorldPlayerStates("world.main"), [], "oude cachepositie is niet online");
     mmo.pendingDisconnectByPlayerId.set("player_1", { playerId: "player_1", worldId: "world.main" });
     assert.deepEqual(mmo.getWorldPlayerStates("world.main"), [row], "grace-speler blijft tijdelijk zichtbaar");
+    // n = kort nummer voor de kleine spelersupdate (100 spelers, Kevin 20-11).
     assert.deepEqual(mmo.snapshotPlayerStateRecord(row), {
-      playerId: "player_1", displayName: "Kevin", modelAssetId: "model.ridder", selectedCharacterId: "class.ridder", connectedSessionCount: 0,
+      playerId: "player_1", n: 1, displayName: "Kevin", modelAssetId: "model.ridder", selectedCharacterId: "class.ridder", connectedSessionCount: 0,
       worldId: "world.main", zoneId: null, spawnId: null, x: 1, y: 0, z: 2, rotationY: 0, moving: false,
       animationState: "idle", revision: 3, lastProcessedInputSeq: 0, activeControllerSessionId: null, controllerEpoch: 0, teleport: false
     });

@@ -14,13 +14,13 @@ const toggle = (label, icon, def, helpText, extra = {}) => ({ type: "boolean", r
 
 // De 7 standaarden. Elke standaard zet precies deze schuiven.
 export const NETWORK_PRESETS = Object.freeze({
-  smooth_mmo: Object.freeze({ serverTickRateHz: 30, snapshotRateHz: 20, inputSendRateHz: 30, ownPredictionDeadzone: 0.7, ownCorrectionBlendMs: 650,
+  smooth_mmo: Object.freeze({ serverTickRateHz: 30, snapshotRateHz: 20, inputSendRateHz: 20, ownPredictionDeadzone: 0.7, ownCorrectionBlendMs: 650,
     ownPostInputHoldMs: 1200, remoteInterpolationBaseDelayMs: 220, remoteMaxExtrapolationMs: 80, ownSmallCorrectionThreshold: 1.7,
     ownActiveCorrectionMaxUnits: 0.02, ownCorrectionMergeFactor: 0.2 }),
-  balanced: Object.freeze({ serverTickRateHz: 30, snapshotRateHz: 20, inputSendRateHz: 30, ownPredictionDeadzone: 0.5, ownCorrectionBlendMs: 450,
+  balanced: Object.freeze({ serverTickRateHz: 30, snapshotRateHz: 20, inputSendRateHz: 20, ownPredictionDeadzone: 0.5, ownCorrectionBlendMs: 450,
     ownPostInputHoldMs: 700, remoteInterpolationBaseDelayMs: 200, remoteMaxExtrapolationMs: 80, ownSmallCorrectionThreshold: 1.3,
     ownActiveCorrectionMaxUnits: 0.05, ownCorrectionMergeFactor: 0.35 }),
-  stable: Object.freeze({ serverTickRateHz: 30, snapshotRateHz: 15, inputSendRateHz: 30, ownPredictionDeadzone: 0.55, ownCorrectionBlendMs: 500,
+  stable: Object.freeze({ serverTickRateHz: 30, snapshotRateHz: 15, inputSendRateHz: 20, ownPredictionDeadzone: 0.55, ownCorrectionBlendMs: 500,
     ownPostInputHoldMs: 850, remoteInterpolationBaseDelayMs: 230, remoteMaxExtrapolationMs: 100, ownSmallCorrectionThreshold: 1.4,
     ownActiveCorrectionMaxUnits: 0.04, ownCorrectionMergeFactor: 0.3 }),
   responsive: Object.freeze({ serverTickRateHz: 40, snapshotRateHz: 20, inputSendRateHz: 40, ownPredictionDeadzone: 0.4, ownCorrectionBlendMs: 375,
@@ -110,9 +110,9 @@ export const NETWORK_KINDS = {
       serverTickRateHz: num("Server-ticks", "⏱️", 50, 10, 60, 1, "/s",
         help("Hoe vaak per seconde de server de wereld uitrekent (lopen, botsen, vechten).",
           "30 per seconde. Hoger alleen op een sterke server.", "Server traag of de oude laptop loopt vast → lager. Bewegen voelt hoekig → hoger.")),
-      inputSendRateHz: num("Jouw toetsen per seconde", "⌨️", 30, 10, 60, 1, "/s",
+      inputSendRateHz: num("Jouw toetsen per seconde", "⌨️", 20, 10, 60, 1, "/s",
         help("Hoe vaak per seconde de game jouw toetsen en plek naar de server stuurt. Niet hoger dan de server-ticks.",
-          "Gelijk aan de server-ticks (meestal 30).", "Server volgt je slecht → hoger. Te veel berichten → lager."),
+          "20 per seconde: de server loopt je route na en haalt een laat bericht in, dus meer is niet nodig (100 spelers).", "Server volgt je slecht → hoger. Te veel berichten → lager."),
         { range: [10, 60] }),
       remoteInterpolationBaseDelayMs: num("Buffer andere spelers", "🧍", 200, 0, 300, 10, "ms",
         help("Andere spelers worden zo veel later getoond, zodat ze vloeiend lopen ook als een bericht laat is.",

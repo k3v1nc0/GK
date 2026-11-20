@@ -29,6 +29,8 @@ export function cellKey(cell) {
 
 export function createInterestIndex({ cellSize = DEFAULT_CELL_SIZE, farCells = 2 } = {}) {
   const cellByActor = new Map();
+  // 100 spelers (Kevin 20-11): vak als getallen bewaard, zodat tierBetween niet per aanroep strings splitst.
+  const cellNumByActor = new Map();
   const actorsByCell = new Map();
 
   function remove(actorId) {
@@ -40,16 +42,19 @@ export function createInterestIndex({ cellSize = DEFAULT_CELL_SIZE, farCells = 2
       if (!set.size) actorsByCell.delete(key);
     }
     cellByActor.delete(actorId);
+    cellNumByActor.delete(actorId);
   }
 
   return {
     cellSize,
     farCells,
     update(actorId, x, z) {
-      const key = cellKey(cellFor(x, z, cellSize));
+      const cell = cellFor(x, z, cellSize);
+      const key = cellKey(cell);
       if (cellByActor.get(actorId) === key) return false;
       remove(actorId);
       cellByActor.set(actorId, key);
+      cellNumByActor.set(actorId, cell);
       if (!actorsByCell.has(key)) actorsByCell.set(key, new Set());
       actorsByCell.get(key).add(actorId);
       return true;
@@ -60,21 +65,20 @@ export function createInterestIndex({ cellSize = DEFAULT_CELL_SIZE, farCells = 2
     },
     tierBetween(viewerId, actorId) {
       if (viewerId === actorId) return TIER.SELF;
-      const a = cellByActor.get(viewerId);
-      const b = cellByActor.get(actorId);
+      const a = cellNumByActor.get(viewerId);
+      const b = cellNumByActor.get(actorId);
       if (!a || !b) return TIER.NONE;
-      const [ax, az] = a.split(":").map(Number);
-      const [bx, bz] = b.split(":").map(Number);
-      const distance = Math.max(Math.abs(ax - bx), Math.abs(az - bz));
+      const distance = Math.max(Math.abs(a.cx - b.cx), Math.abs(a.cz - b.cz));
       if (distance <= 1) return TIER.NEAR;
       if (distance <= farCells) return TIER.FAR;
       return TIER.NONE;
     },
     // Alle actors binnen farCells rond de kijker (zonder de hele wereld te doorlopen).
     actorsAround(viewerId) {
-      const key = cellByActor.get(viewerId);
-      if (!key) return [];
-      const [cx, cz] = key.split(":").map(Number);
+      const cell = cellNumByActor.get(viewerId);
+      if (!cell) return [];
+      const cx = cell.cx;
+      const cz = cell.cz;
       const out = [];
       for (let dx = -farCells; dx <= farCells; dx++) {
         for (let dz = -farCells; dz <= farCells; dz++) {

@@ -14,6 +14,8 @@
 // Elke bot: registreert, haalt een join-ticket, verbindt via /ws/game (gk-mmo-v1), loopt rond met
 // input_state op ~30 Hz en valt node03-vijanden in bereik aan (als de wereld die heeft).
 // Gates (fase 02): tick p95 <= 25 ms, p99 <= 40 ms, eventloop p99 <= 20 ms, 0 dubbele receipts.
+// 100 spelers (Kevin 20-11): bots lopen nu als de echte game (20x per seconde, met looppunt) en het rapport telt het
+// verkeer: KB/s per bot naar beneden (p95 <= 64), berichten/s per bot naar boven, en bytes per berichtsoort.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -36,7 +38,8 @@ const CRASH_AFTER_MIN = args["crash-after-min"] === undefined ? null : Number(ar
 const OUT_DIR = path.resolve(rootDir, args.out || "README/fases/evidence/MMORPG-v2/F2");
 const ADMIN_USERNAME = "bots-admin";
 const ADMIN_PASSWORD = "bots-admin-" + Math.random().toString(36).slice(2) + "-Aa1!";
-const GATES = { tickP95: 25, tickP99: 40, eventLoopP99: 20 };
+const GATES = { tickP95: 25, tickP99: 40, eventLoopP99: 20, downKbPerBotP95: 64 };
+const INPUT_INTERVAL_MS = 50;
 const POSITION_RPO_MAX_MS = 5000;
 const WARMUP_MS = Math.max(0, Number(args["warmup-sec"] ?? 15) * 1000);
 
@@ -144,7 +147,12 @@ function startBot(index, stats) {
     playerId: null,
     ackedOperations: [],
     pendingAttacks: new Set(),
-    expectedSockets: new WeakSet()
+    expectedSockets: new WeakSet(),
+    downBytes: 0,
+    upMessages: 0,
+    x: 0,
+    z: 0,
+    speed: 6
   };
   bot.tryAttack = function () {
     const pending = (async () => {
@@ -186,12 +194,18 @@ function startBot(index, stats) {
       ws.on("message", (data) => {
         stats.messages += 1;
         stats.bytes += data.length;
+        bot.downBytes += data.length;
         let message = null;
         try { message = JSON.parse(String(data)); } catch {}
+        const type = String(message?.type || "?");
+        const byType = stats.byType[type] || (stats.byType[type] = { count: 0, bytes: 0 });
+        byType.count += 1;
+        byType.bytes += data.length;
         if (message?.type === "auth_ok") resolve();
         // Zoals de echte client: server-ping direct beantwoorden, anders sluit de server na 30 s (4000 heartbeat).
         if (message?.type === "ping" && ws.readyState === 1) {
           ws.send(JSON.stringify({ type: "pong", clientPingSeq: message.clientPingSeq || null, clientSentAt: message.clientSentAt || null }));
+          bot.upMessages += 1;
         }
       });
       ws.once("close", (code) => {
@@ -204,26 +218,30 @@ function startBot(index, stats) {
     const clientSessionId = "bot-" + index + "-" + Date.now();
     bot.timers.push(setInterval(() => {
       if (!bot.ws || bot.ws.readyState !== 1) return;
-      bot.angle += (Math.random() - 0.5) * 0.6;
+      bot.angle += (Math.random() - 0.5) * 0.4;
       const pause = Math.random() < 0.05;
+      // Zoals de echte game: eigen plek bijhouden en die als looppunt meesturen (de server loopt de route na).
+      if (!pause) {
+        bot.x += Math.cos(bot.angle) * bot.speed * (INPUT_INTERVAL_MS / 1000);
+        bot.z += Math.sin(bot.angle) * bot.speed * (INPUT_INTERVAL_MS / 1000);
+      }
+      const input = pause
+        ? { moveX: 0, moveZ: 0, stop: true }
+        : { moveX: Math.round(Math.cos(bot.angle) * 1000) / 1000, moveZ: Math.round(Math.sin(bot.angle) * 1000) / 1000, pathPoint: { x: Math.round(bot.x * 1000) / 1000, z: Math.round(bot.z * 1000) / 1000 } };
       bot.ws.send(JSON.stringify({
         type: "player:input_state",
-        payload: {
-          clientSessionId,
-          inputSeq: bot.seq++,
-          clientSentAt: Date.now(),
-          controllerEpoch: 0,
-          input: { moveX: pause ? 0 : Math.cos(bot.angle), moveZ: pause ? 0 : Math.sin(bot.angle), sprint: false, pointerTarget: null, stop: pause }
-        }
+        payload: { clientSessionId, inputSeq: bot.seq++, clientSentAt: Date.now(), controllerEpoch: 0, input }
       }));
       stats.inputs += 1;
-    }, 33));
+      bot.upMessages += 1;
+    }, INPUT_INTERVAL_MS));
     bot.timers.push(setInterval(() => bot.tryAttack(), 1500 + Math.random() * 1000));
     // Zoals de echte client (CLIENT_PING_INTERVAL_MS = 2000): zelf pingen houdt de heartbeat vers.
     let pingSeq = 1;
     bot.timers.push(setInterval(() => {
       if (!bot.ws || bot.ws.readyState !== 1) return;
       bot.ws.send(JSON.stringify({ type: "ping", clientPingSeq: pingSeq++, clientSentAt: Date.now() }));
+      bot.upMessages += 1;
     }, 2000));
   };
   bot.start = async function () {
@@ -233,6 +251,9 @@ function startBot(index, stats) {
     const player = await http.call("GET", "/api/game/player");
     bot.playerId = player.json?.playerId || player.json?.player?.id || null;
     if (player.status !== 200 || !bot.playerId) throw new Error("Player-id ophalen mislukt: " + player.status);
+    bot.x = Number(player.json?.position?.x) || 0;
+    bot.z = Number(player.json?.position?.z) || 0;
+    bot.speed = Math.max(0.1, Number(player.json?.gameWorld?.player?.moveSpeed) || 6);
     await bot.connect();
   };
   bot.stop = function (closeSocket = true) {
@@ -447,7 +468,7 @@ function duplicateReceiptCheck(databasePath) {
 }
 
 async function runStep(users, admin, databasePath, crashController = null) {
-  const stats = { users, messages: 0, bytes: 0, inputs: 0, attacks: 0, attackErrors: {}, unexpectedCloses: [], startErrors: [] };
+  const stats = { users, messages: 0, bytes: 0, inputs: 0, attacks: 0, attackErrors: {}, unexpectedCloses: [], startErrors: [], byType: {} };
   const bots = [];
   for (let i = 0; i < users; i++) {
     const bot = startBot(i, stats);
@@ -462,6 +483,10 @@ async function runStep(users, admin, databasePath, crashController = null) {
   // tellen dan niet mee in eventloop en DB-writes. Tick-p95/p99 komen uit een eigen ringbuffer.
   await new Promise((resolve) => setTimeout(resolve, WARMUP_MS));
   const perfReset = await resetPerfWindow(admin);
+  // Verkeer telt vanaf hier (opwarmen en verbinden tellen niet mee).
+  stats.byType = {};
+  for (const bot of bots) { bot.downBytes = 0; bot.upMessages = 0; }
+  const trafficStartedAt = Date.now();
   const samples = [];
   const durationMs = MINUTES * 60 * 1000;
   const crashAtMs = CRASH_AFTER_MIN === null ? null : CRASH_AFTER_MIN * 60 * 1000;
@@ -485,7 +510,21 @@ async function runStep(users, admin, databasePath, crashController = null) {
     const perf = (await admin.call("GET", "/api/game/player")).json?.serverPerf || null;
     if (perf) samples.push({ atMs: Date.now() - startedAt, perf });
   }
+  const trafficSeconds = Math.max(1, (Date.now() - trafficStartedAt) / 1000);
   for (const bot of bots) bot.stop();
+  const downKb = bots.map((bot) => bot.downBytes / 1024 / trafficSeconds).sort((a, b) => a - b);
+  const upMsgs = bots.map((bot) => bot.upMessages / trafficSeconds).sort((a, b) => a - b);
+  const pick = (list, q) => list.length ? Math.round(list[Math.min(list.length - 1, Math.floor(list.length * q))] * 10) / 10 : null;
+  const traffic = {
+    seconds: Math.round(trafficSeconds),
+    downKbPerBot: { avg: downKb.length ? Math.round(downKb.reduce((a, b) => a + b, 0) / downKb.length * 10) / 10 : null, p95: pick(downKb, 0.95), max: pick(downKb, 1) },
+    upMessagesPerBot: { avg: upMsgs.length ? Math.round(upMsgs.reduce((a, b) => a + b, 0) / upMsgs.length * 10) / 10 : null, max: pick(upMsgs, 1) },
+    serverOutMbPerSec: Math.round(downKb.reduce((a, b) => a + b, 0) / 1024 * 100) / 100,
+    byType: Object.entries(stats.byType)
+      .map(([type, value]) => ({ type, perBotPerSec: Math.round(value.count / bots.length / trafficSeconds * 10) / 10, kbPerBotPerSec: Math.round(value.bytes / 1024 / bots.length / trafficSeconds * 10) / 10, avgBytes: Math.round(value.bytes / Math.max(1, value.count)) }))
+      .sort((a, b) => b.kbPerBotPerSec - a.kbPerBotPerSec)
+      .slice(0, 10)
+  };
   const last = samples[samples.length - 1]?.perf || null;
   // Tick: slechtste p95/p99 van alle tussenmetingen (de ringbuffer dekt alleen de laatste ~minuut).
   const worst = (key) => samples.reduce((max, sample) => {
@@ -501,10 +540,11 @@ async function runStep(users, admin, databasePath, crashController = null) {
     eventLoopP99: { value: loop.p99 ?? null, max: GATES.eventLoopP99, ok: Number.isFinite(loop.p99) && loop.p99 <= GATES.eventLoopP99 },
     duplicateReceipts: { value: receipts.duplicateLedgerRows ?? null, max: 0, ok: receipts.checked ? receipts.duplicateLedgerRows === 0 : null },
     allBotsConnected: { value: users - stats.startErrors.length, max: users, ok: stats.startErrors.length === 0 },
-    noUnexpectedCloses: { value: stats.unexpectedCloses.length, max: 0, ok: stats.unexpectedCloses.length === 0 }
+    noUnexpectedCloses: { value: stats.unexpectedCloses.length, max: 0, ok: stats.unexpectedCloses.length === 0 },
+    downKbPerBotP95: { value: traffic.downKbPerBot.p95, max: GATES.downKbPerBotP95, ok: Number.isFinite(traffic.downKbPerBot.p95) && traffic.downKbPerBot.p95 <= GATES.downKbPerBotP95 }
   };
   if (crash) Object.assign(gates, crash.gates);
-  return { users, minutes: MINUTES, warmupMs: WARMUP_MS, perfReset, stats, gates, receipts, crash, finalPerf: last, samples };
+  return { users, minutes: MINUTES, warmupMs: WARMUP_MS, perfReset, stats, traffic, gates, receipts, crash, finalPerf: last, samples };
 }
 
 async function main() {
@@ -556,6 +596,10 @@ async function main() {
         console.log("[bots] " + step.users + " bots  " + mark + "  " + name + " = " + gate.value + " (" + expectation + ")");
       }
       console.log("[bots] " + step.users + " bots  DB-writes ms: " + JSON.stringify(step.finalPerf?.dbWritesMs || {}));
+      const t = step.traffic;
+      console.log("[bots] " + step.users + " bots  verkeer: per bot " + t.downKbPerBot.avg + " KB/s (p95 " + t.downKbPerBot.p95 + ", max " + t.downKbPerBot.max + "), "
+        + "naar server " + t.upMessagesPerBot.avg + " berichten/s per bot, server totaal " + t.serverOutMbPerSec + " MB/s");
+      console.log("[bots] " + step.users + " bots  per soort (KB/s per bot): " + t.byType.map((row) => row.type + " " + row.kbPerBotPerSec + " (" + row.perBotPerSec + "/s, " + row.avgBytes + " B)").join(", "));
     }
     console.log(allOk ? "[bots] GO: alle gates gehaald" : "[bots] NO-GO: minstens een gate niet gehaald");
     process.exitCode = allOk ? 0 : 1;

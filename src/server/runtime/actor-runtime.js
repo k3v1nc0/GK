@@ -24,7 +24,9 @@ export const ACTOR_INSTANCE_PREFIX = "actor:";
 export const RESOURCE_INSTANCE_PREFIX = "res:";
 const AI_STEP_MS = 100;
 const SNAPSHOT_MS = 100;
-const FULL_SNAPSHOT_MS = 2000;
+// 100 spelers (Kevin 20-11): alleen wat veranderde gaat elke 100 ms mee; alles opnieuw (vangnet) eens per 10 s
+// in plaats van elke 2 s. Stilstaande grondstoffen gingen zo 5x vaker over de lijn dan nodig.
+const FULL_SNAPSHOT_MS = 10000;
 const AOI_M = 64;
 const WAKE_M = 80;
 const PATH_QUERIES_PER_STEP = 4;
@@ -1529,7 +1531,18 @@ export class ActorRuntime {
     for (const state of this.host.playerStates(this.worldId)) {
       if (state?.player_id) positions.set(state.player_id, state);
     }
-    const all = Array.from(this.actors.values()).concat(Array.from(this.resources.values()), Array.from(this.walkers.values()));
+    // Raster van AOI_M: per speler alleen de 3x3 vakken om hem heen bekijken in plaats van de hele wereld
+    // (dubbel zoveel content en 100 spelers = anders 100x alles, 10x per seconde).
+    const grid = new Map();
+    const addToGrid = (entry) => {
+      const key = Math.floor(entry.x / AOI_M) + ":" + Math.floor(entry.z / AOI_M);
+      let list = grid.get(key);
+      if (!list) { list = []; grid.set(key, list); }
+      list.push(entry);
+    };
+    for (const entry of this.actors.values()) addToGrid(entry);
+    for (const entry of this.resources.values()) addToGrid(entry);
+    for (const entry of this.walkers.values()) addToGrid(entry);
     const liveIds = new Set();
     for (const connection of connections) {
       liveIds.add(connection.id);
@@ -1542,7 +1555,14 @@ export class ActorRuntime {
       const viewerId = connection.player?.id || null;
       const actors = [];
       const nearIds = new Set();
-      for (const entry of all) {
+      const near = [];
+      const cx = Math.floor(px / AOI_M);
+      const cz = Math.floor(pz / AOI_M);
+      for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+        const list = grid.get((cx + dx) + ":" + (cz + dz));
+        if (list) for (const entry of list) near.push(entry);
+      }
+      for (const entry of near) {
         if (Math.abs(entry.x - px) > AOI_M || Math.abs(entry.z - pz) > AOI_M) continue;
         // Stap 5: een quest-vijand gaat alleen naar wie hem mag zien.
         if (entry.group && !this.canSeeGroup(entry.group, viewerId)) continue;

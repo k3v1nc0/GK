@@ -514,6 +514,9 @@ const state = {
     tombstones: new Map(),
     // Laatste bericht per medespeler (ook uit andere zones), om na een zonewissel direct te tonen wie er staat.
     lastPacketByPlayerId: new Map(),
+    // 100 spelers (Kevin 20-11): laatste volledige spelersupdate per kort nummer, om kleine updates aan te vullen.
+    fullRecordByNetId: new Map(),
+    lastMissingRecordRequestAt: 0,
     interpolationDelayMs: REMOTE_INTERPOLATION_BASE_DELAY_MS,
     remoteRenderDelayMs: REMOTE_INTERPOLATION_BASE_DELAY_MS,
     lastPacketAt: 0,
@@ -12810,9 +12813,52 @@ function applyRemotePlayerDespawn(payload) {
   updateHud();
 }
 
+// 100 spelers (Kevin 20-11): de server stuurt een volledige spelersupdate als iemand in beeld komt (of als naam, model
+// of zone verandert) en daarna een kleine: i = kort nummer, r = draaiing, m = loopt, a = animatie (0 stil, 1 lopen,
+// 2 rennen), v = revisie, q = laatst verwerkte invoer, t = teleport. Hier wordt de kleine weer volledig gemaakt.
+const SNAPSHOT_ANIMATIONS = ["idle", "walk", "run"];
+
+function rememberFullSnapshotRecord(record) {
+  const netId = Number(record?.n);
+  if (record?.playerId && Number.isFinite(netId) && netId > 0) state.remote.fullRecordByNetId.set(netId, record);
+}
+
+function expandSnapshotRecord(record) {
+  if (!record || typeof record !== "object") return null;
+  if (record.playerId) {
+    rememberFullSnapshotRecord(record);
+    return record;
+  }
+  const netId = Number(record.i);
+  const base = Number.isFinite(netId) ? state.remote.fullRecordByNetId.get(netId) : null;
+  if (!base) {
+    // Onbekend nummer (zou niet mogen): vraag de stand opnieuw, dan stuurt de server iedereen weer volledig.
+    const nowAt = performance.now();
+    if (nowAt - state.remote.lastMissingRecordRequestAt > 2000 && state.ws && state.ws.readyState === WebSocket.OPEN) {
+      state.remote.lastMissingRecordRequestAt = nowAt;
+      try { state.ws.send(JSON.stringify({ type: "player:request_state" })); } catch {}
+    }
+    return null;
+  }
+  const full = Object.assign({}, base, {
+    x: record.x,
+    y: record.y,
+    z: record.z,
+    rotationY: record.r,
+    moving: record.m === 1,
+    animationState: SNAPSHOT_ANIMATIONS[Number(record.a) || 0] || "idle",
+    revision: record.v,
+    lastProcessedInputSeq: record.q,
+    teleport: record.t === 1
+  });
+  state.remote.fullRecordByNetId.set(netId, Object.assign({}, full, { teleport: false }));
+  return full;
+}
+
 function applyRemotePlayerSpawn(payload) {
   const playerId = String(payload?.playerId || "").trim();
   if (!playerId) return;
+  rememberFullSnapshotRecord(payload);
   const remembered = state.remote.lastPacketByPlayerId.get(playerId) || {};
   upsertRemotePlayerEntry(Object.assign({}, remembered, payload), { reset: true, type: "remote_player:spawn" });
   state.remote.lastRemoteEventType = "remote_player:spawn";
@@ -13277,7 +13323,7 @@ function handleSocketMessage(raw) {
     if (previousSnapshotAt > 0) {
       pushSnapshotInterval(Math.max(0, packetAt - previousSnapshotAt));
     }
-    const players = Array.isArray(message.players) ? message.players : [];
+    const players = (Array.isArray(message.players) ? message.players : []).map(expandSnapshotRecord);
     for (const player of players) {
       if (!player || typeof player !== "object" || !player.playerId) continue;
       state.remote.lastSnapshotPlayerIds.push(String(player.playerId));
@@ -13621,7 +13667,6 @@ function sendInputState(options = {}) {
   state.net.clientSessionId = clientSessionId;
   const clientIntentId = buildClientIntentId(clientSessionId, seq);
   const controllerEpoch = normalizeControllerEpoch(state.net.controllerEpoch);
-  const sourceDevice = state.session.deviceLabel || deviceLabel();
   state.net.lastSentInputSeq = seq;
   state.net.lastLocalInputAt = nowWall;
   state.net.localControllerActive = moving;
@@ -13633,21 +13678,20 @@ function sendInputState(options = {}) {
   state.debug.lastSentType = "player:input_state";
   state.debug.lastSentAt = nowPerf;
   state.debug.lastSentSeq = seq;
+  // 100 spelers (Kevin 20-11): kleiner bericht. Velden die uit/leeg zijn gaan niet mee (de server leest ontbrekend als
+  // uit/leeg) en het apparaat haalt de server uit de sessie.
+  const wireInput = { moveX: round(input.moveX), moveZ: round(input.moveZ) };
+  if (input.sprint === true) wireInput.sprint = true;
+  if (input.pointerTarget) wireInput.pointerTarget = { x: round(input.pointerTarget.x), z: round(input.pointerTarget.z) };
+  if (input.settle === true) wireInput.settle = true;
+  if (input.pathPoint) wireInput.pathPoint = { x: round(input.pathPoint.x), z: round(input.pathPoint.z) };
+  if (input.stop === true) wireInput.stop = true;
   const inputStatePayload = {
     clientSessionId: clientSessionId,
     inputSeq: seq,
     clientSentAt: nowWall,
     controllerEpoch: controllerEpoch,
-    input: {
-      moveX: input.moveX,
-      moveZ: input.moveZ,
-      sprint: input.sprint === true,
-      pointerTarget: input.pointerTarget ? { x: input.pointerTarget.x, z: input.pointerTarget.z } : null,
-      settle: input.settle === true,
-      pathPoint: input.pathPoint ? { x: round(input.pathPoint.x), z: round(input.pathPoint.z) } : null,
-      stop: input.stop === true
-    },
-    sourceDevice: sourceDevice
+    input: wireInput
   };
   const queueSentInput = function (sentAt) {
     if (moving) recordOwnTrailPoint(seq, state.predictedPosition || state.position, nowPerf);
