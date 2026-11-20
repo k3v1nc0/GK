@@ -41,6 +41,11 @@ function eventLoopDelaySummary(histogram, windowStartedAt) {
 }
 const POSITION_MAX_PENDING = Math.max(100, Number(process.env.GAME_POSITION_MAX_PENDING || 10000));
 const RATE_LIMIT_PER_SECOND = Math.max(1, Number(process.env.GAME_WS_RATE_LIMIT_PER_SECOND || 120));
+// Kevin 20-11: een korte piek (het netwerk haperde even en alles komt tegelijk binnen) is geen misbruik. De emmer
+// houdt 2 s aan berichten; daarboven wordt een bericht overgeslagen. Pas als er binnen 5 s meer dan 1 s aan
+// berichten te veel komt, sluit de server de verbinding.
+const RATE_LIMIT_BURST = RATE_LIMIT_PER_SECOND * 2;
+const RATE_LIMIT_DROP_WINDOW_MS = 5000;
 const WORLD_TICK_HZ = Math.max(1, Number(process.env.GAME_WORLD_TICK_HZ || 50));
 const WORLD_TICK_MS = Math.max(10, Math.round(1000 / WORLD_TICK_HZ));
 const SERVER_TPS_WINDOW_MS = 1000;
@@ -55,6 +60,12 @@ const PATH_QUEUE_MAX = 400;
 // Vast op een punt dat de client wel haalde: de server controleert dan de stap van de client zelf (vorig punt ->
 // dit punt) met dezelfde botsingsfunctie. Klopt die stap en staat de server dichtbij het vorige punt, dan volgt hij.
 const PATH_TRUST_RADIUS = 0.75;
+// Inhalen (Kevin 20-11, haperen): komt een looppunt te laat binnen (ping-piek of een trage frame bij de speler),
+// dan stond de server even stil en kon hij die achterstand nooit meer inlopen (hooguit normale snelheid). De client
+// werd dan steeds teruggetrokken. Nu mag de server verloren looptijd inhalen: hooguit 1,5x de loopsnelheid en nooit
+// meer dan 0,75 s aan loopafstand. Over elke periode langer dan dat loopt niemand sneller dan toegestaan.
+const PATH_CATCHUP_MAX_FACTOR = 1.5;
+const PATH_CATCHUP_WINDOW_S = 0.75;
 const DIRECTION_INPUT_TIMEOUT_MS = Math.max(200, Number(process.env.GAME_DIRECTION_INPUT_TIMEOUT_MS || 750));
 const POINTER_STALL_STOP_TICKS = 6;
 const WORLD_SNAPSHOT_HZ = Math.max(1, Number(process.env.GAME_WORLD_SNAPSHOT_HZ || 20));
@@ -2789,7 +2800,12 @@ export class MmoService {
       // Padvolgen: loop de tussenpunten van de client af, zonder bochten af te snijden. Per tick hooguit
       // de normale loopafstand; botsingen gelden gewoon. Een punt dat 6 ticks onbereikbaar is, wordt overgeslagen.
       const points = pathQueue.points;
-      let remaining = speed * dtSeconds;
+      // Inhalen: tegoed groeit elke tick met de normale loopafstand; wat de server niet liep (wachten op een laat
+      // punt) blijft staan tot 0,75 s aan afstand en mag daarna met hooguit 1,5x de snelheid worden ingelopen.
+      const normalStep = speed * dtSeconds;
+      pathQueue.budget = Math.min((Number(pathQueue.budget) || 0) + normalStep, Math.max(normalStep, speed * PATH_CATCHUP_WINDOW_S));
+      let remaining = Math.min(pathQueue.budget, normalStep * PATH_CATCHUP_MAX_FACTOR);
+      const remainingAtStart = remaining;
       let position = { x: currentPosition.x, y: currentPosition.y, z: currentPosition.z };
       let blocked = false;
       let guard = 0;
@@ -2847,6 +2863,7 @@ export class MmoService {
         }
         if (Math.hypot(target.x - position.x, target.z - position.z) <= PATH_POINT_REACHED) pathQueue.prev = points.shift();
       }
+      pathQueue.budget = Math.max(0, pathQueue.budget - (remainingAtStart - Math.max(0, remaining)));
       if (blocked) {
         pathQueue.stalls = (Number(pathQueue.stalls) || 0) + 1;
         if (pathQueue.stalls >= PATH_STALL_TICKS) {
@@ -3349,8 +3366,10 @@ export class MmoService {
       lastSeenAt: nowMs(),
       lastPongAt: nowMs(),
       lastPingAt: 0,
-      tokens: RATE_LIMIT_PER_SECOND,
+      tokens: RATE_LIMIT_BURST,
       tokenRefillAt: nowMs(),
+      rateDropWindowAt: 0,
+      rateDropped: 0,
       closed: false,
       pendingPositionKey: positionKey(profile.id, worldContext.worldId),
       sourceDevice: sessionContext.session.device_label || null,
@@ -3484,7 +3503,7 @@ export class MmoService {
     const current = nowMs();
     const elapsed = Math.max(0, current - connection.tokenRefillAt);
     const refill = (elapsed / 1000) * RATE_LIMIT_PER_SECOND;
-    connection.tokens = Math.min(RATE_LIMIT_PER_SECOND, connection.tokens + refill);
+    connection.tokens = Math.min(RATE_LIMIT_BURST, connection.tokens + refill);
     connection.tokenRefillAt = current;
     if (connection.tokens < 1) return false;
     connection.tokens -= 1;
@@ -3494,11 +3513,24 @@ export class MmoService {
   handleMessage(connection, rawData) {
     if (!connection || connection.closed) return;
     if (!this.normalizeRateLimit(connection)) {
-      const payload = { code: "rate_limited", message: "Te veel WebSocket berichten per seconde." };
-      send(connection.ws, eventMessage("error", payload, this.stampServerPayload(connection.worldId, payload)));
-      this.recordEvent("ws_rate_limited", connection.user.id, connection.player.id, connection.session.id);
-      closeSocket(connection.ws, 4408, "Rate limit");
-      return;
+      const current = nowMs();
+      if (!connection.rateDropWindowAt || current - connection.rateDropWindowAt > RATE_LIMIT_DROP_WINDOW_MS) {
+        connection.rateDropWindowAt = current;
+        connection.rateDropped = 0;
+      }
+      connection.rateDropped += 1;
+      if (connection.rateDropped <= RATE_LIMIT_PER_SECOND) {
+        // Overslaan, behalve een stop of stoppunt: anders liep de server door terwijl de speler al stilstond.
+        const skipped = safeJsonParse(typeof rawData === "string" ? rawData : Buffer.isBuffer(rawData) ? rawData.toString("utf8") : String(rawData || ""));
+        const input = skipped?.type === "player:input_state" ? (skipped.payload?.input || null) : null;
+        if (!input || (input.stop !== true && input.settle !== true)) return;
+      } else {
+        const payload = { code: "rate_limited", message: "Te veel WebSocket berichten per seconde." };
+        send(connection.ws, eventMessage("error", payload, this.stampServerPayload(connection.worldId, payload)));
+        this.recordEvent("ws_rate_limited", connection.user.id, connection.player.id, connection.session.id);
+        closeSocket(connection.ws, 4408, "Rate limit");
+        return;
+      }
     }
     connection.lastSeenAt = nowMs();
     this.authService.touchSession(connection.session.id, false, 10000);

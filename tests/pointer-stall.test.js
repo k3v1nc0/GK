@@ -14,7 +14,10 @@ function fakeService() {
       updatePlayerStateFromTick(previous, next) { return next; },
       // Fase 04: de tick zet ook Region/Area op de state (de echte code; zonder build blijft dat null).
       spatialIndex: MmoService.prototype.spatialIndex,
-      assignSpatialMembership: MmoService.prototype.assignSpatialMembership
+      assignSpatialMembership: MmoService.prototype.assignSpatialMembership,
+      // De tick vraagt botsers en loopvlak via deze twee (echte code; zonder vlaggen = de lijst uit de wereld).
+      solidsForPlayer: MmoService.prototype.solidsForPlayer,
+      movementIndexFor: MmoService.prototype.movementIndexFor
     }
   };
 }

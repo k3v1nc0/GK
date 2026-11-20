@@ -14,6 +14,9 @@ function fakeService() {
     writeStoppedLatestInput(playerId) { service.stoppedPlayers.push(playerId); },
     updatePlayerStateFromTick(previous, next) { return next; }
   };
+  // De tick vraagt botsers en loopvlak via deze twee (echte code; zonder vlaggen = de lijst uit de wereld).
+  service.solidsForPlayer = MmoService.prototype.solidsForPlayer.bind(service);
+  service.movementIndexFor = MmoService.prototype.movementIndexFor.bind(service);
   service.updatePathQueue = MmoService.prototype.updatePathQueue.bind(service);
   service.clearPathQueue = MmoService.prototype.clearPathQueue.bind(service);
   // Fase 04: de tick zet ook Region/Area op de state (de echte code; zonder build blijft dat null).
@@ -104,6 +107,28 @@ test("snelheid blijft begrensd, ook als de client punten ver weg stuurt", functi
   service.updatePathQueue("p3", { moveX: 1, moveZ: 0, pathPoint: { x: 100, z: 0 } });
   state = tick(service, state, { moveX: 1, moveZ: 0, pathPoint: { x: 100, z: 0 } }, worldContext());
   assert.ok(state.x <= 10 * 0.033 + 0.0001, "hooguit één tick loopafstand (" + state.x + ")");
+});
+
+// Kevin 20-11 (haperen): een laat looppunt liet de server stilstaan en die achterstand liep hij nooit meer in.
+test("na een laat looppunt haalt de server in, maar nooit sneller dan 1,5x en gemiddeld niet sneller dan toegestaan", function () {
+  const service = fakeService();
+  let state = startState("p6");
+  const step = 10 * 0.033;
+  // Eerste punt, daarna 6 ticks geen nieuw punt (pakketje te laat).
+  service.updatePathQueue("p6", { moveX: 1, moveZ: 0, pathPoint: { x: step, z: 0 } });
+  for (let index = 0; index < 7; index += 1) state = tick(service, state, { moveX: 1, moveZ: 0 }, worldContext());
+  assert.ok(Math.abs(state.x - step) < 0.001, "stond op het laatste punt te wachten (" + state.x + ")");
+  // Nu komen de late punten in één keer binnen (de client liep gewoon door).
+  for (let index = 2; index <= 20; index += 1) service.updatePathQueue("p6", { moveX: 1, moveZ: 0, pathPoint: { x: step * index, z: 0 } });
+  let previous = state.x;
+  for (let index = 0; index < 4; index += 1) {
+    state = tick(service, state, { moveX: 1, moveZ: 0 }, worldContext());
+    assert.ok(state.x - previous <= step * 1.5 + 0.0001, "hooguit 1,5x per tick (" + (state.x - previous) + ")");
+    assert.ok(state.x - previous > step + 0.0001, "haalt in (" + (state.x - previous) + ")");
+    previous = state.x;
+  }
+  // 11 ticks in totaal: nooit verder dan 11 ticks loopafstand.
+  assert.ok(state.x <= step * 11 + 0.0001, "gemiddeld niet sneller dan toegestaan (" + state.x + ")");
 });
 
 test("een stop maakt de rij leeg en de server staat stil", function () {

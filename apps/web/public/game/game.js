@@ -5887,6 +5887,58 @@ function hasNewerPendingInputThanAck(clientInputSeq) {
   });
 }
 
+// Kevin 20-11 (haperen): waar we de laatste 1,5 s liepen, met de inputSeq van elk verzonden punt. Komt een
+// looppunt laat bij de server (ping-piek of trage frame), dan staat de server bij de bevestiging gewoon op onze
+// eigen route, maar iets achter. Dat is geen afwijking: de server haalt dat in (PATH_CATCHUP in mmo-service.js).
+// Vroeger trok de client zich dan terug naar de server en haperde het beeld. Een echte afwijking (de server staat
+// naast de route, of verder achter dan hij kan inhalen) corrigeert nog steeds zoals voorheen.
+const OWN_TRAIL_MS = 1500;
+const SERVER_CATCHUP_WINDOW_S = 0.75;
+
+function recordOwnTrailPoint(seq, position, at) {
+  if (!position || !Number.isFinite(Number(position.x)) || !Number.isFinite(Number(position.z))) return;
+  const trail = state.net.ownTrail || (state.net.ownTrail = []);
+  trail.push({ seq: seq, x: Number(position.x), z: Number(position.z), at: at });
+  while (trail.length > 2 && at - trail[0].at > OWN_TRAIL_MS) trail.shift();
+  if (trail.length > 90) trail.splice(0, trail.length - 90);
+}
+
+// { offPath, behind }: hoe ver de serverplek naast onze route ligt (tot en met de bevestigde input) en hoe ver
+// hij langs die route nog achter de plek bij die input ligt. null = geen route bekend.
+function serverLagOnOwnTrail(serverPosition, ackSeq) {
+  const points = (state.net.ownTrail || []).filter(function (point) { return point.seq <= ackSeq; });
+  if (!points.length || !serverPosition) return null;
+  const sx = num(serverPosition.x, 0);
+  const sz = num(serverPosition.z, 0);
+  let offPath = Math.hypot(sx - points[0].x, sz - points[0].z);
+  let bestIndex = 0;
+  let bestT = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    const a = points[index - 1];
+    const b = points[index];
+    const abx = b.x - a.x;
+    const abz = b.z - a.z;
+    const lengthSq = abx * abx + abz * abz;
+    const t = lengthSq > 0 ? clamp(((sx - a.x) * abx + (sz - a.z) * abz) / lengthSq, 0, 1) : 1;
+    const distance = Math.hypot(sx - (a.x + abx * t), sz - (a.z + abz * t));
+    if (distance <= offPath) {
+      offPath = distance;
+      bestIndex = index;
+      bestT = t;
+    }
+  }
+  let behind = 0;
+  if (bestIndex > 0) {
+    const a = points[bestIndex - 1];
+    const b = points[bestIndex];
+    behind += Math.hypot(b.x - a.x, b.z - a.z) * (1 - bestT);
+  }
+  for (let index = Math.max(1, bestIndex + 1); index < points.length; index += 1) {
+    behind += Math.hypot(points[index].x - points[index - 1].x, points[index].z - points[index - 1].z);
+  }
+  return { offPath: offPath, behind: behind };
+}
+
 function removeAckedInputs(clientInputSeq) {
   const ackSeq = normalizeInputSeq(clientInputSeq);
   if (!ackSeq) return false;
@@ -6137,9 +6189,19 @@ function applyAuthoritativeUpdate(update, options = {}) {
         })
       : null;
     if (clientInputSeq > 0 && isLocalControllerSnapshot) removeAckedInputs(clientInputSeq);
+    // Kevin 20-11: staat de server op onze eigen route en hooguit zo ver achter als hij kan inhalen, dan niet corrigeren.
+    const deadzoneNow = mmoNetworkSettings().ownPredictionDeadzone;
+    const trailLag = hasAckedReferencePosition && isLocalControllerSnapshot && nextPosition.teleport !== true
+      ? serverLagOnOwnTrail(nextPosition, clientInputSeq)
+      : null;
+    const serverCatchingUp = Boolean(trailLag && trailLag.offPath <= deadzoneNow
+      && trailLag.behind <= currentSpeed() * SERVER_CATCHUP_WINDOW_S + deadzoneNow);
+    state.net.lastAckBehind = serverCatchingUp ? trailLag.behind : 0;
     // Serverlampje: hoe ver zat de server naast de plek waar wij waren bij dezelfde input (bevestiging van je plek).
     if (hasAckedReferencePosition) {
-      state.net.lastAckError = Math.hypot(referencePosition.x - nextPosition.x, referencePosition.z - nextPosition.z);
+      state.net.lastAckError = serverCatchingUp
+        ? trailLag.offPath
+        : Math.hypot(referencePosition.x - nextPosition.x, referencePosition.z - nextPosition.z);
       state.net.lastAckAt = performance.now();
     }
     state.authoritativePosition = clonePosition(nextPosition);
@@ -6183,7 +6245,9 @@ function applyAuthoritativeUpdate(update, options = {}) {
       const replayError = replayedPrediction && state.predictedPosition
         ? Math.hypot(replayedPrediction.x - state.predictedPosition.x, replayedPrediction.z - state.predictedPosition.z)
         : 0;
-      if (replayError > netSettings.ownPredictionDeadzone) {
+      if (replayError > netSettings.ownPredictionDeadzone && serverCatchingUp) {
+        state.net.lastIgnoredReason = "server_catching_up";
+      } else if (replayError > netSettings.ownPredictionDeadzone) {
         queueOwnCorrection(
           replayedPrediction.x - state.predictedPosition.x,
           replayedPrediction.z - state.predictedPosition.z,
@@ -6215,7 +6279,7 @@ function applyAuthoritativeUpdate(update, options = {}) {
       // correctievector opgeslagen en in stepMovement per tick weggesmeerd.
       // Als de ack niet meer in pendingInputs zit, vergelijken we niet met de
       // huidige prediction: dat is gewone netwerk-lag en gaf zichtbaar terugtrekken.
-      if (hasAckedReferencePosition && predictionError > netSettings.ownPredictionDeadzone) {
+      if (hasAckedReferencePosition && predictionError > netSettings.ownPredictionDeadzone && !serverCatchingUp) {
         const queued = queueOwnCorrection(
           nextPosition.x - referencePosition.x,
           nextPosition.z - referencePosition.z,
@@ -12834,6 +12898,13 @@ async function openWebSocket() {
   socket._gkAuthenticated = useLegacySocket;
   socket._gkJoinTicket = ticket;
   state.ws = socket;
+  // Kevin 20-11: tel het verkeer (berichten en bytes per seconde), zichtbaar in de tooltip van het serverlampje.
+  const rawSend = socket.send.bind(socket);
+  socket.send = function (data) {
+    netTraffic.outCount += 1;
+    netTraffic.outBytes += typeof data === "string" ? data.length : Number(data?.byteLength || 0);
+    return rawSend(data);
+  };
   // Een verbindingspoging die blijft hangen (proxy of server antwoordt niet) gaf minutenlang "waiting_for_socket":
   // de browser heeft geen eigen time-out en er kwam geen nieuwe poging. Na een paar seconden opnieuw proberen.
   socket._gkConnectTimer = window.setTimeout(function () {
@@ -12867,6 +12938,8 @@ async function openWebSocket() {
 
   socket.addEventListener("message", function (event) {
     if (socket._gkConnectionAttemptId !== state.wsConnectionAttemptId) return;
+    netTraffic.inCount += 1;
+    netTraffic.inBytes += typeof event.data === "string" ? event.data.length : Number(event.data?.byteLength || 0);
     handleSocketMessage(event.data);
   });
 
@@ -13577,6 +13650,7 @@ function sendInputState(options = {}) {
     sourceDevice: sourceDevice
   };
   const queueSentInput = function (sentAt) {
+    if (moving) recordOwnTrailPoint(seq, state.predictedPosition || state.position, nowPerf);
     queuePendingInput({
       seq: seq,
       position: clonePosition(state.predictedPosition || state.position || state.authoritativePosition),
@@ -13926,6 +14000,10 @@ function stepMovement(now) {
   }
 }
 
+function keyboardMovementSignature() {
+  return (state.input.move_forward ? "w" : "") + (state.input.move_back ? "s" : "") + (state.input.move_left ? "a" : "") + (state.input.move_right ? "d" : "");
+}
+
 function setInput(action, pressed) {
   if (!(action in state.input)) return;
   state.input[action] = Boolean(pressed);
@@ -13954,6 +14032,9 @@ function bindKeyboardControls() {
     if (sprintKey) {
       event.preventDefault();
       if (!isMmoGameplayReady()) return;
+      // Kevin 20-11 (websocket-verkeer): een ingedrukte toets herhaalt keydown ~30x per seconde. Verandert er niets,
+      // dan niets extra sturen; de gewone verzendtik loopt gewoon door.
+      if (event.repeat && state.input.sprint === true) return;
       state.input.sprint = true;
       if (hasMovementInput()) sendInputState({ force: true });
       return;
@@ -13961,6 +14042,7 @@ function bindKeyboardControls() {
     if (!movementKey) return;
     event.preventDefault();
     if (!isMmoGameplayReady()) return;
+    const keysBefore = keyboardMovementSignature();
     if (!event.repeat && !hasKeyboardMovementInput()) {
       noteLocalControlStart(false, "keyboard");
     }
@@ -13971,7 +14053,7 @@ function bindKeyboardControls() {
     if (event.code === "KeyS" || event.code === "ArrowDown") { setInput("move_back", true); clearPointerTarget(false); }
     if (event.code === "KeyA" || event.code === "ArrowLeft") { setInput("move_left", true); clearPointerTarget(false); }
     if (event.code === "KeyD" || event.code === "ArrowRight") { setInput("move_right", true); clearPointerTarget(false); }
-    if (hasMovementInput()) {
+    if (hasMovementInput() && (!event.repeat || keyboardMovementSignature() !== keysBefore)) {
       sendInputState({ force: true });
     }
   });
@@ -15088,6 +15170,24 @@ function ensureGkHud() {
 // Compacte serverstatus linksonder: groen = de server bevestigt je plek, oranje = wachten op de server of de server
 // ziet je ergens anders (dan word je straks teruggezet), rood = meer dan 6 s geen antwoord of geen verbinding.
 let connectionLightTimer = 0;
+const netTraffic = { outCount: 0, outBytes: 0, inCount: 0, inBytes: 0, since: performance.now(), text: "" };
+
+// Elke 2 s: berichten per seconde heen (uit) en terug (in), plus kilobytes per seconde.
+function netTrafficText(nowPerf) {
+  const elapsed = nowPerf - netTraffic.since;
+  if (elapsed >= 2000) {
+    const perSecond = function (value) { return value * 1000 / elapsed; };
+    netTraffic.text = "verkeer uit " + Math.round(perSecond(netTraffic.outCount)) + "/s (" + (perSecond(netTraffic.outBytes) / 1024).toFixed(1) + " KB/s)"
+      + ", in " + Math.round(perSecond(netTraffic.inCount)) + "/s (" + (perSecond(netTraffic.inBytes) / 1024).toFixed(1) + " KB/s)";
+    netTraffic.outCount = 0;
+    netTraffic.outBytes = 0;
+    netTraffic.inCount = 0;
+    netTraffic.inBytes = 0;
+    netTraffic.since = nowPerf;
+  }
+  return netTraffic.text;
+}
+
 function updateConnectionLight() {
   if (!gkHud || typeof gkHud.setConnection !== "function") return;
   const socketKind = state.wsStateVisible;
@@ -15122,9 +15222,13 @@ function updateConnectionLight() {
   } else if (!moving && restError > deadzone) {
     kind = "standby";
     parts.push("server staat " + restError.toFixed(2) + " m verderop: je wordt teruggezet");
+  } else if (moving && num(state.net.lastAckBehind, 0) > deadzone) {
+    parts.push("server loopt " + num(state.net.lastAckBehind, 0).toFixed(1) + " m achter op je route en haalt in");
   } else {
     parts.push("server bevestigt je plek");
   }
+  const trafficText = netTrafficText(nowPerf);
+  if (trafficText) parts.push(trafficText);
   const healthFresh = state.net.lastServerHealthAt > 0 && nowPerf - state.net.lastServerHealthAt < 6000;
   // GPU komt van dit apparaat zelf (niet van de server), dus altijd vers.
   const gpuLoad = state.runtime && typeof state.runtime.getGpuLoad === "function" ? state.runtime.getGpuLoad() : null;
