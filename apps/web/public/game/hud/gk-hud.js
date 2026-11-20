@@ -2788,7 +2788,7 @@ export function createGkHud(api) {
     if (view === "chars") parts.push(ui.chars, ui.charsBusy);
     if (view === "friends") parts.push(d.friends);
     if (view === "lore") parts.push(d.loreReads, Object.keys(d.lore || {}).length);
-    if (view === "settings") parts.push(d.isAdmin, d.defeated, store.floatNums, store.nameWorld, store.namePlayers, store.nameSelf,
+    if (view === "settings") parts.push(d.isAdmin, d.defeated, store.floatNums, store.nameWorld, store.namePlayers, store.nameSelf, store.pixels, store.camera, d.cameraChoice,
       store.healthPing, store.healthTps, store.healthMspt, store.healthCpu, store.healthGpu, store.healthPacketLoss, d.healthDefaults);
     const signature = JSON.stringify(parts);
     if (ui.sig.sheet === signature) return;
@@ -4483,17 +4483,18 @@ export function createGkHud(api) {
         labelPool.set(anchor.id, el);
       }
       const hasHp = anchor.health !== null && anchor.health !== undefined;
-      // Een vijand krijgt één kopregel: sterkte-cijfer, naam en (als het staat) het schild.
+      // Naam bovenaan, sterkte links naast de gesegmenteerde levensbalk.
       const nameSig = [anchor.strength || "", anchor.name, anchor.shield ? "shield" : "", hasHp ? "hp" : ""].join("|");
       if (el.dataset.sig !== nameSig) {
         el.dataset.sig = nameSig;
         const head = h("span", { class: "gkLabelHead" });
-        if (anchor.strength) head.append(h("span", { class: "gkLvl" + (anchor.strength > 1 ? " gkLvlUp" : ""), text: String(anchor.strength) }));
+        const level = anchor.strength ? h("span", { class: "gkLvl" + (anchor.strength > 1 ? " gkLvlUp" : ""), text: String(anchor.strength) }) : null;
+        if (level && !hasHp) head.append(level);
         head.append(h("span", { class: "gkLabelName", text: anchor.name }));
         if (anchor.shield) head.append(h("span", { class: "gkStrongIcon", text: "🛡️" }));
         const children = [head];
         const healthText = hasHp ? h("span", { class: "gkHealthText" }) : null;
-        if (hasHp) children.push(h("span", { class: "gkHealth" }, [h("span", { class: "gkHealthFill" }), healthText]));
+        if (hasHp) children.push(h("span", { class: "gkLabelVitals" }, [level, h("span", { class: "gkHealth" }, [h("span", { class: "gkHealthFill" }), healthText])]));
         el.replaceChildren(...children);
         el.gkHealthText = healthText;
         el.gkSizeKey = "";
@@ -4513,6 +4514,8 @@ export function createGkHud(api) {
         if (el.style.getPropertyValue("--gk-hp") !== hp) el.style.setProperty("--gk-hp", hp);
         const current = Number.isFinite(Number(anchor.healthCurrent)) ? Math.max(0, Math.round(Number(anchor.healthCurrent))) : Math.round(anchor.health * 100);
         const maximum = Number.isFinite(Number(anchor.healthMax)) ? Math.max(1, Math.round(Number(anchor.healthMax))) : 100;
+        const segmentSize = (10000 / maximum) + "%";
+        if (el.style.getPropertyValue("--gk-hp-step") !== segmentSize) el.style.setProperty("--gk-hp-step", segmentSize);
         const value = current + "/" + maximum;
         if (el.gkHealthText && el.gkHealthText.textContent !== value) { el.gkHealthText.textContent = value; el.gkSizeKey = ""; }
       }

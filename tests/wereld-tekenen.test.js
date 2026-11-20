@@ -80,6 +80,21 @@ test("slimme mesh: vlak = 2 driehoeken (+ rok), heuvel dichtbij fijner dan veraf
   }
 });
 
+test("mesh: ontbrekende buurvakken maken vlakke randen niet steil; echte hellingen blijven", () => {
+  for (const rise of [0, 200]) {
+    const chunk = new Int16Array(65 * 65);
+    for (let z = 0; z <= 64; z += 1) {
+      for (let x = 0; x <= 64; x += 1) chunk[z * 65 + x] = 1000 + x * rise;
+    }
+    const hf = createHeightfield(new Map([["0:0", chunk]]));
+    const mesh = buildTerrainChunkMesh(hf, 0, 0, { maxError: 0.05 });
+    const expectedY = 1 / Math.hypot(rise / 100, 1);
+    for (let i = 1; i < mesh.normals.length; i += 3) {
+      assert.ok(Math.abs(mesh.normals[i] - expectedY) < 0.000001, "helling klopt ook op hoeken en rok");
+    }
+  }
+});
+
 test("lopen: omhoog over een zachte heuvel, te steil = muur, omlaag mag altijd", () => {
   const gentle = hillField(4, 30, 0, 0);
   const world = { ground: { width: 200, depth: 200, y: 0 }, terrain: { heightfield: { maxSlopeDeg: 50 } } };

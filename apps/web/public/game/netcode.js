@@ -79,6 +79,9 @@ export function replayBufferedInputs(authoritative, ackedInput, pendingInputs, o
   const ordered = (Array.isArray(pendingInputs) ? pendingInputs : []).slice().sort(function (left, right) {
     return finite(left?.seq) - finite(right?.seq);
   });
+  // Include movement since the last sent packet, otherwise each ACK pulls
+  // the player back by that unsent part of the current frame/route.
+  if (options.currentPosition) ordered.push({ position: options.currentPosition });
   for (const entry of ordered) {
     const recorded = clonePosition(entry?.position);
     if (!recorded) continue;

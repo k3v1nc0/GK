@@ -845,9 +845,9 @@ export function createTerrainLayer(options = {}) {
     return groundY + terrainHeightAt(heightfield, x, z);
   }
 
-  function raycast(origin, direction) {
+  function raycast(origin, direction, maxDistance) {
     if (!config) return null;
-    return raycastTerrain(heightfield, origin, direction, { groundY });
+    return raycastTerrain(heightfield, origin, direction, { groundY, maxDistance });
   }
 
   // Penseel-cirkel op de grond: buitenrand (radius) en binnenrand (waar de zachte rand begint).

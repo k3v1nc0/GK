@@ -28,7 +28,7 @@ import {
 } from "./movement-kernel.js";
 import { terrainHeightAt } from "./terrain.js";
 import { createPlayerPathClient } from "./player-path-client.js?v=20261108-roads9";
-import { createTerrainLayer, seedTerrainChunk, seedTerrainPaint } from "./terrain-render.js";
+import { createTerrainLayer, seedTerrainChunk, seedTerrainPaint } from "./terrain-render.js?v=20261120-label-occlusion2";
 import { createWaterLayer } from "./water-render.js?v=20261030-terrein6";
 export {
   effectiveGroundBounds,
@@ -4902,6 +4902,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
     root: null,
     pos: new THREE.Vector3(),
     facing: 0,
+    smoothFacing: false,
     radius: 0.5,
     speed: 6,
     sprint: 1.6,
@@ -13774,8 +13775,12 @@ function resolveChunkDebugCenter(policy) {
     const behind = num(player.facing, 0) / DEG_TO_RAD + 180;
     const diff = ((((behind - camYaw) % 360) + 540) % 360) - 180;
     if (Math.abs(diff) > camFollowLimitDeg) return;
-    const step = camFollowSpeed * Math.max(0, delta);
-    camYaw += Math.abs(diff) <= step ? diff : Math.sign(diff) * step;
+    const dt = Math.max(0, delta);
+    const step = camFollowSpeed * dt;
+    // Kleine stuurbewegingen rustig volgen: muis en joystick sturen relatief aan de camera.
+    // Direct de hele afwijking overnemen koppelt die invoer schokkerig terug naar de looprichting.
+    const turn = diff * (1 - Math.exp(-4 * dt));
+    camYaw += clamp(turn, -step, step);
   }
 
   // Draaien met de muis of een vinger (pixels). Top-down draait alleen rond (de hoek blijft gelijk).
@@ -14899,7 +14904,7 @@ function resolveChunkDebugCenter(policy) {
           clips: clips,
           assetMetadata: asset.metadata || {}
         });
-        const initialAnimationState = root === player.root ? player.animationState || "idle" : "idle";
+        const initialAnimationState = root.userData.deathAnimationHeld ? "death" : root === player.root ? player.animationState || "idle" : "idle";
         playAnimationState(root, initialAnimationState, 0);
       }
       if (onReady) onReady(clone);
@@ -15330,6 +15335,8 @@ function resolveChunkDebugCenter(policy) {
     const record = animationMixers.get(root);
     if (!record || !Array.isArray(record.clips) || !record.clips.length) return null;
     const normalizedState = String(stateName || "idle").trim().toLowerCase() || "idle";
+    if (root.userData.deathAnimationHeld && normalizedState !== "death") return record.currentClipName;
+    if (normalizedState === "death") root.userData.deathAnimationHeld = true;
     const movementState = normalizedState === "idle" || normalizedState === "walk" || normalizedState === "run";
     if (movementState) {
       root.userData.movementAnimationState = normalizedState;
@@ -15378,6 +15385,8 @@ function resolveChunkDebugCenter(policy) {
   function playActionAnimation(id, stateName, options = {}) {
     const root = animationRootForKey(id);
     const stateKey = String(stateName || "").trim().toLowerCase();
+    if (root?.userData?.deathAnimationHeld && stateKey !== "death") return false;
+    if (root && stateKey === "death") root.userData.deathAnimationHeld = true;
     const configured = root?.userData?.actorClips?.[stateKey];
     const record = root ? animationMixers.get(root) : null;
     if (!root || !configured || !record) return false;
@@ -15402,6 +15411,7 @@ function resolveChunkDebugCenter(policy) {
   function clearActionAnimation(id = "self") {
     const root = animationRootForKey(id);
     if (!root) return false;
+    root.userData.deathAnimationHeld = false;
     root.userData.actionAnimationToken = (Number(root.userData.actionAnimationToken) || 0) + 1;
     root.userData.actionAnimationUntil = 0;
     playAnimationState(root, root.userData.movementAnimationState || "idle", 0.1);
@@ -16570,19 +16580,27 @@ function resolveChunkDebugCenter(policy) {
     return runtimeVisualMeasurement(root, visuals, "runtimePlayerVisualMeasurement", fallbackRuntimeVisualMeasurement(null, true));
   }
 
-  function runtimeTargetLabelPoint(root, target, point) {
+  function runtimeTargetLabelPoint(root, target, point, sightPoint = null) {
     const measured = runtimeTargetVisualMeasurement(root, target);
     // Vijanden en lopende NPC's draaien hun model binnen het doel. Het gemeten midden draait
     // niet mee, dus voor hen: recht boven hun eigen positie (zoals naamplaatjes in MMO's).
     const moving = target?.actorTarget === true && String(target?.entityKind || "") !== "resource";
+    if (sightPoint) {
+      sightPoint.set(moving ? 0 : measured.centerX, measured.centerY, moving ? 0 : measured.centerZ);
+      root.localToWorld(sightPoint);
+    }
     point.set(moving ? 0 : measured.centerX, measured.topY, moving ? 0 : measured.centerZ);
     root.localToWorld(point);
     point.y += runtimeTargetPresentationConfig().labelOffsetMeters;
     return point;
   }
 
-  function runtimePlayerLabelPoint(root, point) {
+  function runtimePlayerLabelPoint(root, point, sightPoint = null) {
     const measured = runtimePlayerVisualMeasurement(root);
+    if (sightPoint) {
+      sightPoint.set(measured.centerX, measured.centerY, measured.centerZ);
+      root.localToWorld(sightPoint);
+    }
     point.set(measured.centerX, measured.topY, measured.centerZ);
     root.localToWorld(point);
     point.y += runtimeTargetPresentationConfig().labelOffsetMeters;
@@ -16593,11 +16611,20 @@ function resolveChunkDebugCenter(policy) {
   // (in plaats van de 3D-bordjes). Dichtstbij eerst, hooguit maxCount.
   // 2D-namen in de HUD: schermplek (pagina-pixels) van NPC's, vijanden, spullen en spelers.
   // Afstand telt vanaf je eigen poppetje (niet de camera), zodat uitzoomen geen namen wegknipt.
+  const terrainLabelVisibility = new Map();
+  let terrainLabelVisibilityUntil = 0;
   function getRuntimeTargetLabelAnchors(maxDistance = 80, maxCount = 40) {
     const list = [];
     if (!camera || !canvas) return list;
     const rect = canvas.getBoundingClientRect();
     const point = new THREE.Vector3();
+    const sightPoint = new THREE.Vector3();
+    const sightDirection = new THREE.Vector3();
+    const now = performance.now();
+    if (now >= terrainLabelVisibilityUntil) {
+      terrainLabelVisibility.clear();
+      terrainLabelVisibilityUntil = now + 100;
+    }
     const origin = player.root ? player.root.position : player.pos;
     const presentation = runtimeTargetPresentationConfig();
     const seenWorldLabels = new Set();
@@ -16606,6 +16633,19 @@ function resolveChunkDebugCenter(policy) {
       if (!(distance <= maxDistance)) return;
       point.project(camera);
       if (!(point.z >= -1 && point.z <= 1) || Math.abs(point.x) > 1.05 || Math.abs(point.y) > 1.05) return;
+      if (terrainLayer.active) {
+        // Kijk naar het model zelf: de naam kan nog boven een berg uitsteken.
+        // Maximaal tien keer per seconde per doel.
+        // Verborgen labels bereiken de DOM-opbouw en plaatsing in de HUD niet.
+        let visible = terrainLabelVisibility.get(id);
+        if (visible === undefined) {
+          sightDirection.subVectors(sightPoint, camera.position);
+          const sightDistance = sightDirection.length();
+          visible = sightDistance <= 1 || !terrainLayer.raycast(camera.position, sightDirection.normalize(), sightDistance - 0.1);
+          terrainLabelVisibility.set(id, visible);
+        }
+        if (!visible) return;
+      }
       list.push(Object.assign({
         id, name, entityKind, action: "", selected: false, available: true,
         x: rect.left + (point.x * 0.5 + 0.5) * rect.width,
@@ -16617,6 +16657,7 @@ function resolveChunkDebugCenter(policy) {
     for (const [id, root] of runtimeTargetRoots) {
       if (!root || root.visible === false) continue;
       const target = root.userData?.runtimeTargetPayload || {};
+      if (target.status === "dead" || target.status === "dying") continue;
       const name = String(target.displayName || "").trim().slice(0, 34);
       if (!name) continue;
       // Een NPC kan tegelijk een praat-, winkel- en crafting-target zijn. Die
@@ -16633,7 +16674,7 @@ function resolveChunkDebugCenter(policy) {
       if ((entityKey && seenWorldLabels.has(entityKey)) || (placeKey && seenWorldLabels.has(placeKey))) continue;
       if (entityKey) seenWorldLabels.add(entityKey);
       if (placeKey) seenWorldLabels.add(placeKey);
-      runtimeTargetLabelPoint(root, target, point);
+      runtimeTargetLabelPoint(root, target, point, sightPoint);
       push(id, name, String(target.entityKind || target.targetKind || ""), {
         action: String(target.action || ""), selected: target.selected === true, available: target.available !== false,
         // Fase 5: schild-icoon boven de naam van een sterkere vijand of baas.
@@ -16647,12 +16688,12 @@ function resolveChunkDebugCenter(policy) {
     }
     // Spelers gebruiken dezelfde regel: hoogste punt van hun eigen mesh + marge.
     if (player.root && player.displayName) {
-      runtimePlayerLabelPoint(player.root, point);
+      runtimePlayerLabelPoint(player.root, point, sightPoint);
       push("self", String(player.displayName).trim().slice(0, 32), "self");
     }
     for (const [playerId, record] of remotePlayers) {
       if (!record?.root || record.root.visible === false || !record.root.parent) continue;
-      runtimePlayerLabelPoint(record.root, point);
+      runtimePlayerLabelPoint(record.root, point, sightPoint);
       push("player:" + playerId, String(record.displayName || "").trim().slice(0, 32) || "Speler", "player");
     }
     list.sort(function (a, b) { return a.distance - b.distance; });
@@ -16745,7 +16786,7 @@ function resolveChunkDebugCenter(policy) {
     });
     const sprite = new THREE.Sprite(material);
     sprite.name = "node03-runtime-target-nameplate";
-    sprite.visible = runtimeTargetNameplatesVisible;
+    sprite.visible = runtimeTargetNameplatesVisible && target?.status !== "dead" && target?.status !== "dying";
     sprite.position.set(0, runtimeTargetNameplateY(target), 0);
     sprite.scale.set(4.2, 1.22, 1);
     sprite.renderOrder = 4100;
@@ -17509,7 +17550,7 @@ function resolveChunkDebugCenter(policy) {
     });
     const mesh = new THREE.Mesh(new THREE.TorusGeometry(ringRadius, target?.selected ? 0.045 : 0.035, 6, 44), material);
     mesh.name = "node03-runtime-target-ring";
-    mesh.visible = runtimeTargetPresentationConfig().ringsVisible;
+    mesh.visible = runtimeTargetPresentationConfig().ringsVisible && target?.status !== "dead" && target?.status !== "dying";
     mesh.position.y = 0.055;
     mesh.rotation.x = Math.PI / 2;
     // Terrain/surface layers can be streamed in after the target. Several of
@@ -17560,7 +17601,8 @@ function resolveChunkDebugCenter(policy) {
     if (mode === "editor" && Number.isFinite(Number(target?.editorRotationY))) {
       root.rotation.set(num(target.editorRotationX, 0) * DEG_TO_RAD, num(target.editorRotationY, 0) * DEG_TO_RAD, num(target.editorRotationZ, 0) * DEG_TO_RAD);
     }
-    root.visible = runtimeTargetVisible(target);
+    const corpse = target.actorTarget === true && target.entityKind === "enemy" && target.status === "dead" && target.visibleInGame !== false;
+    root.visible = corpse || runtimeTargetVisible(target);
     root.userData.runtimeTargetPayload = Object.assign({}, target);
     root.userData.runtimeTargetAttachedEntityId = runtimeTargetAttachedEntityId(target) || null;
     root.userData.transformable = runtimeTargetEditorTransformable(target);
@@ -17605,7 +17647,8 @@ function resolveChunkDebugCenter(policy) {
       // vervangen alleen ring, klikvlak en naambord. Zo laadt een geraakte vijand zijn model niet opnieuw.
       const bodySignature = JSON.stringify({
         kind: target.entityKind || target.targetKind || "",
-        available: target.available !== false,
+        // Een dood actor-model behouden: opnieuw opbouwen zou de eindpose wissen.
+        available: target.actorTarget === true && target.entityKind === "enemy" ? true : target.available !== false,
         modelAssetId: target.modelAssetId || "",
         scale: [target.modelScale ?? null, target.modelScaleX ?? null, target.modelScaleY ?? null, target.modelScaleZ ?? null],
         rotation: [target.modelRotationX ?? null, target.modelRotationY ?? null, target.modelRotationZ ?? null],
@@ -17885,6 +17928,7 @@ function resolveChunkDebugCenter(policy) {
     if (!group) return null;
     const next = String(stateName || "idle");
     if (group.userData.actorAnimation === next) return next;
+    if (group.userData.deathAnimationHeld && next !== "death") clearActionAnimation(instanceId);
     group.userData.actorAnimation = next;
     return playAnimationState(group, next, 0.15);
   }
@@ -18431,7 +18475,9 @@ function resolveChunkDebugCenter(policy) {
         }
       }
       player.root.position.copy(player.pos);
-      player.root.rotation.y = player.facing;
+      player.root.rotation.y = player.smoothFacing
+        ? lerpAngleTowards(player.root.rotation.y, player.facing, 1 - Math.exp(-14 * Math.max(0, realDelta)))
+        : player.facing;
       if (camFollow) camTarget.lerp(playerCameraTarget(), Math.min(1, delta * 8));
       stepThirdPersonFollow(realDelta);
       updateCameraPosition();
@@ -19163,6 +19209,7 @@ function resolveChunkDebugCenter(policy) {
     const shouldSmooth = shouldReconcile && player.pos.distanceToSquared(target) > 0.0004;
 
     player.pendingState = null;
+    player.smoothFacing = options.smoothFacing === true;
     if (shouldSmooth) {
       player.reconcileActive = true;
       player.reconcileTarget.copy(target);
@@ -19183,7 +19230,7 @@ function resolveChunkDebugCenter(policy) {
       }
       if (!shouldSmooth) {
         player.root.position.copy(player.pos);
-        player.root.rotation.y = player.facing;
+        if (!player.smoothFacing) player.root.rotation.y = player.facing;
       }
     }
 

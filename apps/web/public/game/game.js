@@ -1,13 +1,13 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261119-camera1";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261120-death-hold1";
 import { nextPlayerRouteWaypoint } from "../shared/player-path-client.js?v=20261108-roads9";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20261106-perf1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
 import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../shared/protocol-v1.js?v=20261025-f2-client1";
-import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
+import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261119-movement2";
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createWorldSounds } from "./world-sounds.js?v=20261116-herstel1";
 import { createActorPresentation } from "./actor-presentation.js?v=20261116-herstel1";
-import { createGkHud } from "./hud/gk-hud.js?v=20261119-camera1";
+import { createGkHud } from "./hud/gk-hud.js?v=20261120-block-tags2";
 import { dayNightState, mixColor } from "../shared/day-night.js?v=20261115-fase10";
 import { node05ActionBody, node05OperationId } from "./node05-request.js?v=20261113-fase8d";
 import {
@@ -740,7 +740,7 @@ const state = {
     pendingTargetAction: null,
     reloadQueued: false,
     // Fase 5: vak 1 slaat vanzelf door op deze vijand; een vaardigheid wacht kort als er net een actie loopt.
-    autoAttack: { targetId: "", timer: 0 },
+    autoAttack: { targetId: "", timer: 0, following: false, followAt: 0 },
     queuedSkill: null
   },
   node04: {
@@ -808,7 +808,7 @@ const state = {
     minimapDrawLastAt: 0
   },
   lastFrameAt: 0,
-  movementTimerId: null
+  movementLoopActive: false
 };
 
 syncNetDebugState();
@@ -5303,19 +5303,11 @@ function stopRemoteFrameLoop() {
 }
 
 function startMovementFrameLoop() {
-  if (state.movementTimerId) return;
-  const tick = function (now) {
-    if (!state.movementTimerId) return;
-    state.movementTimerId = window.requestAnimationFrame(tick);
-    stepMovement(now);
-  };
-  state.movementTimerId = window.requestAnimationFrame(tick);
+  state.movementLoopActive = true;
 }
 
 function stopMovementFrameLoop() {
-  if (!state.movementTimerId) return;
-  window.cancelAnimationFrame(state.movementTimerId);
-  state.movementTimerId = null;
+  state.movementLoopActive = false;
 }
 
 function formatPosition(position) {
@@ -5944,6 +5936,7 @@ function startPostInputPredictionHold(reason = null) {
 }
 
 function noteLocalControlStart(forceEpoch = false, source = null) {
+  if (source === "keyboard" || source === "joystick") stopAutoAttack();
   if (!isMmoGameplayReady()) return false;
   if (isNode03Defeated()) return false;
   const now = Date.now();
@@ -6135,6 +6128,7 @@ function applyAuthoritativeUpdate(update, options = {}) {
       ? replayBufferedInputs(nextPosition, ackedPendingEntry, state.net.pendingInputs.filter(function (item) {
           return Number(item.seq) > clientInputSeq;
         }), {
+          currentPosition: state.predictedPosition,
           resolve: function (start, desired) {
             return state.runtime && typeof state.runtime.resolvePlayerMovementIntent === "function"
               ? state.runtime.resolvePlayerMovementIntent(start, desired, { radius: currentCollisionRadius() })
@@ -7593,6 +7587,15 @@ async function runNode03Action(action, targetId, extra = {}) {
   }
   if (!action || state.node03.actionInFlight) return;
   const currentTarget = node03TargetWithClientRange(node03TargetById(targetId));
+  if (normalizedAction === "attack" && extra.autoSwing !== true && currentTarget?.available !== false && currentTarget?.action === "attack") {
+    startAutoAttack(targetId);
+    selectNode03Target(targetId);
+    if (currentTarget.inRange === false) {
+      updateAutoAttackFollow(performance.now());
+      scheduleAutoAttack(120);
+      return;
+    }
+  }
   if (currentTarget?.instanceId) {
     selectNode03Target(currentTarget.instanceId);
     if (extra.skipMoveToTarget !== true && currentTarget.available !== false && currentTarget.inRange === false && Number.isFinite(Number(currentTarget.x)) && Number.isFinite(Number(currentTarget.z))) {
@@ -7657,6 +7660,10 @@ async function runNode03Action(action, targetId, extra = {}) {
     gotSnapshot = Boolean(data?.snapshot);
     if (!response.ok || !data || data.ok !== true) {
       const serverMessage = data?.message || "Spelactie mislukt.";
+      if (normalizedAction === "attack" && state.node03.autoAttack.targetId === String(targetId) && String(serverMessage).toLowerCase().includes("te ver weg")) {
+        scheduleAutoAttack(120);
+        return;
+      }
       const pendingAttempt = Math.max(0, Number(extra.pendingAttempt || 0) || 0);
       if (
         extra.pendingTargetAction === true &&
@@ -7768,18 +7775,78 @@ function autoAttackTarget() {
 function startAutoAttack(targetId) {
   const auto = state.node03.autoAttack;
   if (auto.targetId === String(targetId)) return;
+  stopAutoAttack();
   if (auto.timer) window.clearTimeout(auto.timer);
   auto.timer = 0;
   auto.targetId = String(targetId);
+  auto.followAt = 0;
+  auto.followSample = null;
+  auto.targetMovingUntil = 0;
+  auto.targetSpeed = 0;
+  auto.matchingSpeed = false;
 }
 
 function stopAutoAttack(message) {
   const auto = state.node03.autoAttack;
   if (auto.timer) window.clearTimeout(auto.timer);
   auto.timer = 0;
+  if (auto.following) clearMovementInput("attack-follow-stopped", { finalPointerTarget: localStopPointForServer() });
+  auto.following = false;
   if (!auto.targetId) return;
   auto.targetId = "";
   if (message) showGameHudDialogueNotice(message, { title: "Melding" });
+}
+
+// Volg de actuele actorpositie; beperk routeberekeningen voor bewegende doelen.
+function updateAutoAttackFollow(now) {
+  const auto = state.node03.autoAttack;
+  if (!auto.targetId || now < auto.followAt) return;
+  auto.followAt = now + 150;
+  const target = autoAttackTarget();
+  if (!target || isNode03Defeated()) { stopAutoAttack(); return; }
+  if (hasKeyboardMovementInput() || isPointerHoldActive()) return;
+  if (!Number.isFinite(Number(target.x)) || !Number.isFinite(Number(target.z))) return;
+  const sample = auto.followSample;
+  const travel = sample ? Math.hypot(target.x - sample.x, target.z - sample.z) : 0;
+  if (sample && travel > 0.02 && now > sample.at) {
+    const measuredSpeed = travel * 1000 / (now - sample.at);
+    auto.targetSpeed = auto.targetMovingUntil > now ? auto.targetSpeed * 0.5 + measuredSpeed * 0.5 : measuredSpeed;
+    auto.targetMovingUntil = now + 350;
+  }
+  auto.followSample = { x: Number(target.x), z: Number(target.z), at: now };
+  const targetMoving = now < (auto.targetMovingUntil || 0);
+  auto.matchingSpeed = targetMoving;
+  if (!targetMoving) auto.targetSpeed = 0;
+  // Ruim binnen bereik stoppen, zodat een bewegend dier niet alweer buiten
+  // bereik is wanneer de aanval de server bereikt.
+  const attackArrivalRadius = Math.max(0, targetArrivalRadius(target, true) - 0.5);
+  auto.matchDistance = attackArrivalRadius;
+  // Aanvalsbereik is geen stopafstand voor een dier dat doorloopt. Volg dan
+  // tot vlak achter zijn lichaam, zonder iedere keer uit bereik af te wachten.
+  const arrivalRadius = targetMoving
+    ? Math.min(attackArrivalRadius, currentCollisionRadius() + Math.max(0, num(target.radius, 0)) + 0.15)
+    : attackArrivalRadius;
+  if (!targetMoving && target.inRange !== false && (!auto.following || num(target.distance, Infinity) <= arrivalRadius)) {
+    if (auto.following) clearMovementInput("attack-follow-in-range", { finalPointerTarget: localStopPointForServer() });
+    auto.following = false;
+    return;
+  }
+  if (auto.following && state.pointer.active && state.pointer.mode === "click_to_move") {
+    if (state.pointer.routePending) {
+      if (now - state.pointer.routeStartedAt < 1500) return;
+      state.pointer.routeRequestId++;
+      state.pointer.routePending = false;
+      state.pointer.routeGoal = null;
+      state.runtime?.cancelPlayerMovementPath?.();
+    }
+    if (state.pointer.routeGoal && Math.hypot(state.pointer.routeGoal.x - target.x, state.pointer.routeGoal.z - target.z) < 0.05
+      && Math.abs(state.pointer.routeArrivalRadius - arrivalRadius) < 0.05) return;
+    state.pointer.target = { x: Number(target.x), z: Number(target.z) };
+    state.pointer.routeArrivalRadius = arrivalRadius;
+    prepareClickMoveRoute({ keepMoving: true });
+    return;
+  }
+  auto.following = startClickToMoveTarget(target.x, target.z, "attack-follow", { arrivalRadius });
 }
 
 function scheduleAutoAttack(delayMs) {
@@ -7796,7 +7863,7 @@ function autoAttackSwing() {
   if (isNode03Defeated()) { stopAutoAttack(); return; }
   const target = autoAttackTarget();
   if (!target) { stopAutoAttack(); return; }
-  if (state.node03.actionInFlight) { scheduleAutoAttack(120); return; }
+  if (target.inRange === false || state.node03.actionInFlight) { scheduleAutoAttack(120); return; }
   runNode03Action("attack", auto.targetId, { skipMoveToTarget: true, autoSwing: true });
 }
 
@@ -12017,6 +12084,7 @@ function ensureRuntime(world) {
       localPlayerDisplayName: state.player?.displayName || state.player?.id || "",
       // Eerst de vijanden/NPC's en HUD-indeling, dan de camera en het 3D-beeld.
       onBeforeRenderFrame: function ({ now }) {
+        if (state.movementLoopActive) stepMovement(now);
         if (actorPresentation.frame(state.runtime, now)) syncRuntimeTargets();
         if (gkHud) gkHud.prepareFrame(now);
       },
@@ -12164,25 +12232,31 @@ function shouldSendPointerTargetToServer() {
   return true;
 }
 
-function prepareClickMoveRoute() {
+function prepareClickMoveRoute(options = {}) {
   if (!state.pointer.target || !state.predictedPosition || !state.runtime?.findPlayerMovementPath) return false;
   const worldKey = state.runtimeWorldKey;
   if (state.pointer.routePending && state.pointer.routeWorldKey === worldKey) return true;
   const requestId = ++state.pointer.routeRequestId;
-  state.pointer.route = null;
+  const keepMoving = options.keepMoving === true && state.pointer.routeWorldKey === worldKey && state.pointer.route?.length > 0;
+  if (!keepMoving) state.pointer.route = null;
   state.pointer.routePending = true;
+  state.pointer.routeStartedAt = performance.now();
+  state.pointer.routeGoal = null;
   state.pointer.routeWorldKey = worldKey;
-  state.runtime.findPlayerMovementPath({ ...state.predictedPosition }, { ...state.pointer.target }, {
+  const goal = { ...state.pointer.target };
+  state.runtime.findPlayerMovementPath({ ...state.predictedPosition }, goal, {
     radius: currentCollisionRadius(), arrivalRadius: state.pointer.routeArrivalRadius
   }).then(function (route) {
     if (requestId !== state.pointer.routeRequestId || !state.pointer.active) return;
     state.pointer.routePending = false;
     if (worldKey !== state.runtimeWorldKey || route.reason === "cancelled") return;
     if (!route.ok || !route.points.length) {
+      if (keepMoving) return;
       clearMovementInput("click-route-unavailable");
       return;
     }
     state.pointer.route = route.points;
+    state.pointer.routeGoal = goal;
     sendInputState({ force: true });
   });
   return true;
@@ -12191,7 +12265,7 @@ function prepareClickMoveRoute() {
 function clickMoveWaypoint(position = state.predictedPosition) {
   if (isPointerHoldActive()) return state.pointer.target;
   if ((!state.pointer.route || state.pointer.routeWorldKey !== state.runtimeWorldKey) && !prepareClickMoveRoute()) return null;
-  if (state.pointer.routePending) return null;
+  if (state.pointer.routePending && !state.pointer.route?.length) return null;
   return nextPlayerRouteWaypoint(state.pointer.route, position, clickMoveArrivalRadius()) || state.pointer.target;
 }
 
@@ -12212,6 +12286,7 @@ function startClickToMoveTarget(worldX, worldZ, source = null, options = {}) {
     renderNode04Hud();
     return false;
   }
+  if (source !== "attack-follow") stopAutoAttack();
   interruptActiveClickRoute(source ? source + "-replaced" : "click-route-replaced");
   clearPointerTarget(false);
   state.pointer.active = true;
@@ -12247,7 +12322,8 @@ function currentMoveVector() {
   let x = 0;
   let z = 0;
   if (hasKeyboardMovementInput()) {
-    // Camera-keuze: joystick (mobiel, third-person). Omhoog = vooruit in de kijkrichting van de camera.
+    // Stuur ten opzichte van de huidige camera: zijwaarts vasthouden blijft
+    // een bocht maken; terug naar boven loopt verder in de nieuwe kijkrichting.
     if (hasStickMovementInput()) {
       const stick = cameraInput.stick;
       return { x: forward.x * -stick.y + right.x * stick.x, z: forward.z * -stick.y + right.z * stick.x };
@@ -12273,6 +12349,12 @@ function currentMoveVector() {
       if (length <= clickMoveArrivalRadius() && (!state.pointer.route || state.pointer.route.length <= 1)) {
         if (pointerHeld && state.pointer.lastHoldVector) {
           return { x: state.pointer.lastHoldVector.x, z: state.pointer.lastHoldVector.z };
+        }
+        if (state.node03.autoAttack.following && state.node03.autoAttack.targetId) {
+          // Een oud route-eindpunt is geen einde van de achtervolging.
+          state.pointer.routeGoal = null;
+          state.node03.autoAttack.followAt = 0;
+          return { x: 0, z: 0 };
         }
         clearMovementInput("click-target-arrived", { finalPointerTarget: localStopPointForServer() });
         maybeRunPendingNode03TargetAction("arrived");
@@ -12308,7 +12390,18 @@ function currentSpeed() {
   const player = state.gameWorld?.player || {};
   const moveSpeed = Math.max(0.1, num(player.moveSpeed, 6));
   const sprintMultiplier = Math.min(10, Math.max(1, num(player.sprintMultiplier, 1.6)));
-  return moveSpeed * (sprintActive() ? sprintMultiplier : 1);
+  const maximum = moveSpeed * (sprintActive() ? sprintMultiplier : 1);
+  const auto = state.node03.autoAttack;
+  if (!auto.following || !auto.matchingSpeed || !state.pointer.active || hasKeyboardMovementInput()
+    || isPointerHoldActive() || state.pointer.route?.length > 1) return maximum;
+  const target = autoAttackTarget();
+  if (!target || !state.predictedPosition) return maximum;
+  const distance = Math.hypot(target.x - state.predictedPosition.x, target.z - state.predictedPosition.z);
+  const gap = distance - auto.matchDistance;
+  if (gap > 1.5) return maximum;
+  // Op de gewenste afstand dezelfde snelheid; afstandsfouten rustig inlopen.
+  // De server volgt de werkelijk gelopen routepunten en blijft zijn eigen snelheidslimiet gebruiken.
+  return Math.min(maximum, Math.max(0, auto.targetSpeed + gap * 2.5));
 }
 
 function sprintActive() {
@@ -12395,6 +12488,7 @@ function applyRuntimePosition(position, options = {}) {
   state.runtime.setPlayerState(position, {
     immediate: options.immediate !== false && options.reconcile !== true,
     reconcile: options.reconcile === true,
+    smoothFacing: options.smoothFacing === true,
     animationState: options.animationState,
     reconcileDurationMs: options.reconcileDurationMs
   });
@@ -13643,10 +13737,10 @@ function stepMovement(now) {
     state.lastFrameAt = now;
     return;
   }
-  // Camera-keuze: hoe ver de third-person camera vanzelf achter je mag draaien. WASD = niet (je stuurt met de
-  // muis), joystick = alleen bij (schuin) vooruit, klik- of tikroute = ook bij een flinke bocht.
+  // De joystick mag ook voorbij zijwaarts blijven sturen. Geen harde
+  // hoekgrens die het meedraaien midden in een bocht uitschakelt.
   if (typeof state.runtime.setGameCameraFollowLimit === "function") {
-    state.runtime.setGameCameraFollowLimit(hasStickMovementInput() ? 80 : hasKeyboardMovementInput() ? 0 : state.pointer.active ? 150 : 0);
+    state.runtime.setGameCameraFollowLimit(hasStickMovementInput() ? 180 : hasKeyboardMovementInput() ? 0 : state.pointer.active ? 150 : 0);
   }
   if (!state.lastFrameAt) state.lastFrameAt = now;
   // On a slow laptop a 50 ms cap made local prediction run at half speed (or
@@ -13654,7 +13748,9 @@ function stepMovement(now) {
   // larger, still bounded catch-up step; resolveMovement performs collision
   // substeps internally.
   const dt = clamp((now - state.lastFrameAt) / 1000, 0, MAX_MOVEMENT_FRAME_DELTA_SECONDS);
-  state.lastFrameAt = now;
+  // Een input-event kan later liggen dan de timestamp van het volgende RAF.
+  // De klok niet terugzetten: anders tellen we dat stukje looptijd dubbel.
+  state.lastFrameAt = Math.max(state.lastFrameAt, now);
   const netSettings = mmoNetworkSettings();
 
   if (isNode03Defeated()) {
@@ -13664,6 +13760,8 @@ function stepMovement(now) {
     if (changed) renderNode04Hud();
     return;
   }
+
+  updateAutoAttackFollow(now);
 
   // Ook zonder loopinput moet het gesprek de wachtstand van de NPC blijven vernieuwen.
   maybeWalkerTalk(now);
@@ -13716,6 +13814,11 @@ function stepMovement(now) {
   const nx = vector.x / length;
   const nz = vector.z / length;
   const speed = currentSpeed();
+  if (speed <= 0.001) {
+    setMovementAnimationState("idle");
+    if (now - state.lastSendAt >= netSettings.moveSendIntervalMs) sendInputState({ force: true });
+    return;
+  }
   // Zelfde stapgrootte als de server (één servertick per stap) en geen verloren tijd bij een trage frame.
   // Zo lopen client en server ook langs obstakels dezelfde route en even snel; anders liep de server voor of
   // een andere kant om en volgde er een correctie.
@@ -13798,7 +13901,7 @@ function stepMovement(now) {
   scheduleMinimapFogDiscovery("movement");
   setMovementAnimationState(collisionBlocked ? "idle" : (sprintActive() ? "run" : "walk"));
   if (netSettings.predictionEnabled !== false) {
-    applyRuntimePosition(nextPosition, { immediate: true, animationState: state.lastAnimationState });
+    applyRuntimePosition(nextPosition, { immediate: true, smoothFacing: true, animationState: state.lastAnimationState });
   }
   if (state.minimapHud.elements) state.minimapHud.dirty = true;
   refreshGameplayClientRanges(now);
@@ -13911,6 +14014,7 @@ function clearPointerTarget(keepTarget = false) {
   state.pointer.routeRequestId += 1;
   state.pointer.routePending = false;
   state.pointer.routeArrivalRadius = 0;
+  state.pointer.routeGoal = null;
   state.pointer.route = null;
   state.pointer.routeWorldKey = null;
   state.pointer.active = false;
@@ -13990,6 +14094,7 @@ function handleGamePointerDown(event, source = "pointer") {
     beginCameraOrbit(event, { tapToMove: cameraNow.clickToMove, hold: state.pointer.playerHold });
     return;
   }
+  stopAutoAttack();
   clearNode03PendingTargetAction();
   interruptActiveClickRoute("world-click-route-replaced");
   clearPointerTarget(false);
@@ -14436,7 +14541,9 @@ function updateStickFromEvent(event, starting) {
   if (knob) knob.style.transform = "translate(calc(-50% + " + (x * radius * 0.6).toFixed(1) + "px), calc(-50% + " + (y * radius * 0.6).toFixed(1) + "px))";
   // Helemaal duwen = rennen (als dat aan staat op de kaart Project).
   const runAtEdge = gameCameraState()?.touch?.runAtEdge !== false;
-  const sprint = runAtEdge && Math.hypot(x, y) > 0.92;
+  // Een kleine stuurcorrectie rond de buitenrand mag niet steeds schakelen
+  // tussen lopen en rennen (met een snelheids- en animatiesprong).
+  const sprint = runAtEdge && Math.hypot(x, y) > (stick.sprinting ? 0.80 : 0.92);
   if (sprint !== stick.sprinting) {
     stick.sprinting = sprint;
     state.input.sprint = sprint;

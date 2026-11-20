@@ -42,3 +42,19 @@ test("remote interpolatiebuffer is op TTL en aantal begrensd en bewaart altijd d
   assert.equal(bounded[bounded.length - 1].position.x, 39);
   assert.ok(bounded[0].receivedAtEpoch >= 3900);
 });
+
+test("reconcile behoudt ook de nog niet verzonden beweging na een bocht", function () {
+  const acked = { seq: 1, position: { x: 1, y: 0, z: 0 } };
+  const pending = [{ seq: 2, position: { x: 2, y: 0, z: 0 } }];
+  const currentPosition = { x: 2, y: 0, z: 0.3, rotationY: 0 };
+  const replayed = replayBufferedInputs(acked.position, acked, pending, { currentPosition });
+  assert.deepEqual(replayed, currentPosition);
+  assert.equal(pending.length, 1);
+
+  const withoutPending = replayBufferedInputs(acked.position, acked, [], { currentPosition });
+  assert.deepEqual(withoutPending, currentPosition);
+
+  const corrected = replayBufferedInputs({ x: 0.8, y: 0, z: 0 }, acked, pending, { currentPosition });
+  assert.ok(Math.abs(corrected.x - 1.8) < 0.001);
+  assert.equal(corrected.z, 0.3);
+});

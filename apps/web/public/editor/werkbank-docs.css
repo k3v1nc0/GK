@@ -51,6 +51,7 @@
 .wbdHeadName { font-size: 16px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wbdBadge { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #3b2a12; color: var(--wbd-accent); }
 .wbdFields { display: grid; gap: 8px; }
+.wbdFields[hidden] { display: none; }
 .wbdField { display: grid; grid-template-columns: minmax(96px, 34%) minmax(0, 1fr) 22px; align-items: center; gap: 8px; }
 .wbdFieldWide { grid-template-columns: 1fr 22px; }
 .wbdFieldWide .wbdLabel { grid-column: 1 / -1; }

@@ -35,9 +35,7 @@ body {
   inset: 0;
   z-index: 1;
   pointer-events: none;
-  background:
-    radial-gradient(circle at 50% 48%, rgba(110, 8, 8, 0.12), rgba(12, 0, 0, 0.48) 62%, rgba(0, 0, 0, 0.62)),
-    linear-gradient(180deg, rgba(127, 29, 29, 0.28), rgba(0, 0, 0, 0.44));
+  background: radial-gradient(ellipse at center, rgba(18, 0, 0, 0.16) 35%, rgba(48, 0, 0, 0.42) 100%);
 }
 
 .defeatOverlay[hidden] {
@@ -2041,7 +2039,7 @@ body {
 /* Camera-keuze (19-11): joystick op mobiel in third-person (plek en grootte: kaart Project). */
 .gkStick {
   position: absolute;
-  z-index: 4;
+  z-index: 6; /* Boven de HUD (5), zodat meldingen de joystick niet blokkeren. */
   border-radius: 50%;
   background: radial-gradient(circle, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0.04) 70%);
   border: 2px solid rgba(255, 255, 255, 0.28);

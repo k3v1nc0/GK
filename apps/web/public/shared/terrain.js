@@ -691,6 +691,17 @@ export function buildTerrainChunkMesh(hf, cx, cz, options = {}) {
   const normals = new Float32Array(vertexCount * 3);
   const baseX = cx * SIZE;
   const baseZ = cz * SIZE;
+  // Gebruik de eigen dubbele randpunten. Een ontbrekend buurvak is geen
+  // hoogteverschil: bereken daar de helling eenzijdig vanuit dit vak.
+  const normalHeight = (x, z) => {
+    if (x >= 0 && x <= SIZE && z >= 0 && z <= SIZE) {
+      return chunk ? chunk[z * VERTS + x] / 100 : 0;
+    }
+    const ix = baseX + x;
+    const iz = baseZ + z;
+    if (!hf?.chunks?.has(Math.floor(ix / SIZE) + ":" + Math.floor(iz / SIZE))) return null;
+    return terrainVertexCm(hf, ix, iz) / 100;
+  };
   for (let v = 0; v < topCount; v += 1) {
     const index = order[v];
     const lx = index % VERTS;
@@ -699,10 +710,12 @@ export function buildTerrainChunkMesh(hf, cx, cz, options = {}) {
     positions[v * 3] = lx;
     positions[v * 3 + 1] = h;
     positions[v * 3 + 2] = lz;
-    const ix = baseX + lx;
-    const iz = baseZ + lz;
-    const dx = (terrainVertexCm(hf, ix + 1, iz) - terrainVertexCm(hf, ix - 1, iz)) / 200;
-    const dz = (terrainVertexCm(hf, ix, iz + 1) - terrainVertexCm(hf, ix, iz - 1)) / 200;
+    const left = normalHeight(lx - 1, lz);
+    const right = normalHeight(lx + 1, lz);
+    const back = normalHeight(lx, lz - 1);
+    const front = normalHeight(lx, lz + 1);
+    const dx = ((right ?? h) - (left ?? h)) / (left !== null && right !== null ? 2 : 1);
+    const dz = ((front ?? h) - (back ?? h)) / (back !== null && front !== null ? 2 : 1);
     const length = Math.hypot(dx, 1, dz);
     normals[v * 3] = -dx / length;
     normals[v * 3 + 1] = 1 / length;

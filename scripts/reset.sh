@@ -160,7 +160,20 @@ cleanup_ram_hogs() {
 }
 
 echo "=== 1. Editor Service Stoppen ==="
-run_root systemctl stop "$EDITOR_SERVICE"
+# Ook als systemd zelf vastloopt mag deze stap niet onbeperkt blijven wachten.
+# Ga bij een fout niet door met opruimen/installeren: de editor kan nog draaien.
+if run_root timeout --kill-after=5s 30s systemctl stop "$EDITOR_SERVICE"; then
+  echo "- Editor service gestopt"
+else
+  stop_status=$?
+  if [ "$stop_status" -eq 124 ] || [ "$stop_status" -eq 137 ]; then
+    echo "Fout: systemd heeft het stoppen niet binnen 30 seconden bevestigd." >&2
+    echo "Reset afgebroken; controleer systemd/de server voordat je opnieuw probeert." >&2
+  else
+    echo "Fout: editor service stoppen mislukt (exitcode ${stop_status}). Reset afgebroken." >&2
+  fi
+  exit "$stop_status"
+fi
 
 show_memory
 cleanup_ram_hogs
