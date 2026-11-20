@@ -263,7 +263,7 @@ export function cameraConfigOf(data = {}) {
     fov: n("cameraTpFov"), mouseSpeed: n("cameraTpMouseSpeed") / 100, invertY: values.cameraTpInvertY === true,
     follow: values.cameraTpFollow !== false, followDelayMs: Math.round(n("cameraTpFollowDelay") * 1000), followSpeed: n("cameraTpFollowSpeed"),
     collision: values.cameraTpCollision !== false, clickToMove: values.cameraTpClickToMove !== false,
-    viewDistance: n("cameraTpViewDistance"), objectDistance: n("cameraTpObjectDistance")
+    viewDistance: n("cameraTpViewDistance"), fog: values.cameraTpFog !== false, objectDistance: n("cameraTpObjectDistance")
   };
   const touch = { side: values.cameraTouchStickSide === "right" ? "right" : "left", size: n("cameraTouchStickSize"), x: n("cameraTouchStickX"), y: n("cameraTouchStickY"),
     turnSpeed: n("cameraTouchTurnSpeed") / 100, runAtEdge: values.cameraTouchRunAtEdge !== false };

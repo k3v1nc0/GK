@@ -23,6 +23,7 @@ test("lucht staat standaard aan; instellingen uit de kaart gaan mee naar de game
   assert.equal(world.world.backgroundColor, "#ddeeff", "achtergrond en mist = horizon");
   assert.deepEqual([world.dayNight.daySkyColor, world.dayNight.nightSkyColor], ["#ddeeff", "#112233"]);
   assert.equal(worldOf({}).sky.enabled, true, "zonder kaart ook een lucht");
+  assert.equal(world.camera.thirdPerson.fog, true, "mist in de verte staat standaard aan (kaart Project)");
 });
 
 test("lucht uit: alleen de egale Kleur van de lucht, zoals vroeger", () => {

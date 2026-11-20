@@ -138,7 +138,7 @@ export function createSkyLayer({ scene, requestRender, lowQuality = false }) {
   mesh.receiveShadow = false;
   mesh.matrixAutoUpdate = false;
   mesh.raycast = function () {};
-  mesh.userData.skyDome = true;
+  mesh.userData.gkSky = true; // anders ruimt de spookvlak-opruimer in world-runtime hem op (diepte schrijven staat uit)
   mesh.visible = false;
   scene.add(mesh);
 

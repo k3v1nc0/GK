@@ -30,7 +30,7 @@ import { terrainHeightAt } from "./terrain.js";
 import { createPlayerPathClient } from "./player-path-client.js?v=20261108-roads9";
 import { createTerrainLayer, seedTerrainChunk, seedTerrainPaint } from "./terrain-render.js?v=20261120-label-occlusion2";
 import { createWaterLayer } from "./water-render.js?v=20261030-terrein6";
-import { createSkyLayer } from "./sky-render.js?v=20261120-sky1";
+import { createSkyLayer } from "./sky-render.js?v=20261120-sky2";
 export {
   effectiveGroundBounds,
   effectiveWorldGroundBounds,
@@ -1804,6 +1804,8 @@ function collectGhostPlaneCandidateRecord(object, context = {}) {
     || object.userData?.surfaceLayerId
     // Ronde 3c: watervlakken (water-render.js) zijn echte wereld, geen spookvlak; anders ruimt de opruimer ze op.
     || object.userData?.gkWater
+    // Kevin 20-11: de lucht-koepel (sky-render.js) schrijft geen diepte; geen spookvlak.
+    || object.userData?.gkSky
   );
   const suspiciousFlags = [];
   if (isCameraChild) suspiciousFlags.push("cameraChild");
@@ -4966,6 +4968,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let camFollowLimitDeg = 0; // de game zegt per beweging hoe ver de camera mag meedraaien (0 = niet)
   let camCollision = false;
   let camViewDistance = 0;
+  let camFog = true; // Kevin 20-11: mist in de verte (third-person) mag uit
   let camLastOrbitAt = 0;
   let camSmoothedDistance = Infinity;
   let camLastPositionAt = 0;
@@ -13655,6 +13658,7 @@ function resolveChunkDebugCenter(policy) {
       camFollowSpeed = Math.max(1, num(tp.followSpeed, 120));
       camCollision = tp.collision !== false;
       camViewDistance = Math.max(0, num(tp.viewDistance, 220));
+      camFog = tp.fog !== false;
       // Begin achter de speler.
       camYaw = num(player.facing, 0) / DEG_TO_RAD + 180;
     } else {
@@ -13678,10 +13682,14 @@ function resolveChunkDebugCenter(policy) {
     if (mode !== "game") return;
     if (camMode === "third-person" && camViewDistance > 0) {
       if (!scene.fog?.gkCamera) camFogBackup = scene.fog || null;
-      const sky = scene.background?.isColor ? scene.background.clone() : new THREE.Color("#8fb8de");
-      const fog = new THREE.Fog(sky, camViewDistance * 0.45, camViewDistance);
-      fog.gkCamera = true;
-      scene.fog = fog;
+      if (camFog) {
+        const sky = scene.background?.isColor ? scene.background.clone() : new THREE.Color("#8fb8de");
+        const fog = new THREE.Fog(sky, camViewDistance * 0.45, camViewDistance);
+        fog.gkCamera = true;
+        scene.fog = fog;
+      } else {
+        scene.fog = camFogBackup || null;
+      }
       camera.far = camViewDistance * 1.15;
     } else {
       if (scene.fog?.gkCamera) scene.fog = camFogBackup || null;
