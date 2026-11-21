@@ -24,7 +24,6 @@ import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import WebSocket from "ws";
 import { createIsolatedRuntime, requireIsolatedMode } from "./lib/test-isolation.js";
-import { addGoldenPathSlice, applyFoundation, createStartZone, createTestWorldApi } from "./lib/test-world.js";
 import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../apps/web/public/shared/protocol-v1.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -122,15 +121,12 @@ async function resetPerfWindow(admin) {
   }
 }
 
+// Nodes bestaan niet meer: de botwereld is de standaardwereld uit SAVE TO GAME (build), net als in de smoke.
 async function buildWorld(admin) {
   const login = await admin.call("POST", "/api/auth/login", { username: ADMIN_USERNAME, password: ADMIN_PASSWORD });
   if (login.status !== 200) throw new Error("Admin login mislukt: " + login.status);
-  const world = createTestWorldApi((method, pathname, body) => admin.call(method, pathname, body));
-  const foundation = await applyFoundation(world);
-  const zone = await createStartZone(world, foundation, { zoneId: "zone.bots", displayName: "Bot Zone", spawn: { x: 0, z: 0 } });
-  await addGoldenPathSlice(world, foundation, zone, { prefix: "f2_bots" });
-  const publish = await admin.call("POST", "/api/editor/publish");
-  if (publish.status !== 200) throw new Error("Publiceren mislukt: " + publish.status + " " + publish.text.slice(0, 200));
+  const publish = await admin.call("POST", "/api/authoring/publish", {});
+  if (publish.status !== 200 || !/^b_/.test(publish.json?.buildId || "")) throw new Error("SAVE TO GAME mislukt: " + publish.status + " " + publish.text.slice(0, 200));
 }
 
 function startBot(index, stats) {

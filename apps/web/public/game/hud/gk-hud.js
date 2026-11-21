@@ -345,6 +345,9 @@ export function createGkHud(api) {
   let authoredMap = mapPresentation(typeof api.mapPresentation === "function" ? api.mapPresentation() : null);
   const store = loadStore(authoredMap);
   const ui = {
+    bots: null,             // Kevin 20-11: stand van de bots (admin, Instellingen > Bots)
+    botsBusy: false,
+    botsTimer: 0,
     celebrations: [],       // Kevin 6-11: Quest voltooid en Level omhoog na elkaar (niet over elkaar)
     celebrating: false,
     completedQuestKeys: null,
@@ -2789,7 +2792,7 @@ export function createGkHud(api) {
     if (view === "friends") parts.push(d.friends);
     if (view === "lore") parts.push(d.loreReads, Object.keys(d.lore || {}).length);
     if (view === "settings") parts.push(d.isAdmin, d.defeated, store.floatNums, store.nameWorld, store.namePlayers, store.nameSelf, store.pixels, store.camera, d.cameraChoice,
-      store.healthPing, store.healthTps, store.healthMspt, store.healthCpu, store.healthGpu, store.healthPacketLoss, d.healthDefaults);
+      store.healthPing, store.healthTps, store.healthMspt, store.healthCpu, store.healthGpu, store.healthPacketLoss, d.healthDefaults, ui.bots, ui.botsBusy);
     const signature = JSON.stringify(parts);
     if (ui.sig.sheet === signature) return;
     const scrollKey = view === "bag" ? "bag:" + store.filter : view;
@@ -4035,9 +4038,65 @@ export function createGkHud(api) {
       toggle("autoLoot", "chest", "Automatisch buit pakken", "Aan = alle buit gaat meteen in je tas. Uit = bij een mix (bijv. goud én een vacht) kies je zelf wat je meeneemt; één soort gaat altijd meteen in je tas.", store.autoLoot === true),
       sectionGroup("settings-server", "Serverstatus onderin", serverRows, true),
       sectionGroup("settings-view", "Spelbeeld", viewRows, true),
+      d.isAdmin ? sectionGroup("settings-bots", "Bots (admin)", botRows(), false) : null,
       h("p", { class: "gkCredits" }, ["Iconen: ", h("a", { href: "https://game-icons.net", target: "_blank", rel: "noopener", text: "game-icons.net" }), " (Lorc, Delapouite en anderen), CC BY 3.0"])
     ]);
     return [head("cog", "Instellingen"), h("div", { class: "gkBody" }, [list])];
+  }
+
+  // Kevin 20-11: bots loslaten om te zien of de game en de server het trekken. De stand komt elke 2 s zolang
+  // Instellingen open staat.
+  function botsVisible() {
+    return root.dataset.panel === "open" && store.tab === "settings" && data().isAdmin === true;
+  }
+
+  function botsPoll() {
+    ui.botsTimer = 0;
+    if (!botsVisible()) return;
+    ui.botsTimer = -1;
+    Promise.resolve(api.fetchJson("/api/game/bots")).then(function (result) {
+      ui.bots = result || null;
+      renderSheet();
+    }).catch(function () {}).then(function () {
+      ui.botsTimer = botsVisible() ? setTimeout(botsPoll, 2000) : 0;
+    });
+  }
+
+  function botsAction(body) {
+    if (ui.botsBusy) return;
+    ui.botsBusy = true;
+    renderSheet();
+    Promise.resolve(api.postJson("/api/game/bots", body)).then(function (result) {
+      if (result) ui.bots = result;
+      if (body.action === "add") toast(body.count + " bots komen naast je.", { icon: "person", ms: 2500 });
+      else toast("Alle bots zijn weg.", { icon: "person", ms: 2500 });
+    }).catch(function (error) {
+      toast(error?.message || "Bots: dat lukte niet.", { tone: "error" });
+    }).then(function () {
+      ui.botsBusy = false;
+      renderSheet();
+    });
+  }
+
+  function botRows() {
+    if (!ui.botsTimer) ui.botsTimer = setTimeout(botsPoll, ui.bots ? 2000 : 0);
+    const b = ui.bots || {};
+    const max = num(b.max, 100);
+    const running = num(b.running, 0);
+    const doing = Object.entries(b.doing || {}).sort(function (x, y) { return y[1] - x[1]; }).map(function (pair) { return pair[1] + " " + pair[0]; }).join(", ");
+    const detail = running
+      ? "Kills " + num(b.kills, 0) + " · quests " + num(b.questsAccepted, 0) + " aangenomen, " + num(b.questsDone, 0) + " af · verzameld " + num(b.gathered, 0)
+        + " · dood " + num(b.deaths, 0) + (b.downKbPerBot !== null && b.downKbPerBot !== undefined ? " · verkeer per bot " + b.downKbPerBot + " KB/s (max " + b.downKbPerBotMax + "), " + b.upMsgsPerBot + " berichten/s naar de server" : "")
+        + (doing ? " · nu: " + doing : "") + (Array.isArray(b.errors) && b.errors.length ? " · laatste fout: " + b.errors[b.errors.length - 1] : "")
+      : "Ze komen in een kring naast je staan en spelen als echte spelers (eigen verbinding).";
+    return [
+      h("div", { class: "gkRow" }, [ico("person"), h("span", null, ["Bots loslaten", h("small", { text: "Bots lopen, vechten, verzamelen en doen quests, zoals spelers. Hooguit " + max + " tegelijk." })]),
+        h("div", { class: "gkSeg" }, [5, 10, 25].map(function (n) {
+          return h("button", { type: "button", "data-act": "bots-add", "data-id": String(n), disabled: ui.botsBusy || running >= max }, ["+" + n]);
+        }))]),
+      h("div", { class: "gkRow" }, [ico("crossed-swords"), h("span", null, [running ? running + " bots (" + num(b.connected, 0) + " verbonden, " + num(b.minutes, 0) + " min)" : "Geen bots", h("small", { text: detail })]),
+        h("button", { type: "button", class: "gkBtn gkWarn", "data-act": "bots-stop", disabled: ui.botsBusy || !running }, ["Alle bots weg"])])
+    ];
   }
 
   function sheetLogout() {
@@ -5593,6 +5652,8 @@ export function createGkHud(api) {
       case "story-lore-book": closeTalk(); openTab("lore"); break;
       case "lore-open": readLore(id, { fromBook: true }); break;
       case "unstuck": api.run03("unstuck", null, {}); break;
+      case "bots-add": botsAction({ action: "add", count: Number(id) || 5 }); break;
+      case "bots-stop": botsAction({ action: "stop" }); break;
       case "attack": attack(); break;
       case "heal": heal(); break;
       case "skill": useSlot(Number(id)); break;

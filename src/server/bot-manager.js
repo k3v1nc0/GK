@@ -1,0 +1,166 @@
+// Bots in de echte game (Kevin 20-11): de admin laat vanuit de game (Instellingen) groepjes bots los op deze server.
+// Elke bot is een gewone speler met een echte verbinding (HTTP + websocket naar deze server), dus het verkeer en de
+// serverbelasting zijn echt. De bots draaien in een apart proces (scripts/game-bots.js), zodat hun rekenwerk de
+// gameloop niet ophoudt. Accounts heten bot_001, bot_002, ... (geen wachtwoord waarmee je kunt inloggen) en worden
+// hergebruikt; "Alle bots weg" sluit hun verbindingen en wist hun sessies.
+import crypto from "node:crypto";
+import path from "node:path";
+import { fork } from "node:child_process";
+import { allowedOrigins } from "./request-boundary.js";
+
+const BOT_MAX = Math.max(1, Math.min(300, Number(process.env.GK_BOTS_MAX || 100)));
+const BOT_NAME = /^bot_\d{3}$/;
+const BOT_EMAIL = "@bots.gk.invalid";
+
+function httpError(status, message) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+export class BotManager {
+  constructor({ db, authService, mmoService, rootDir, host, port }) {
+    this.db = db;
+    this.authService = authService;
+    this.mmoService = mmoService;
+    this.rootDir = rootDir;
+    const localHost = !host || host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
+    this.base = "http://" + localHost + ":" + port;
+    this.origin = Array.from(allowedOrigins())[0] || this.base;
+    this.child = null;
+    this.bots = new Map(); // userId -> { userId, name, sessionId, index }
+    this.status = null;
+    this.anchor = null;
+    this.startedAt = 0;
+  }
+
+  view() {
+    const status = this.status || {};
+    return {
+      ok: true,
+      max: BOT_MAX,
+      running: this.bots.size,
+      connected: Number(status.connected) || 0,
+      kills: Number(status.kills) || 0,
+      questsAccepted: Number(status.questsAccepted) || 0,
+      questsDone: Number(status.questsDone) || 0,
+      gathered: Number(status.gathered) || 0,
+      deaths: Number(status.deaths) || 0,
+      doing: status.doing || {},
+      downKbPerBot: status.downKbPerBot ?? null,
+      downKbPerBotMax: status.downKbPerBotMax ?? null,
+      upMsgsPerBot: status.upMsgsPerBot ?? null,
+      errors: Array.isArray(status.errors) ? status.errors.slice(-3) : [],
+      minutes: this.startedAt ? Math.round((Date.now() - this.startedAt) / 6000) / 10 : 0
+    };
+  }
+
+  // Een groepje erbij, rond de plek van de admin.
+  release(req, count) {
+    const snapshot = this.mmoService.getPlayerSnapshot(req);
+    const position = snapshot?.position || {};
+    this.anchor = { x: Number(position.x) || 0, z: Number(position.z) || 0, zoneId: position.zoneId || null };
+    const room = BOT_MAX - this.bots.size;
+    if (room <= 0) throw httpError(400, "Er lopen al " + BOT_MAX + " bots (het maximum).");
+    const add = Math.max(1, Math.min(room, Math.round(Number(count) || 10)));
+    const fresh = [];
+    for (let index = 1; fresh.length < add && index <= 999; index += 1) {
+      const name = "bot_" + String(index).padStart(3, "0");
+      const user = this.ensureBotUser(name);
+      if (!user || this.bots.has(user.id)) continue;
+      const session = this.authService.createSession(user.id, "gk-bot");
+      const bot = { userId: user.id, name, sessionId: session.sessionId, index: this.bots.size };
+      this.bots.set(user.id, bot);
+      fresh.push({
+        userId: user.id,
+        name,
+        sessionId: session.sessionId,
+        cookie: this.authService.cookieName + "=" + session.sessionToken,
+        csrf: this.authService.csrfTokenForSessionId(session.sessionId)
+      });
+    }
+    if (!fresh.length) throw httpError(400, "Geen vrije bot-accounts.");
+    this.ensureChild();
+    this.child.send({ type: "add", anchor: this.anchor, bots: fresh });
+    if (!this.startedAt) this.startedAt = Date.now();
+    return this.view();
+  }
+
+  stop() {
+    const child = this.child;
+    this.child = null;
+    if (child) {
+      try { child.send({ type: "stop" }); } catch {}
+      setTimeout(() => { try { child.kill("SIGTERM"); } catch {} }, 2500).unref();
+    }
+    for (const bot of this.bots.values()) {
+      try { this.mmoService.closeSessionConnections(bot.sessionId, 1000, "bots_stop"); } catch {}
+      try { this.authService.logout(bot.sessionId); } catch {}
+    }
+    this.bots.clear();
+    this.status = null;
+    this.startedAt = 0;
+    return this.view();
+  }
+
+  // Bestaand bot-account hergebruiken, anders aanmaken (rol speler, willekeurig wachtwoord dat niemand kent).
+  // Herkenbaar aan het e-mailadres ...@bots.gk.invalid: een echte speler die toevallig bot_001 heet blijft met rust.
+  ensureBotUser(name) {
+    if (!BOT_NAME.test(name)) return null;
+    const email = name + BOT_EMAIL;
+    const existing = this.db.prepare("SELECT id, role, email FROM users WHERE username = ? LIMIT 1").get(name);
+    if (existing) return existing.role === "player" && existing.email === email ? existing : null;
+    const id = "user_" + crypto.randomUUID();
+    const stamp = new Date().toISOString();
+    this.db.prepare("INSERT INTO users (id, username, email, password_hash, password_salt, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'player', ?, ?)")
+      .run(id, name, email, crypto.randomBytes(32).toString("hex"), crypto.randomBytes(24).toString("hex"), stamp, stamp);
+    return { id, role: "player", email };
+  }
+
+  ensureChild() {
+    if (this.child && this.child.connected) return;
+    const child = fork(path.join(this.rootDir, "scripts", "game-bots.js"), [], {
+      cwd: this.rootDir,
+      env: Object.assign({}, process.env, { GK_BOTS_BASE: this.base, GK_BOTS_ORIGIN: this.origin }),
+      stdio: ["ignore", "ignore", "pipe", "ipc"]
+    });
+    child.stderr?.on("data", (data) => process.stderr.write("[bots] " + data));
+    child.on("message", (message) => this.onChildMessage(message));
+    child.on("exit", () => {
+      if (this.child === child) {
+        this.child = null;
+        // Proces weg (fout of gestopt): sessies opruimen, zodat er geen spookbots blijven staan.
+        this.stop();
+      }
+    });
+    this.child = child;
+  }
+
+  onChildMessage(message) {
+    if (!message || typeof message !== "object") return;
+    if (message.type === "status") this.status = message;
+    if (message.type === "connected") this.placeBot(message.userId);
+  }
+
+  // Net verbonden: naast de admin zetten (zelfde manier als Unstuck), in een kring zodat ze niet op elkaar staan.
+  placeBot(userId) {
+    const bot = this.bots.get(userId);
+    if (!bot || !this.child) return;
+    const ids = Array.from(this.mmoService.connectionsBySessionId?.get(bot.sessionId) || []);
+    const connection = ids.map((id) => this.mmoService.connectionsById.get(id)).find((entry) => entry && !entry.closed) || null;
+    const anchor = this.anchor || { x: 0, z: 0, zoneId: null };
+    const angle = bot.index * 2.39996;
+    const radius = 2.5 + Math.sqrt(bot.index + 1) * 1.1;
+    const x = Math.round((anchor.x + Math.cos(angle) * radius) * 100) / 100;
+    const z = Math.round((anchor.z + Math.sin(angle) * radius) * 100) / 100;
+    let placed = null;
+    if (connection) {
+      try {
+        const state = this.mmoService.applyTeleportState(connection, { zoneId: anchor.zoneId || undefined, position: { x, z }, animationState: "idle" }, { reason: "bots" });
+        this.mmoService.schedulePersist(state, connection, true);
+        placed = { x: Number(state.x), z: Number(state.z) };
+      } catch {}
+    }
+    try { this.child.send({ type: "placed", userId, x: placed?.x ?? null, z: placed?.z ?? null, anchor }); } catch {}
+  }
+}

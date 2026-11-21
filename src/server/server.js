@@ -14,6 +14,7 @@ import { worldMapHash } from "./world-map-hash.js";
 import { GraphRepository } from "./graph-repository.js";
 import { GraphMigrationService } from "./graph-migration-service.js";
 import { MmoService } from "./mmo-service.js";
+import { BotManager } from "./bot-manager.js";
 import { Node03RuntimeService } from "./node03-runtime-service.js";
 import { Node04QuestRuntimeService } from "./node04-quest-runtime-service.js";
 import { Node05EconomyRuntimeService } from "./node05-economy-runtime-service.js";
@@ -85,6 +86,8 @@ const wssV1 = new WebSocketServer({
 });
 const host = process.env.HOST || "127.0.0.1";
 assertIsolatedNetwork({ host, port });
+// Kevin 20-11: bots in de echte game, los te laten door de admin (Instellingen > Bots).
+const botManager = new BotManager({ db, authService, mmoService, rootDir, host, port });
 const RESTORE_GRAPH_ROUTE = "/api/editor/graph/restore";
 
 function timingMs(startedAt) {
@@ -641,6 +644,15 @@ async function handleApi(req, res, url) {
     if (req.method === "GET" && url.pathname === "/api/game/player") {
       const snapshot = mmoService.getPlayerSnapshot(req);
       return sendJson(res, 200, snapshot);
+    }
+    // Kevin 20-11: bots loslaten of weghalen (alleen admin). GET = stand, POST {action: "add", count} of {action: "stop"}.
+    if (url.pathname === "/api/game/bots" && (req.method === "GET" || req.method === "POST")) {
+      const user = authService.requireEditor(req);
+      if (user.role !== "admin") return sendJson(res, 403, { ok: false, message: "Alleen admin." });
+      if (req.method === "GET") return sendJson(res, 200, botManager.view());
+      const body = await readJson(req);
+      if (body.action === "stop") return sendJson(res, 200, botManager.stop());
+      return sendJson(res, 200, botManager.release(req, body.count));
     }
     if (req.method === "POST" && url.pathname === "/api/game/perf/reset") {
       const user = authService.requireEditor(req);

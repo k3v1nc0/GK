@@ -115,7 +115,7 @@ async function main() {
     assert(workspace.status === 200 && workspace.json.zones.length === 1 && workspace.json.zones[0].zoneId === "zone.world", "de Werkbank kent één wereld");
     let n = 0;
     const command = (input) => call("POST", "/api/authoring/command", Object.assign({ requestId: "smoke-fundament-" + (n += 1) }, input), admin);
-    assert((await command({ command: "create", kind: "world_settings", body: { groundSize: 400, startX: 2, startZ: 2, skyColor: "#88aacc" } })).status === 201, "kaart Wereld aangemaakt");
+    assert((await command({ command: "create", kind: "world_settings", body: { groundSize: 400, startX: 2, startZ: 2, skyColor: "#88aacc", skyHorizonColor: "#88aacc" } })).status === 201, "kaart Wereld aangemaakt");
     assert((await command({ command: "create", kind: "item_definition", body: { itemId: "item.smoke_steen", displayName: "Smoke Steen", category: "material", rarity: "common", stackable: true, stackLimit: 99 } })).status === 201, "item aangemaakt");
     assert((await command({ command: "create", kind: "pickup", body: { pickupId: "pickup.smoke_steen", itemRef: "item_definition:item.smoke_steen", zoneRef: "zone.world", x: 3, y: 0, z: 3, amount: 2, respawnPolicyRef: "respawn_policy.slow" } })).status === 201, "pickup geplaatst");
     const editorWorld = await call("GET", "/api/editor/draft-world", undefined, admin);
