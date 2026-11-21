@@ -5,8 +5,20 @@ EDITOR_SERVICE="gk-real-node-editor.service"
 TARGET_USER="${TARGET_USER:-${SUDO_USER:-$(id -un)}}"
 CLEAN_CODE_SERVER="${CLEAN_CODE_SERVER:-1}"
 RESTART_CODE_SERVER="${RESTART_CODE_SERVER:-0}"
-DROP_OS_CACHE="${DROP_OS_CACHE:-1}"
+DROP_OS_CACHE="${DROP_OS_CACHE:-0}"
 RESET_SWAP="${RESET_SWAP:-0}"
+
+# Werk altijd vanuit het project, ook wanneer het script elders wordt aangeroepen.
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+
+# Controleer dit voordat de editor wordt gestopt of processen worden opgeruimd.
+available_kb=$(df -Pk . | awk 'END { print $4 }')
+if [ "$available_kb" -lt 1048576 ]; then
+  echo "Fout: minder dan 1 GiB vrije schijfruimte. Reset afgebroken vóór het stoppen van de editor." >&2
+  echo "Maak eerst schijfruimte vrij; npm kan anders mislukken met ENOSPC." >&2
+  df -h . >&2
+  exit 1
+fi
 
 run_root() {
   if [ "$(id -u)" -eq 0 ]; then
@@ -140,12 +152,13 @@ cleanup_ram_hogs() {
   if [ "$DROP_OS_CACHE" = "1" ]; then
     echo "- Linux filesystem cache legen"
     sync || true
-    if [ "$(id -u)" -eq 0 ]; then
-      echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+    if run_root sh -c 'echo 3 > /proc/sys/vm/drop_caches' 2>/dev/null; then
+      echo "  klaar"
     else
-      sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches' 2>/dev/null || true
+      echo "  overgeslagen: de host staat het legen van de filesystem cache niet toe"
     fi
-    echo "  klaar"
+  else
+    echo "- Linux filesystem cache behouden (DROP_OS_CACHE=1 om te legen)"
   fi
 
   if [ "$RESET_SWAP" = "1" ]; then
@@ -179,8 +192,9 @@ show_memory
 cleanup_ram_hogs
 show_memory
 
-echo "=== 3. NPM Opschonen en Installeren ==="
-rm -rf node_modules package-lock.json
+echo "=== 3. NPM Dependencies Bijwerken ==="
+# Behoud node_modules en package-lock.json: npm herstelt ontbrekende packages
+# zonder bij iedere reset alles te verwijderen en versies opnieuw te bepalen.
 
 # Optioneel: Node 24 inladen
 if [ -s "$HOME/.nvm/nvm.sh" ]; then
@@ -189,7 +203,11 @@ if [ -s "$HOME/.nvm/nvm.sh" ]; then
   nvm use 24 || echo "Node 24 niet gevonden via nvm; ga door met huidige Node versie."
 fi
 
-npm install
+if ! npm install --no-audit --no-fund; then
+  echo "Fout: npm install mislukt. De editor blijft gestopt omdat dependencies mogelijk incompleet zijn." >&2
+  echo "Los de npm-fout op en voer daarna scripts/reset.sh opnieuw uit." >&2
+  exit 1
+fi
 
 echo "=== 4. Editor Service Starten ==="
 run_root systemctl start "$EDITOR_SERVICE"

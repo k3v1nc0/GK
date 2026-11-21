@@ -76,6 +76,18 @@ function migrationBackupTarget(databasePath, file) {
   return path.join(baseDir, stamp + "-before-" + file.replace(/\.sql$/i, "") + "-" + suffix);
 }
 
+export function pruneMigrationBackups(databasePath, keep = 2) {
+  const baseDir = path.resolve(process.env.MIGRATION_BACKUP_DIR || path.join(path.dirname(databasePath), "migration-backups"));
+  if (!fs.existsSync(baseDir)) return [];
+  const backups = fs.readdirSync(baseDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && /^\d{4}-\d{2}-\d{2}T.*-before-/.test(entry.name))
+    .map((entry) => entry.name)
+    .sort();
+  const removed = backups.slice(0, Math.max(0, backups.length - Math.max(0, keep)));
+  for (const name of removed) fs.rmSync(path.join(baseDir, name), { recursive: true, force: true });
+  return removed;
+}
+
 function sqlForTransaction(file, sql) {
   const requestsForeignKeysOff = /^\s*--\s*gk:foreign-keys-off\s*$/im.test(sql);
   const historicalForeignKeysOff = file === "003_mmo_accounts_sessions_players.sql";
@@ -165,5 +177,6 @@ export async function applyMigrations(db, rootDir, databasePath = resolveDatabas
     } finally {
       if (prepared.foreignKeysOff) db.exec("PRAGMA foreign_keys = ON;");
     }
+    pruneMigrationBackups(databasePath);
   }
 }

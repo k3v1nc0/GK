@@ -33,7 +33,7 @@ test("echte migraties accepteren alleen de historische dubbele 006 en maken veri
     assert.equal(db.prepare("SELECT COUNT(*) AS total FROM migrations").get().total, 34);
     assert.equal(db.prepare("SELECT COUNT(*) AS total FROM migration_checksums").get().total, 34);
     const backupDirs = fs.readdirSync(path.join(rootDir, "db", "migration-backups"));
-    assert.equal(backupDirs.length, 35, "baseline plus een backup voor elk van vierendertig migratiebestanden");
+    assert.equal(backupDirs.length, 2, "alleen de twee nieuwste migratiebackups blijven bewaard");
   } finally {
     if (db) db.close();
     if (previous.root === undefined) delete process.env.GK_TEST_ROOT; else process.env.GK_TEST_ROOT = previous.root;
