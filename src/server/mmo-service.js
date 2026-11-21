@@ -2226,18 +2226,37 @@ export class MmoService {
   }
 
   // Volledig of klein, per ontvanger: volledig als deze ontvanger de vaste gegevens van die speler nog niet (zo) kent.
-  recordForConnection(connectionId, state, options = {}) {
-    const record = this.snapshotPlayerStateRecord(state, options);
-    if (!record) return null;
+  // cache (optioneel): per update één keer per speler de volledige en kleine record bouwen, niet per kijker
+  // (Kevin 21-11: met 100 spelers bij elkaar was dat 10.000x per update).
+  recordForConnection(connectionId, state, options = {}, cache = null) {
+    let entry = cache ? cache.get(state?.player_id) : null;
+    if (!entry) {
+      const record = this.snapshotPlayerStateRecord(state, options);
+      if (!record) return null;
+      entry = { record, signature: this.snapshotStaticSignature(record), compact: null };
+      if (cache) cache.set(state.player_id, entry);
+    }
     let known = this.aoiStaticByConnectionId.get(connectionId);
     if (!known) {
       known = new Map();
       this.aoiStaticByConnectionId.set(connectionId, known);
     }
-    const signature = this.snapshotStaticSignature(record);
-    if (known.get(record.playerId) === signature) return this.compactSnapshotRecord(record);
-    known.set(record.playerId, signature);
-    return record;
+    if (known.get(entry.record.playerId) === entry.signature) {
+      if (!entry.compact) entry.compact = this.compactSnapshotRecord(entry.record);
+      return entry.compact;
+    }
+    known.set(entry.record.playerId, entry.signature);
+    return entry.record;
+  }
+
+  // Wanneer kreeg deze verbinding voor het laatst een update over elke speler (per verbinding een eigen lijst).
+  aoiSentAtFor(connectionId) {
+    let sentAt = this.aoiSentAtByKey.get(connectionId);
+    if (!sentAt) {
+      sentAt = new Map();
+      this.aoiSentAtByKey.set(connectionId, sentAt);
+    }
+    return sentAt;
   }
 
   // Ziet deze kijker deze speler (zelfde, aangrenzend of twee vakken verder)?
@@ -2262,6 +2281,7 @@ export class MmoService {
     }
     const changedIds = [];
     for (const state of changedStates || []) if (state?.player_id) changedIds.push(state.player_id);
+    const recordCache = new Map();
     let lastPayload = null;
     for (const connectionId of Array.from(this.connectionsByWorldId.get(worldId) || [])) {
       const connection = this.connectionsById.get(connectionId);
@@ -2295,7 +2315,7 @@ export class MmoService {
           this.aoiStaticByConnectionId.set(connectionId, staticKnown);
         }
         staticKnown.set(actorId, this.snapshotStaticSignature(payload));
-        this.aoiSentAtByKey.set(connectionId + "|" + actorId, nowMsValue);
+        this.aoiSentAtFor(connectionId).set(actorId, nowMsValue);
         send(connection.ws, eventMessage("remote_player:spawn", payload, this.stampServerPayload(worldId, payload)));
       }
       this.aoiVisibleByConnectionId.set(connectionId, visibleNow);
@@ -2312,32 +2332,43 @@ export class MmoService {
       }
       if (!pending.size) continue;
       // Drukte: alleen de dichtstbijzijnde AOI_NEAR_MAX spelers krijgen de snelle (10 Hz) updates, de rest 4 Hz.
+      // De volgorde verandert traag: hooguit 4x per seconde opnieuw sorteren, met elke afstand één keer berekend.
       let crowdFar = null;
-      const viewer = stateById.get(viewerId);
-      const nearIds = [];
-      for (const actorId of visibleNow) if (this.interestIndex.tierBetween(viewerId, actorId) === TIER.NEAR) nearIds.push(actorId);
-      if (nearIds.length > AOI_NEAR_MAX) {
-        const vx = num(viewer.x, 0);
-        const vz = num(viewer.z, 0);
-        const distance = (id) => {
-          const other = stateById.get(id);
-          return Math.hypot(num(other.x, 0) - vx, num(other.z, 0) - vz);
-        };
-        nearIds.sort((a, b) => distance(a) - distance(b));
-        crowdFar = new Set(nearIds.slice(AOI_NEAR_MAX));
+      if (visibleNow.size > AOI_NEAR_MAX) {
+        const cached = connection.aoiCrowd;
+        if (cached && nowMsValue - cached.at < AOI_CROWD_INTERVAL_MS) {
+          crowdFar = cached.far;
+        } else {
+          const viewer = stateById.get(viewerId);
+          const vx = num(viewer.x, 0);
+          const vz = num(viewer.z, 0);
+          const near = [];
+          for (const actorId of visibleNow) {
+            if (this.interestIndex.tierBetween(viewerId, actorId) !== TIER.NEAR) continue;
+            const other = stateById.get(actorId);
+            const dx = num(other.x, 0) - vx;
+            const dz = num(other.z, 0) - vz;
+            near.push({ id: actorId, d: dx * dx + dz * dz });
+          }
+          if (near.length > AOI_NEAR_MAX) {
+            near.sort((a, b) => a.d - b.d);
+            crowdFar = new Set();
+            for (let index = AOI_NEAR_MAX; index < near.length; index += 1) crowdFar.add(near[index].id);
+          }
+          connection.aoiCrowd = { at: nowMsValue, far: crowdFar };
+        }
       }
       const records = [];
+      const sentAt = this.aoiSentAtFor(connectionId);
       for (const actorId of pending) {
-        const tier = this.interestIndex.tierBetween(viewerId, actorId);
-        const key = connectionId + "|" + actorId;
-        const lastSentAt = this.aoiSentAtByKey.get(key);
+        const lastSentAt = sentAt.get(actorId);
         const due = crowdFar && crowdFar.has(actorId)
           ? !Number.isFinite(lastSentAt) || nowMsValue - lastSentAt >= AOI_CROWD_INTERVAL_MS
-          : dueForTier(tier, nowMsValue, lastSentAt);
+          : dueForTier(this.interestIndex.tierBetween(viewerId, actorId), nowMsValue, lastSentAt);
         if (!due) continue;
-        this.aoiSentAtByKey.set(key, nowMsValue);
+        sentAt.set(actorId, nowMsValue);
         pending.delete(actorId);
-        const record = this.recordForConnection(connectionId, stateById.get(actorId), options);
+        const record = this.recordForConnection(connectionId, stateById.get(actorId), options, recordCache);
         if (record) records.push(record);
       }
       if (!records.length) continue;
@@ -3414,9 +3445,7 @@ export class MmoService {
     for (const queued of this.aoiPendingByConnectionId.values()) queued?.delete?.(pending.playerId);
     for (const visible of this.aoiVisibleByConnectionId.values()) visible?.delete?.(pending.playerId);
     for (const known of this.aoiStaticByConnectionId.values()) known?.delete?.(pending.playerId);
-    for (const key of this.aoiSentAtByKey.keys()) {
-      if (key.endsWith("|" + pending.playerId)) this.aoiSentAtByKey.delete(key);
-    }
+    for (const sentAt of this.aoiSentAtByKey.values()) sentAt?.delete?.(pending.playerId);
     this.recordEvent("player_presence_left", pending.userId, pending.playerId, pending.sessionId);
     return true;
   }
@@ -3431,11 +3460,14 @@ export class MmoService {
   }
 
   stampServerPayload(worldId, payload = {}) {
-    const serverTimeMs = Number.isFinite(Number(payload.serverTimeMs))
-      ? Math.max(0, Math.floor(Number(payload.serverTimeMs)))
+    // Kevin 21-11 (licht knippert bij elke bot): Number(null) is 0 en telt als "geldig", waardoor een bericht zonder
+    // tijd (speler komt binnen) servertijd 0 kreeg. De game zette daarop zijn klok (en dag/nacht) jaren terug.
+    // Alleen een echte tijd (> 0) overnemen, anders nu.
+    const serverTimeMs = Number(payload.serverTimeMs) > 0
+      ? Math.floor(Number(payload.serverTimeMs))
       : nowMs();
-    const serverSentAtMs = Number.isFinite(Number(payload.serverSentAtMs))
-      ? Math.max(0, Math.floor(Number(payload.serverSentAtMs)))
+    const serverSentAtMs = Number(payload.serverSentAtMs) > 0
+      ? Math.floor(Number(payload.serverSentAtMs))
       : serverTimeMs;
     return Object.assign({}, payload, {
       protocolVersion: PROTOCOL_VERSION,
@@ -3862,7 +3894,7 @@ export class MmoService {
     this.aoiPendingByConnectionId.delete(connection.id);
     this.aoiVisibleByConnectionId.delete(connection.id);
     this.aoiStaticByConnectionId.delete(connection.id);
-    for (const key of this.aoiSentAtByKey.keys()) if (key.startsWith(connection.id + "|")) this.aoiSentAtByKey.delete(key);
+    this.aoiSentAtByKey.delete(connection.id);
     const ws = connection.ws;
     const userId = connection.user?.id || null;
     const sessionId = connection.session?.id || null;

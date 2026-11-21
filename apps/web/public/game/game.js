@@ -4394,7 +4394,8 @@ function estimateServerEpochNow(now = performance.now()) {
 
 function updateClockOffsetFromServerMessage(message, packetAt = performance.now()) {
   const serverTimeMs = Number(message?.serverTimeMs);
-  if (!Number.isFinite(serverTimeMs)) return null;
+  // Kevin 21-11: een bericht met tijd 0 (of onzin) mag de klok niet verzetten; dag/nacht knipperde daardoor.
+  if (!Number.isFinite(serverTimeMs) || serverTimeMs < 1e12) return null;
   const sampleOffset = serverTimeMs - epochNow(packetAt);
   if (!Number.isFinite(sampleOffset)) return null;
   const current = Number(state.net.clockOffsetMs || 0);

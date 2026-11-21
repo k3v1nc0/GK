@@ -15,6 +15,7 @@ import { GraphRepository } from "./graph-repository.js";
 import { GraphMigrationService } from "./graph-migration-service.js";
 import { MmoService } from "./mmo-service.js";
 import { BotManager } from "./bot-manager.js";
+import { profileServer } from "./perf-profile.js";
 import { Node03RuntimeService } from "./node03-runtime-service.js";
 import { Node04QuestRuntimeService } from "./node04-quest-runtime-service.js";
 import { Node05EconomyRuntimeService } from "./node05-economy-runtime-service.js";
@@ -652,6 +653,11 @@ async function handleApi(req, res, url) {
       if (req.method === "GET") return sendJson(res, 200, botManager.view());
       const body = await readJson(req);
       if (body.action === "stop") return sendJson(res, 200, botManager.stop());
+      // Kevin 21-11: meten waar de servertijd heen gaat (CPU-profiel van een paar seconden, in deze server).
+      if (body.action === "profile") {
+        botManager.lastProfile = await profileServer(body.seconds || 15, rootDir);
+        return sendJson(res, 200, botManager.view());
+      }
       return sendJson(res, 200, botManager.release(req, body.count));
     }
     if (req.method === "POST" && url.pathname === "/api/game/perf/reset") {

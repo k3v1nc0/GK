@@ -102,3 +102,12 @@ test("AOI: in een drukte krijgen alleen de dichtstbijzijnden 10 updates per seco
   assert.ok(closest >= 8, "dichtbij ~10/s (" + closest + ")");
   assert.ok(farthest <= 5, "verderop in de drukte ~4/s (" + farthest + ")");
 });
+
+test("tijd: een bericht zonder servertijd krijgt de tijd van nu, niet 0 (licht knipperde bij elke bot)", function () {
+  const service = fakeService(new Map());
+  const before = Date.now();
+  const stamped = service.stampServerPayload("w1", { playerId: "a", serverTimeMs: null, serverSentAtMs: undefined });
+  assert.ok(stamped.serverTimeMs >= before, "nu, niet 0: " + stamped.serverTimeMs);
+  assert.ok(stamped.serverSentAtMs >= before);
+  assert.equal(service.stampServerPayload("w1", { serverTimeMs: 1234567890123 }).serverTimeMs, 1234567890123, "een echte tijd blijft staan");
+});

@@ -12,7 +12,7 @@ const BASE = String(process.env.GK_BOTS_BASE || "http://127.0.0.1:3001").replace
 const ORIGIN = process.env.GK_BOTS_ORIGIN || BASE;
 const INPUT_MS = 50;
 const THINK_MS = 1000;
-const POLL_MS = 4000;
+const POLL_MS = 8000; // zoals de game: de stand komt vooral mee met het antwoord op een actie
 const ATTACK_MS = 1600;
 const GATHER_MS = 2500;
 const SIGHT_M = 45;
@@ -77,8 +77,14 @@ function act03(bot, action, targetId, extra = {}) {
   return call(bot, "POST", "/api/game/node03/action", Object.assign({ action, targetId: targetId || null, operationId: operationId(bot) }, extra));
 }
 
-function act04(bot, action, extra = {}) {
-  return call(bot, "POST", "/api/game/node04/action", Object.assign({ action, operationId: operationId(bot) }, extra));
+async function act04(bot, action, extra = {}) {
+  const result = await call(bot, "POST", "/api/game/node04/action", Object.assign({ action, operationId: operationId(bot) }, extra));
+  // Het antwoord bevat de nieuwe queststand: die gebruiken in plaats van opnieuw op te vragen.
+  if (result.json?.snapshot?.quests) {
+    bot.quest = result.json.snapshot;
+    bot.questAt = Date.now();
+  }
+  return result;
 }
 
 function go(bot, target, near, doing, followId = null) {
@@ -269,7 +275,6 @@ async function talk(bot, target) {
     if (next.ok && /turn_in|complete/.test(choice.action)) totals.questsDone += 1;
     dialogue = next.ok ? next.json?.dialogue || null : null;
   }
-  bot.questAt = 0;
 }
 
 // De quest die de bot nu doet. true = de bot heeft iets te doen gekregen.
@@ -288,24 +293,22 @@ async function doQuest(bot) {
       bot.blacklist.add(tracked.questId);
       bot.progress = { key: "", at: now };
       if (tracked.canAbandon !== false) await act04(bot, "abandon", { questId: tracked.questId });
-      bot.questAt = 0;
       return true;
     }
     if (Array.isArray(step.rewardChoice) && step.rewardChoice.length) {
       const result = await act04(bot, "choose_reward", { questId: tracked.questId, choiceId: String(step.rewardChoice[0].index ?? 0) });
       if (result.ok) totals.questsDone += 1;
-      bot.questAt = 0;
       return true;
     }
     const targets = (snap.questTargets || []).filter((target) => !target.questId || target.questId === tracked.questId);
     const target = nearest(spot, targets.filter((entry) => entry.action !== "travel")) || nearest(spot, targets);
     if (step.canTurnIn) {
       const result = await act04(bot, "turn_in", { questId: tracked.questId, targetId: target?.targetId || null });
-      if (result.ok) { totals.questsDone += 1; bot.questAt = 0; return true; }
+      if (result.ok) { totals.questsDone += 1; return true; }
     }
     if (step.canReach) {
       const result = await act04(bot, "reach", { questId: tracked.questId, targetId: target?.targetId || null });
-      if (result.ok) { bot.questAt = 0; return true; }
+      if (result.ok) return true;
     }
     if (target) {
       const reach = Math.max(1.5, (Number(target.range) || 3) - 0.6);
@@ -345,15 +348,17 @@ async function doQuest(bot) {
   const givers = (snap.questGivers || []).filter((giver) => giver.hasAvailableQuest);
   const giver = nearest(spot, givers);
   if (giver) {
-    const reach = Math.max(1.5, (Number(giver.range) || 3) - 0.6);
-    if (distance(spot, giver) > reach) { go(bot, giver, reach * 0.7, "naar questgever"); return true; }
+    // Aannemen kan op praatafstand; staat de NPC ingesloten (andere bots, een huis), dan na 20 s toch aannemen.
+    const reach = Math.max(1.5, (Number(giver.range) || 3) - 0.6) + 3;
+    if (!bot.giverSince) bot.giverSince = now;
+    if (distance(spot, giver) > reach && now - bot.giverSince < 20000) { go(bot, giver, reach * 0.5, "naar questgever"); return true; }
   }
+  bot.giverSince = 0;
   const quest = available[0];
   bot.doing = "neemt quest aan";
   const result = await act04(bot, "accept_quest", { questId: quest.questId, targetId: giver?.targetId || null });
   if (result.ok) totals.questsAccepted += 1;
   else bot.blacklist.add(quest.questId);
-  bot.questAt = 0;
   return true;
 }
 
@@ -457,6 +462,22 @@ async function startBot(bot) {
   bot.doing = "loopt rond";
 }
 
+// Een drukke server verwerkt het join-ticket soms te laat (dicht met 4401): even wachten en opnieuw.
+function startWithRetry(bot, attempt) {
+  if (bot.stopped) return;
+  startBot(bot).catch((error) => {
+    if (bot.stopped) return;
+    try { bot.ws?.close(); } catch {}
+    if (attempt < 4) {
+      bot.doing = "opnieuw verbinden";
+      setTimeout(() => startWithRetry(bot, attempt + 1), 2000 * attempt + Math.random() * 1000);
+      return;
+    }
+    noteError(bot.name + " start: " + (error?.message || error));
+    bot.doing = "fout";
+  });
+}
+
 function stopBot(bot) {
   bot.stopped = true;
   for (const timer of bot.timers) clearInterval(timer);
@@ -507,10 +528,7 @@ process.on("message", (message) => {
       const bot = createBot(info, message.anchor);
       bots.set(info.userId, bot);
       // Niet allemaal tegelijk: elke 150 ms een bot erbij.
-      setTimeout(() => {
-        if (bot.stopped) return;
-        startBot(bot).catch((error) => { noteError(bot.name + " start: " + (error?.message || error)); bot.doing = "fout"; });
-      }, index * 150);
+      setTimeout(() => startWithRetry(bot, 1), index * 150);
     });
   } else if (message.type === "placed") {
     const bot = bots.get(message.userId);

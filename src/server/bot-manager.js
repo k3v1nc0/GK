@@ -32,6 +32,7 @@ export class BotManager {
     this.status = null;
     this.anchor = null;
     this.startedAt = 0;
+    this.lastProfile = null;
   }
 
   view() {
@@ -51,7 +52,8 @@ export class BotManager {
       downKbPerBotMax: status.downKbPerBotMax ?? null,
       upMsgsPerBot: status.upMsgsPerBot ?? null,
       errors: Array.isArray(status.errors) ? status.errors.slice(-3) : [],
-      minutes: this.startedAt ? Math.round((Date.now() - this.startedAt) / 6000) / 10 : 0
+      minutes: this.startedAt ? Math.round((Date.now() - this.startedAt) / 6000) / 10 : 0,
+      profile: this.lastProfile || null
     };
   }
 
@@ -94,7 +96,8 @@ export class BotManager {
       setTimeout(() => { try { child.kill("SIGTERM"); } catch {} }, 2500).unref();
     }
     for (const bot of this.bots.values()) {
-      try { this.mmoService.closeSessionConnections(bot.sessionId, 1000, "bots_stop"); } catch {}
+      // Als uitloggen (4001): meteen weg uit de wereld, zonder de 5 minuten wachttijd voor een speler die opnieuw verbindt.
+      try { this.mmoService.closeSessionConnections(bot.sessionId, 4001, "logout"); } catch {}
       try { this.authService.logout(bot.sessionId); } catch {}
     }
     this.bots.clear();
