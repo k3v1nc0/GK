@@ -4658,8 +4658,10 @@ function remoteSampleIsStale(entry, sample, options = {}) {
   if (tombstone && !canResetTombstone) return true;
   if (!entry) return false;
   if (options.reset === true) return false;
-  const currentSnapshotSeq = Number(entry.lastSnapshotSeq || entry.serverSeq || 0) || 0;
-  const nextSnapshotSeq = Number(sample.snapshotSeq || sample.serverSeq || 0) || 0;
+  // Kevin 21-11: alleen snapshotSeq met snapshotSeq vergelijken. serverSeq telt ELK bericht (ook spawn/events) en is
+  // altijd hoger; een speler die opnieuw in beeld kwam (remote_player:spawn) bleef daardoor voor altijd stilstaan.
+  const currentSnapshotSeq = Number(entry.lastSnapshotSeq || 0) || 0;
+  const nextSnapshotSeq = Number(sample.snapshotSeq || 0) || 0;
   if (currentSnapshotSeq && nextSnapshotSeq) {
     if (nextSnapshotSeq < currentSnapshotSeq) return true;
     if (nextSnapshotSeq > currentSnapshotSeq) return false;
@@ -4765,7 +4767,7 @@ function upsertRemotePlayerEntry(payload, options = {}) {
       moving: false,
       connectedSessionCount: sample.connectedSessionCount || 0,
       serverSeq: Number(sample.serverSeq) || 0,
-      snapshotSeq: Number(sample.snapshotSeq || sample.serverSeq || 0) || 0,
+      snapshotSeq: Number(sample.snapshotSeq || 0) || 0,
       serverTimeMs: Number(sample.serverTimeMs) || null,
       serverReceivedAt: Number(sample.serverReceivedAt) || null,
       serverSentAtMs: Number(sample.serverSentAtMs) || null,
@@ -4774,7 +4776,7 @@ function upsertRemotePlayerEntry(payload, options = {}) {
       lastRenderAt: 0,
       lastSnapshotAt: 0,
       lastSnapshotServerTimeMs: Number(sample.serverTimeMs) || null,
-      lastSnapshotSeq: Number(sample.snapshotSeq || sample.serverSeq || 0) || 0,
+      lastSnapshotSeq: Number(sample.snapshotSeq || 0) || 0,
       activeControllerSessionId: sample.activeControllerSessionId || null,
       controllerEpoch: Number(sample.controllerEpoch) || 0,
       lastProcessedInputSeq: Number(sample.lastProcessedInputSeq) || 0,
@@ -4828,7 +4830,7 @@ function upsertRemotePlayerEntry(payload, options = {}) {
     return entry;
   }
   const shouldResetBuffer = options.reset === true || !Array.isArray(entry.interpolationBuffer) || !entry.interpolationBuffer.length;
-  const snapshotSeq = Number(sample.snapshotSeq || sample.serverSeq || 0) || 0;
+  const snapshotSeq = Number(sample.snapshotSeq || 0) || 0;
   const serverTick = Number(sample.serverTick || 0) || 0;
   const serverTimeMs = Number.isFinite(Number(sample.serverTimeMs)) ? num(sample.serverTimeMs, 0) : null;
   const serverSentAtMs = Number.isFinite(Number(sample.serverSentAtMs)) ? num(sample.serverSentAtMs, 0) : null;
