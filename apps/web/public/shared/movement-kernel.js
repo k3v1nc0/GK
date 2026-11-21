@@ -816,6 +816,102 @@ export function walkabilityForFlags(index, passes, cache = null) {
 let activeWalkabilityIndex = createEmptyWalkabilityIndex();
 
 
+// Kevin 21-11 (CPU bij 50 spelers bij elkaar): de server botst per stap alleen met wat in de buurt ligt (vakken van
+// 32 m), net als de routezoeker. Zelfde uitkomst als met de hele wereld: alles wat binnen vak + marge kan raken zit
+// erin, in dezelfde volgorde. Iets zonder bekende maat gaat altijd mee. Hoogtekaart en afgeronde rand blijven gedeeld.
+const LOCAL_CELL_M = 32;
+const LOCAL_PAD_M = 4;
+const LOCAL_MAX_CELLS = 512;
+const LOCAL_GROUPS = ["walkables", "blockers", "surfaceBlockers", "waters", "walls"];
+const localBoxes = new WeakMap();
+const localIndexCells = new WeakMap();
+const localSolidCells = new WeakMap();
+
+function localBox(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  if (localBoxes.has(entry)) return localBoxes.get(entry);
+  let box = null;
+  if ([entry.minX, entry.maxX, entry.minZ, entry.maxZ].every(Number.isFinite)) {
+    box = { minX: entry.minX, maxX: entry.maxX, minZ: entry.minZ, maxZ: entry.maxZ };
+  } else if (Array.isArray(entry.points) && entry.points.length) {
+    const pad = Math.max(0, num(entry.width, 0));
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    for (const point of entry.points) {
+      const px = Number(point?.x);
+      const pz = Number(point?.z);
+      if (!Number.isFinite(px) || !Number.isFinite(pz)) { minX = NaN; break; }
+      if (px < minX) minX = px;
+      if (px > maxX) maxX = px;
+      if (pz < minZ) minZ = pz;
+      if (pz > maxZ) maxZ = pz;
+    }
+    if (Number.isFinite(minX)) box = { minX: minX - pad, maxX: maxX + pad, minZ: minZ - pad, maxZ: maxZ + pad };
+  } else if (Number.isFinite(Number(entry.x)) && Number.isFinite(Number(entry.z))) {
+    const extent = Math.max(num(entry.radius, 0), Math.hypot(num(entry.width, 0), num(entry.depth, 0)) / 2);
+    const x = Number(entry.x);
+    const z = Number(entry.z);
+    box = { minX: x - extent, maxX: x + extent, minZ: z - extent, maxZ: z + extent };
+  }
+  localBoxes.set(entry, box);
+  return box;
+}
+
+function localSelect(list, minX, maxX, minZ, maxZ) {
+  const out = [];
+  for (const entry of list) {
+    const box = localBox(entry);
+    if (!box || (box.maxX >= minX && box.minX <= maxX && box.maxZ >= minZ && box.minZ <= maxZ)) out.push(entry);
+  }
+  return out;
+}
+
+function localCellFor(cache, owner, key, build) {
+  let cells = cache.get(owner);
+  if (!cells) {
+    cells = new Map();
+    cache.set(owner, cells);
+  }
+  let cell = cells.get(key);
+  if (!cell) {
+    if (cells.size >= LOCAL_MAX_CELLS) cells.delete(cells.keys().next().value);
+    cell = build();
+    cells.set(key, cell);
+  }
+  return cell;
+}
+
+// { index, solids } voor een stap rond x/z (straal = spelerstraal). Zelfde objecten, dus "aan/uit" van een botsing
+// (dood, geplukt) geldt meteen. Bij een nieuwe build/vlag-kopie hoort een nieuwe index: dan nieuwe vakken.
+export function localMovementSource(index, solids, x, z, radius = 0.5) {
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return { index, solids };
+  const cx = Math.floor(x / LOCAL_CELL_M);
+  const cz = Math.floor(z / LOCAL_CELL_M);
+  const pad = LOCAL_PAD_M + Math.max(0, num(radius, 0.5));
+  const minX = cx * LOCAL_CELL_M - pad;
+  const maxX = (cx + 1) * LOCAL_CELL_M + pad;
+  const minZ = cz * LOCAL_CELL_M - pad;
+  const maxZ = (cz + 1) * LOCAL_CELL_M + pad;
+  const key = cx + ":" + cz + ":" + pad;
+  let localIndex = index;
+  if (index && typeof index === "object" && Array.isArray(index.walkables) && Array.isArray(index.blockers) && Array.isArray(index.surfaceBlockers)) {
+    ensureEdgeField(index);
+    localIndex = localCellFor(localIndexCells, index, key, () => {
+      const sub = Object.assign({}, index);
+      if (index.edgeField) sub.edgeField = index.edgeField;
+      for (const group of LOCAL_GROUPS) if (Array.isArray(index[group])) sub[group] = localSelect(index[group], minX, maxX, minZ, maxZ);
+      return sub;
+    });
+  }
+  const localSolids = Array.isArray(solids) && solids.length
+    ? localCellFor(localSolidCells, solids, key, () => localSelect(solids, minX, maxX, minZ, maxZ))
+    : solids;
+  return { index: localIndex, solids: localSolids };
+}
+
+
 export function resolveWalkabilitySource(source) {
   if (!source) return activeWalkabilityIndex;
   if (Array.isArray(source.walkables) && Array.isArray(source.blockers) && Array.isArray(source.surfaceBlockers)) return source;

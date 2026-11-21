@@ -5,6 +5,7 @@
 // hergebruikt; "Alle bots weg" sluit hun verbindingen en wist hun sessies.
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fork } from "node:child_process";
 import { allowedOrigins } from "./request-boundary.js";
@@ -195,6 +196,8 @@ export class BotManager {
       serialization: "advanced"
     });
     this.worldBuildSent = null;
+    // Kevin 21-11: bots draaien op dezelfde server; de game-server gaat voor (bots krijgen pas CPU als er over is).
+    try { os.setPriority(child.pid, 10); } catch {}
     child.stderr?.on("data", (data) => process.stderr.write("[bots] " + data));
     child.on("message", (message) => this.onChildMessage(message));
     child.on("exit", () => {

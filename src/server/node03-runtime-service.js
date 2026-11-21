@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { ActionCooldowns, assertDeveloperActionAllowed, developerActionsAllowed, normalizedActionPayloadHash } from "./action-security.js";
 import { runOperation } from "./persistence/operation-contract.js";
+
 import { economyValues } from "../shared/authoring/kinds/economy.js";
 import { professionProgress } from "../shared/authoring/kinds/profession.js";
 import { isCombatIntent, sanitizeCombatIntent } from "./runtime/combat-adapter.js";
@@ -12,6 +13,14 @@ import { applyEffect, clearEffectsForDeath, combatRulesFromProject, itemCooldown
 import { abilityFromSection, classSkillIdsFromSection, playerAbilityFromSection } from "./authoring/actor-compiler.js";
 import { arrivalPoint, isUnlocked, nearestRespawnPortal, portalNear, portalRulesOf, portalsOf, portalVisibleFor, publicPortalState,
   storeUnlock, travelCost, unlockedPortalIds, withinUnlockRange } from "./runtime/portal-runtime.js";
+
+// Kevin 21-11: acties waarbij een bot (snapshot: false) het antwoord zonder hele HUD-stand mag krijgen.
+const LEAN_ACTIONS = new Set(["attack", "gather", "pickup", "skill"]);
+function withoutSnapshot(response) {
+  if (!response || typeof response !== "object" || !("snapshot" in response)) return response;
+  const { snapshot, ...rest } = response;
+  return rest;
+}
 
 const NODE03_INSTANCE_PREFIX = "node03:";
 const HEALTH_STAT_ID = "stat.health";
@@ -538,6 +547,7 @@ export class Node03RuntimeService {
     const action = safeString(rawPayload.action, "").toLowerCase();
     // F2-E3-T01: attack/gather/pickup alleen als intentie (actie + doel); vervalste uitkomstvelden -> 400.
     const payload = isCombatIntent(action) ? sanitizeCombatIntent(action, rawPayload) : rawPayload;
+    const lean = rawPayload?.snapshot === false && LEAN_ACTIONS.has(action);
     const operationId = operationIdFromPayload(payload) || randomId("node03_operation");
     const hash = normalizedActionPayloadHash(action, payload);
     if (["reset_demo", "reset", "debug_inventory_add", "inventory_add", "debug_inventory_remove", "inventory_remove", "debug_inventory_cleanup", "inventory_cleanup", "debug_level_reset", "level_reset", "debug_currency_add", "currency_add", "debug_currency_remove", "currency_remove"].includes(action)) {
@@ -569,7 +579,17 @@ export class Node03RuntimeService {
         this.ensureSnapshotEntityState(ctx);
         return result;
       },
-      buildResponse: (result) => Object.assign({ ok: true, operationId }, result, { snapshot: this.buildSnapshot(ctx) })
+      // Kevin 21-11 (CPU): bots vragen bij klap/verzamelen geen hele HUD-stand (snapshot: false). De bon in de
+      // database bewaart nooit de stand; bij een herhaling wordt die vers gemaakt.
+      buildResponse: (result) => lean
+        ? Object.assign({ ok: true, operationId }, result)
+        : Object.assign({ ok: true, operationId }, result, { snapshot: this.buildSnapshot(ctx) }),
+      storeResponse: withoutSnapshot,
+      restoreResponse: (stored) => {
+        if (lean) return stored;
+        this.ensureSnapshotEntityState(ctx);
+        return Object.assign({}, stored, { snapshot: this.buildSnapshot(ctx) });
+      }
     });
     } catch (error) {
       this.actorRuntime()?.dropPending(operationId);

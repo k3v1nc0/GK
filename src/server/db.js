@@ -31,6 +31,7 @@ export async function openDatabase(rootDir) {
   db.exec("PRAGMA busy_timeout = 5000;");
   try {
     await applyMigrations(db, rootDir, databasePath);
+    cachePreparedStatements(db);
     return db;
   } catch (error) {
     db.close();
@@ -179,4 +180,24 @@ export async function applyMigrations(db, rootDir, databasePath = resolveDatabas
     }
     pruneMigrationBackups(databasePath);
   }
+}
+
+// Kevin 21-11 (CPU bij 50 spelers): de code roept db.prepare(sql) overal opnieuw aan (ook per tick/actie). SQLite moet
+// die tekst dan elke keer opnieuw vertalen. Zelfde tekst = zelfde statement hergebruiken. Veilig: alle aanroepen zijn
+// synchroon en klaar voor de volgende (geen iterate), en SQLite vertaalt zelf opnieuw na een schemawijziging.
+export function cachePreparedStatements(db, max = 2000) {
+  if (!db || db.__statementCache) return db;
+  const rawPrepare = db.prepare.bind(db);
+  const cache = new Map();
+  db.prepare = function prepareCached(sql, ...rest) {
+    if (rest.length || typeof sql !== "string") return rawPrepare(sql, ...rest);
+    let statement = cache.get(sql);
+    if (statement) return statement;
+    statement = rawPrepare(sql);
+    if (cache.size >= max) cache.delete(cache.keys().next().value);
+    cache.set(sql, statement);
+    return statement;
+  };
+  Object.defineProperty(db, "__statementCache", { value: cache, enumerable: false });
+  return db;
 }

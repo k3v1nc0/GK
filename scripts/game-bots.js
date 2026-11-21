@@ -42,6 +42,8 @@ const DEFEND_MS = 8000; // zo lang na een klap terugvechten
 const ASSIST_MS = 12000; // zo lang helpen nadat een groepsgenoot vocht
 const FOLLOW_M = 7; // in een groep: binnen deze afstand van de speler blijven
 const BOT_NAME = /^bot_\d{3}$/;
+// Doelen waarvoor de bot ver mag omlopen (quest, inleveren, naar een speler); de rest (vechten, verzamelen) alleen dichtbij.
+const FAR_GOAL = /^(quest|levert in|reist|naar |volgt)/;
 
 let navWorld = null;
 const navigators = new Map();
@@ -269,16 +271,29 @@ function planRoute(bot) {
   const nav = navigatorFor(bot);
   if (!nav) { trace(bot, "route", "geen loopkaart, rechtdoor"); return; }
   bot.routeBudget -= 1;
+  // Quest-doelen mogen ver om (via de brug); vechten/verzamelen niet: een vijand aan de overkant laat hij liggen.
+  const far = FAR_GOAL.test(goal.why || "");
   const started = Date.now();
   let result = null;
   try {
-    result = nav.findPath({ x: from.x, y: 0, z: from.z }, { x: goal.x, z: goal.z }, { maxExpanded: 16000, maxChecks: 60000, roads: true, arrivalRadius: goal.near });
+    result = nav.findPath({ x: from.x, y: 0, z: from.z }, { x: goal.x, z: goal.z },
+      { maxExpanded: far ? 30000 : 16000, maxChecks: far ? 150000 : 60000, roads: true, arrivalRadius: goal.near });
   } catch (error) {
     result = { ok: false, reason: error?.message || "fout" };
   }
   const ms = Date.now() - started;
   if (result?.ok && Array.isArray(result.points) && result.points.length) {
-    goal.route = result.points.map((point) => ({ x: Number(point.x), z: Number(point.z) }));
+    const route = result.points.map((point) => ({ x: Number(point.x), z: Number(point.z) }));
+    let length = 0;
+    let last = from;
+    for (const point of route) { length += distance(last, point); last = point; }
+    const direct = distance(from, goal);
+    if (!far && length > direct * 2.5 + 12) {
+      goal.reachable = false;
+      trace(bot, "route", "te ver om (" + Math.round(length) + " m lopen voor " + Math.round(direct) + " m), laat liggen");
+      return;
+    }
+    goal.route = route;
     bot.x = from.x;
     bot.z = from.z;
     trace(bot, "route", goal.route.length + " punten, " + ms + " ms" + (result.viaRoad || result.road ? ", via de weg" : ""));
@@ -287,7 +302,9 @@ function planRoute(bot) {
     goal.reachable = false;
     trace(bot, "route", "kan er niet komen (" + result.reason + ", " + ms + " ms)");
   } else {
-    trace(bot, "route", "geen route (" + (result?.reason || "?") + ", " + ms + " ms), rechtdoor");
+    // Kevin 21-11: niet meer rechtdoor (dan liep hij het water of een boom in en bleef daar tollen): even laten liggen.
+    goal.reachable = false;
+    trace(bot, "route", "geen route gevonden (" + (result?.reason || "?") + ", " + ms + " ms), laat even liggen");
   }
 }
 
@@ -422,12 +439,22 @@ function stepMovement(bot) {
     if (actor) {
       goal.x = actor.x;
       goal.z = actor.z;
-      // De vijand loopt weg van het eind van de route: dan recht erop af.
+      // De vijand loopt weg van het eind van de route. Kevin 21-11: alleen recht erop af als de lijn vrij is
+      // (geen water/boom ertussen); anders de oude route houden en bij de volgende denkronde opnieuw zoeken.
       const end = goal.route?.[goal.route.length - 1];
-      if (end && Math.hypot(end.x - goal.x, end.z - goal.z) > 4) goal.route = null;
+      if (end && Math.hypot(end.x - goal.x, end.z - goal.z) > 4 && now - (goal.driftAt || 0) > 500) {
+        goal.driftAt = now;
+        const nav = navigatorFor(bot);
+        const from = serverSpot(bot);
+        let clear = false;
+        try { clear = Boolean(nav) && distance(from, goal) < 10 && nav.lineClear({ x: from.x, z: from.z }, { x: goal.x, z: goal.z }); } catch {}
+        if (clear) goal.route = null;
+        else goal.routeTried = false;
+      }
     }
   }
-  let target = goal;
+  // Geen route naar dit doel: niet blind rechtdoor (water/boom); de volgende denkronde kiest iets anders.
+  let target = goal?.reachable === false ? null : goal;
   if (goal?.route?.length) {
     while (goal.route.length && Math.hypot(goal.route[0].x - bot.x, goal.route[0].z - bot.z) < 0.6) goal.route.shift();
     if (goal.route.length) target = { x: goal.route[0].x, z: goal.route[0].z, near: goal.route.length === 1 ? goal.near : 0.3 };
@@ -535,7 +562,7 @@ function strike(bot, enemy, doing) {
   if (now - bot.lastAttackAt >= ATTACK_MS + bot.attackWait) {
     bot.lastAttackAt = now;
     bot.lastHitId = enemy.id;
-    act03(bot, "attack", enemy.id).then((result) => {
+    act03(bot, "attack", enemy.id, { snapshot: false }).then((result) => {
       if (result.status === 429) bot.attackWait = Math.min(2500, bot.attackWait + 400);
       else if (result.ok) bot.attackWait = Math.max(0, bot.attackWait - 100);
     }).catch(() => {});
@@ -595,7 +622,7 @@ function gather(bot, range, wanted = null) {
   bot.doing = doing;
   if (now - bot.lastGatherAt >= GATHER_MS) {
     bot.lastGatherAt = now;
-    act03(bot, thing.action, thing.id).then((result) => {
+    act03(bot, thing.action, thing.id, { snapshot: false }).then((result) => {
       if (result.ok) {
         totals.gathered += 1;
         bot.takenAt.set(thing.id, Date.now());
@@ -944,7 +971,7 @@ async function startBot(bot) {
     if (models.length) body.modelAssetId = models[Math.floor(Math.random() * models.length)];
     await call(bot, "POST", "/api/game/characters/play", body);
   }
-  const player = await call(bot, "GET", "/api/game/player");
+  const player = await call(bot, "GET", "/api/game/player?world=0");
   if (player.status !== 200) throw new Error("speler laden " + player.status);
   bot.playerId = player.json?.playerId || player.json?.player?.id || player.json?.position?.playerId || null;
   bot.x = Number(player.json?.position?.x) || 0;
@@ -1048,8 +1075,8 @@ process.on("message", (message) => {
       if (bots.has(info.userId)) return;
       const bot = createBot(info, message.anchor);
       bots.set(info.userId, bot);
-      // Niet allemaal tegelijk: elke 150 ms een bot erbij.
-      setTimeout(() => startWithRetry(bot, 1), index * 150);
+      // Niet allemaal tegelijk: elke ~250 ms een bot erbij (met wat speling, zodat ze niet in hetzelfde ritme lopen).
+      setTimeout(() => startWithRetry(bot, 1), index * 250 + Math.random() * 120);
     });
   } else if (message.type === "world") {
     const solids = Array.isArray(message.solids) ? message.solids : [];

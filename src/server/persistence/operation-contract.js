@@ -48,7 +48,7 @@ export function findOperationReceipt(db, operationId) {
 }
 
 // Geeft een eerder receipt terug (met idempotent: true), of null als de operatie nog niet bestaat.
-export function replayOperation(db, { operationId, playerId, requestHash, label = "Deze actie" }) {
+export function replayOperation(db, { operationId, playerId, requestHash, label = "Deze actie", restoreResponse = null }) {
   if (!operationId) throw conflict("Operation-ID ontbreekt.", OPERATION_ERROR.MISSING_ID);
   const existing = findOperationReceipt(db, operationId);
   if (!existing) return null;
@@ -59,14 +59,18 @@ export function replayOperation(db, { operationId, playerId, requestHash, label 
     throw conflict("Operation-ID is al gebruikt met een andere payload.", OPERATION_ERROR.PAYLOAD_MISMATCH);
   }
   if (existing.status === "completed") {
-    return Object.assign({ idempotent: true }, parseResult(existing.result_json, { ok: true, operationId }));
+    const stored = parseResult(existing.result_json, { ok: true, operationId });
+    // Kevin 21-11: de bon bewaart geen hele stand meer; die maakt restoreResponse bij een herhaling vers.
+    return Object.assign({ idempotent: true }, typeof restoreResponse === "function" ? restoreResponse(stored) : stored);
   }
   throw conflict(label + " is al in verwerking.", OPERATION_ERROR.IN_PROGRESS);
 }
 
 // Voert perform() uit in een transactie samen met de receipt. buildResponse(result) maakt de ACK.
 // faultHook(stage) is alleen voor tests: "after_perform" (voor COMMIT) en "after_commit".
-export function commitOperation(db, { operationId, playerId, operationType, requestHash, perform, buildResponse, faultHook = null }) {
+// storeResponse(response) = wat in de bon komt (standaard het hele antwoord). Kevin 21-11 (CPU): een grote stand
+// (HUD/quests) niet bij elke klap in de database schrijven; die is bij een herhaling toch opnieuw te maken.
+export function commitOperation(db, { operationId, playerId, operationType, requestHash, perform, buildResponse, storeResponse = null, faultHook = null }) {
   if (!operationId) throw conflict("Operation-ID ontbreekt.", OPERATION_ERROR.MISSING_ID);
   const startedAt = performance.now();
   db.exec("BEGIN IMMEDIATE");
@@ -84,7 +88,7 @@ export function commitOperation(db, { operationId, playerId, operationType, requ
       UPDATE operation_idempotency
       SET status = 'completed', result_json = ?, completed_at = ?
       WHERE operation_id = ?
-    `).run(JSON.stringify(response), isoNow(), operationId);
+    `).run(JSON.stringify(typeof storeResponse === "function" ? storeResponse(response) : response), isoNow(), operationId);
     if (faultHook) faultHook("after_perform");
     db.exec("COMMIT");
     committed = true;
@@ -108,4 +112,21 @@ export function runOperation(db, options) {
   if (replay) return replay;
   if (typeof options.beforeCommit === "function") options.beforeCommit();
   return commitOperation(db, options);
+}
+
+// Kevin 21-11: bonnen van gewone spelacties (klap, verzamelen, quest) zijn na een dag niet meer nodig (een herhaling komt
+// binnen seconden). Met 50 bots groeit de tabel anders met miljoenen rijen per dag. Handel/markt blijft (balansrapport).
+// Klein stukje per keer, van de oudste kant (rowid = volgorde van aanmaken), zodat het nooit lang blokkeert.
+const KEEP_RECEIPT_TYPES = ["trade_confirm", "trade:confirm", "market_list", "market:create", "market_buy", "market:buy"];
+export function pruneOperationReceipts(db, { olderThanMs = 24 * 3600 * 1000, batch = 2000, nowMs = Date.now() } = {}) {
+  const cutoff = new Date(nowMs - olderThanMs).toISOString();
+  const marks = KEEP_RECEIPT_TYPES.map(() => "?").join(", ");
+  const oldest = db.prepare(`SELECT created_at FROM operation_idempotency WHERE operation_type NOT IN (${marks}) ORDER BY rowid LIMIT 1`).get(...KEEP_RECEIPT_TYPES);
+  if (!oldest || !(String(oldest.created_at || "") < cutoff)) return 0;
+  const result = db.prepare(`
+    DELETE FROM operation_idempotency
+    WHERE rowid IN (SELECT rowid FROM operation_idempotency WHERE operation_type NOT IN (${marks}) ORDER BY rowid LIMIT ?)
+      AND created_at < ?
+  `).run(...KEEP_RECEIPT_TYPES, batch, cutoff);
+  return Number(result?.changes || 0);
 }

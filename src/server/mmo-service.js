@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { buildRuntimeWorld } from "./authoring/world-builder.js";
 import { createSpatialIndex, metersToMm, resolveMembership } from "../../apps/web/public/shared/spatial.js";
-import { buildWalkabilityIndex, groundHeightAt, resolveMovement, solidCollisionEntriesForWorld, walkabilityForFlags } from "../../apps/web/public/shared/movement-kernel.js";
+import { buildWalkabilityIndex, groundHeightAt, localMovementSource, resolveMovement, solidCollisionEntriesForWorld, walkabilityForFlags } from "../../apps/web/public/shared/movement-kernel.js";
 import { mmoNetworkPresetValues } from "../shared/node-types.js";
 import { createWorldClock } from "./runtime/world-clock.js";
 import { ActorRuntime } from "./runtime/actor-runtime.js";
@@ -186,8 +186,31 @@ function safeJsonParse(text) {
   }
 }
 
+// Kevin 21-11 (CPU bij 50 spelers): alles wat in dezelfde ronde (bijv. één tick) naar een speler gaat, in één keer naar
+// het netwerk (cork/uncork) in plaats van één schrijfactie per bericht. Berichten en volgorde blijven precies hetzelfde.
+const corkedSockets = new Set();
+let uncorkScheduled = false;
+function uncorkAll() {
+  uncorkScheduled = false;
+  for (const socket of corkedSockets) {
+    try { if (!socket.destroyed) socket.uncork(); } catch {}
+  }
+  corkedSockets.clear();
+}
+function corkSocket(ws) {
+  const socket = ws?._socket;
+  if (!socket || corkedSockets.has(socket) || socket.destroyed || typeof socket.cork !== "function") return;
+  socket.cork();
+  corkedSockets.add(socket);
+  if (!uncorkScheduled) {
+    uncorkScheduled = true;
+    process.nextTick(uncorkAll);
+  }
+}
+
 function send(ws, payload) {
   if (!ws || ws.readyState !== 1) return false;
+  corkSocket(ws);
   ws.send(JSON.stringify(payload));
   return true;
 }
@@ -196,6 +219,7 @@ function send(ws, payload) {
 // broadcasts niet per verbinding opnieuw JSON.stringify hoeven te doen.
 function sendText(ws, text) {
   if (!ws || ws.readyState !== 1) return false;
+  corkSocket(ws);
   ws.send(text);
   return true;
 }
@@ -508,6 +532,29 @@ function zonePackageForPosition(world, position, currentZoneId = null) {
   return packages.find(function (zonePackage) {
     return zonePackage?.zoneId && String(zonePackage.zoneId) !== String(currentZoneId || "") && pointInZonePackage(zonePackage, x, z, 0);
   }) || null;
+}
+
+// Kevin 21-11 (CPU bij 50 spelers): wie stilstaat (vechten, verzamelen, praten) hoeft niet elke tick opnieuw
+// berekend te worden. Alleen overslaan als echt alles hetzelfde is: plek, hoogte, invoer, loopkaart en gebieden-build.
+function idleUnchanged(service, state, inputState, movementIndex) {
+  if (state.moving !== false || state.animation_state !== "idle") return false;
+  const idle = service.idleByPlayerId?.get(String(state.player_id || ""));
+  if (!idle || idle.index !== movementIndex || idle.x !== state.x || idle.y !== state.y || idle.z !== state.z) return false;
+  if (Number.isFinite(Number(inputState?.inputSeq)) && normalizeInputSeq(inputState.inputSeq) !== (Number(state.last_processed_input_seq || 0) || 0)) return false;
+  if (inputState?.clientSessionId && inputState.clientSessionId !== state.client_session_id) return false;
+  const buildId = typeof service.spatialIndex === "function" ? service.spatialIndex().buildId : "";
+  return (state.spatial_build_id || "") === (buildId || "");
+}
+
+function rememberIdle(service, state, movementIndex, resolved) {
+  if (!service.idleByPlayerId) service.idleByPlayerId = new Map();
+  const id = String(state.player_id || "");
+  // Alleen onthouden als de hoogte al klopt (anders zet deze tick hem eerst goed en kijken we de volgende keer).
+  if (resolved.x === state.x && resolved.y === state.y && resolved.z === state.z) {
+    service.idleByPlayerId.set(id, { index: movementIndex, x: state.x, y: state.y, z: state.z });
+  } else {
+    service.idleByPlayerId.delete(id);
+  }
 }
 
 // Wereld tekenen: wie stilstaat terwijl het terrein verandert (nieuwe build), komt weer met de voeten op de grond.
@@ -1247,8 +1294,27 @@ export class MmoService {
     return worldForZone(world, zoneId, spawnId);
   }
 
+  // Kevin 21-11 (CPU): per wereld één keer (werd per lopende speler per tick opnieuw gemaakt).
   fogConfigForWorld(world) {
-    return normalizeFogConfig(world);
+    if (!world || typeof world !== "object") return normalizeFogConfig(world);
+    if (!this.fogConfigCache) this.fogConfigCache = new WeakMap();
+    let config = this.fogConfigCache.get(world);
+    if (!config) {
+      config = normalizeFogConfig(world);
+      this.fogConfigCache.set(world, config);
+    }
+    return config;
+  }
+
+  fogRevealAreasForWorld(world) {
+    if (!world || typeof world !== "object") return revealEnabledAreaRecords(world);
+    if (!this.fogAreasCache) this.fogAreasCache = new WeakMap();
+    let areas = this.fogAreasCache.get(world);
+    if (!areas) {
+      areas = revealEnabledAreaRecords(world);
+      this.fogAreasCache.set(world, areas);
+    }
+    return areas;
   }
 
   fogRuntimeKey(playerId, worldId, mapLayer = "overworld") {
@@ -1281,15 +1347,29 @@ export class MmoService {
       "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     );
     const inserted = [];
+    // Kevin 21-11 (CPU): vakjes die deze speler net al heeft niet elke keer opnieuw naar de database (INSERT OR IGNORE
+    // + COMMIT per looprondje). Het geheugen geldt 5 minuten, zodat een reset van de kaart vanzelf weer meetelt.
+    if (!this.fogKnownCells) this.fogKnownCells = new Map();
+    const knownKey = this.fogRuntimeKey(playerId, worldId, mapLayer);
+    let known = this.fogKnownCells.get(knownKey);
+    if (!known || nowMs() - known.at > 300000 || known.keys.size > 50000) {
+      known = { at: nowMs(), keys: new Set() };
+      this.fogKnownCells.set(knownKey, known);
+    }
+    const fresh = keys.filter((cellKey) => !known.keys.has(cellKey));
+    if (!fresh.length) return inserted;
     // Unstuck verwerkt de kaart binnen de bestaande spelactie-transactie.
     const ownTransaction = this.db.isTransaction !== true;
     if (ownTransaction) this.db.exec("BEGIN");
     try {
-      for (const cellKey of keys) {
+      for (const cellKey of fresh) {
         const result = insert.run(playerId, worldId, mapLayer, cellKey, discoveryType, sourceAreaId || null, discoveredAt, discoveredAt);
         if (result.changes > 0) inserted.push(cellKey);
       }
-      if (ownTransaction) this.db.exec("COMMIT");
+      if (ownTransaction) {
+        this.db.exec("COMMIT");
+        for (const cellKey of fresh) known.keys.add(cellKey);
+      }
     } catch (error) {
       if (ownTransaction) {
         try { this.db.exec("ROLLBACK"); } catch {}
@@ -1323,6 +1403,7 @@ export class MmoService {
     ).run(playerId, worldId, mapLayer);
     const runtimeKey = this.fogRuntimeKey(playerId, worldId, mapLayer);
     this.fogDiscoveryRuntimeByPlayerWorld.delete(runtimeKey);
+    this.fogKnownCells?.delete(runtimeKey);
     return Number(result?.changes || 0) || 0;
   }
 
@@ -1333,13 +1414,14 @@ export class MmoService {
     }
     const mapLayer = config.mapLayer || "overworld";
     const runtime = this.normalizeFogRuntimeState(profile.id, worldContext.worldId, mapLayer);
-    const movement = movementRevealCellsForPosition(position, config);
-    const centerKey = fogCellKey(movement.center.x, movement.center.z);
+    // Kevin 21-11 (CPU): de vakjes rond de speler pas uitrekenen als er echt opgeslagen moet worden.
+    const center = fogCellForPosition(position, config);
+    const centerKey = fogCellKey(center.x, center.z);
     const force = options.force === true;
     const currentMs = nowMs();
     const previousCell = runtime.lastCellKey ? parseFogCellKey(runtime.lastCellKey) : null;
     const movedCells = previousCell
-      ? Math.max(Math.abs(movement.center.x - previousCell.x), Math.abs(movement.center.z - previousCell.z))
+      ? Math.max(Math.abs(center.x - previousCell.x), Math.abs(center.z - previousCell.z))
       : Infinity;
     const movementDue = force
       || !runtime.lastCellKey
@@ -1350,6 +1432,7 @@ export class MmoService {
     const newlyDiscovered = [];
     const areaReveals = [];
     if (movementDue) {
+      const movement = movementRevealCellsForPosition(position, config);
       const inserted = this.insertFogDiscoveryCells(profile.id, worldContext.worldId, mapLayer, movement.keys, "movement", null);
       newlyDiscovered.push.apply(newlyDiscovered, inserted);
       runtime.lastCellKey = centerKey;
@@ -1357,7 +1440,10 @@ export class MmoService {
       runtime.lastCellZ = movement.center.z;
       runtime.lastMovementSaveAtMs = currentMs;
     }
-    for (const area of revealEnabledAreaRecords(worldContext.world)) {
+    // Gebieden die de mist weghalen: hooguit 4x per seconde kijken (was elke tick); bij force altijd.
+    const checkAreas = force || !runtime.areaCheckAtMs || currentMs - runtime.areaCheckAtMs >= 250;
+    if (checkAreas) runtime.areaCheckAtMs = currentMs;
+    for (const area of checkAreas ? this.fogRevealAreasForWorld(worldContext.world) : []) {
       const areaId = String(area.areaId || area.id || "").trim();
       if (!areaId || !pointInArea(area, position.x, position.z, 0)) continue;
       if (!force && runtime.revealedAreaIds.has(areaId)) continue;
@@ -1381,6 +1467,8 @@ export class MmoService {
       });
     }
     const uniqueNew = Array.from(new Set(newlyDiscovered));
+    // Kevin 21-11 (CPU): tellen (SELECT COUNT) alleen als er iets nieuws is of bij force; dat gebeurde elke tick.
+    const discoveredCount = uniqueNew.length || force ? this.countFogDiscoveryCells(profile.id, worldContext.worldId, mapLayer) : null;
     if (uniqueNew.length && options.broadcast !== false && profile.user_id) {
       const payload = {
         ok: true,
@@ -1389,7 +1477,7 @@ export class MmoService {
         playerId: profile.id,
         mapLayer: mapLayer,
         newlyDiscoveredCellKeys: uniqueNew,
-        discoveredCount: this.countFogDiscoveryCells(profile.id, worldContext.worldId, mapLayer),
+        discoveredCount: discoveredCount,
         movementCellKey: centerKey,
         areaReveals: areaReveals,
         config: config
@@ -1403,7 +1491,7 @@ export class MmoService {
       playerId: profile.id,
       mapLayer: mapLayer,
       newlyDiscoveredCellKeys: uniqueNew,
-      discoveredCount: this.countFogDiscoveryCells(profile.id, worldContext.worldId, mapLayer),
+      discoveredCount: discoveredCount,
       movementCellKey: centerKey,
       areaReveals: areaReveals,
       config: config
@@ -1786,6 +1874,33 @@ export class MmoService {
       createdProfile: Boolean(options.createdProfile),
       serverPerf: this.serverPerfSnapshot()
     };
+  }
+
+  // Kevin 21-11 (CPU, 25-50 spelers tegelijk binnen): de wereld (vaak MB's) niet voor elke speler opnieuw naar tekst
+  // omzetten; per build/zone/spawn één keer en daarna die tekst invoegen. lean = zonder wereld (bots), alleen de spelerregels.
+  getPlayerSnapshotJson(req, options = {}) {
+    const snapshot = this.getPlayerSnapshot(req, options);
+    const gameWorld = snapshot.gameWorld;
+    if (options.lean) {
+      return JSON.stringify(Object.assign({}, snapshot, { gameWorld: gameWorld && typeof gameWorld === "object" ? { player: gameWorld.player || null } : null }));
+    }
+    if (!gameWorld || typeof gameWorld !== "object") return JSON.stringify(snapshot);
+    const base = this.worldCache?.world || null;
+    if (!base) return JSON.stringify(snapshot);
+    if (!this.gameWorldJsonCache || this.gameWorldJsonCache.base !== base) this.gameWorldJsonCache = { base, byKey: new Map() };
+    const spawn = gameWorld.spawn || {};
+    const key = [gameWorld.activeZoneId || "", spawn.spawnId || "", spawn.x, spawn.y, spawn.z, spawn.facing].join("|");
+    let worldJson = this.gameWorldJsonCache.byKey.get(key);
+    if (worldJson === undefined) {
+      worldJson = JSON.stringify(gameWorld);
+      if (this.gameWorldJsonCache.byKey.size > 64) this.gameWorldJsonCache.byKey.clear();
+      this.gameWorldJsonCache.byKey.set(key, worldJson);
+    }
+    if (!this.gameWorldMarker) this.gameWorldMarker = "__gk_world_" + crypto.randomUUID() + "__";
+    const text = JSON.stringify(Object.assign({}, snapshot, { gameWorld: this.gameWorldMarker }));
+    const marker = JSON.stringify(this.gameWorldMarker);
+    const at = text.indexOf(marker);
+    return at < 0 ? JSON.stringify(snapshot) : text.slice(0, at) + worldJson + text.slice(at + marker.length);
   }
 
   publicPositionForPlayer(position, session, worldId) {
@@ -2991,10 +3106,11 @@ export class MmoService {
         }
         const step = Math.min(toDistance, remaining);
         const desiredStep = { x: position.x + (toX / toDistance) * step, y: position.y, z: position.z + (toZ / toDistance) * step };
+        const near = localMovementSource(this.movementIndexFor(worldContext, state, target), solids, position.x, position.z, radius);
         const stepResult = resolveMovement(position, desiredStep, {
           radius: radius,
-          index: this.movementIndexFor(worldContext, state, target),
-          solids: solids
+          index: near.index,
+          solids: near.solids
         });
         const moved = Math.hypot(stepResult.x - position.x, stepResult.z - position.z);
         directionX = toX / toDistance;
@@ -3004,10 +3120,11 @@ export class MmoService {
           // de client er netjes langs gleed; daarna sloeg hij elk punt over en bleef op de startplek staan.
           const prev = pathQueue.prev || position;
           if (Math.hypot(prev.x - position.x, prev.z - position.z) <= PATH_TRUST_RADIUS) {
+            const nearPrev = localMovementSource(this.movementIndexFor(worldContext, state, target), solids, prev.x, prev.z, radius);
             const check = resolveMovement({ x: prev.x, y: position.y, z: prev.z }, { x: target.x, y: position.y, z: target.z }, {
               radius: radius,
-              index: this.movementIndexFor(worldContext, state, target),
-              solids: solids
+              index: nearPrev.index,
+              solids: nearPrev.solids
             });
             if (Math.hypot(check.x - target.x, check.z - target.z) <= PATH_POINT_REACHED) {
               position = { x: check.x, y: check.y, z: check.z };
@@ -3051,13 +3168,21 @@ export class MmoService {
         z: currentPosition.z + (directionZ * speed * dtSeconds)
       };
       const movementIndex = this.movementIndexFor(worldContext, state, pointerTarget);
+      // Kevin 21-11 (CPU): stilstaan zonder nieuwe invoer, zelfde plek en zelfde loopkaart = niets te doen.
+      if (!moving && idleUnchanged(this, state, inputState, movementIndex)) {
+        if (this.pointerStallTicksByPlayerId?.has(String(state.player_id || ""))) this.pointerStallTicksByPlayerId.delete(String(state.player_id || ""));
+        // Zelfde state = "niets veranderd" (geen nieuwe revisie, geen bericht).
+        return this.updatePlayerStateFromTick(state, state, tickInfo.connection || null, inputState || input, tickInfo);
+      }
+      const near = localMovementSource(movementIndex, solids, currentPosition.x, currentPosition.z, radius);
       resolved = moving
         ? resolveMovement(currentPosition, desired, {
           radius: radius,
-          index: movementIndex,
-          solids: solids
+          index: near.index,
+          solids: near.solids
         })
-        : idleGroundPosition(currentPosition, movementIndex, radius);
+        : idleGroundPosition(currentPosition, near.index, radius);
+      if (!moving) rememberIdle(this, state, movementIndex, resolved);
     }
     const deltaX = resolved.x - currentPosition.x;
     const deltaZ = resolved.z - currentPosition.z;

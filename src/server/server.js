@@ -7,6 +7,7 @@ import { WebSocketServer } from "ws";
 import { JOIN_TICKET_PATH, WS_PATH } from "../../apps/web/public/shared/protocol-v1.js";
 import { loadEnvFile } from "./env.js";
 import { openDatabase, resolveDatabasePath } from "./db.js";
+import { pruneOperationReceipts } from "./persistence/operation-contract.js";
 import { AuthService } from "./auth-service.js";
 import { UserAdminService } from "./user-admin-service.js";
 import { AssetService } from "./asset-service.js";
@@ -89,6 +90,12 @@ const host = process.env.HOST || "127.0.0.1";
 assertIsolatedNetwork({ host, port });
 // Kevin 20-11: bots in de echte game, los te laten door de admin (Instellingen > Bots).
 const botManager = new BotManager({ db, authService, mmoService, rootDir, host, port, logsDir: path.join(path.dirname(resolveDatabasePath(rootDir)), "bot-logs") , userAdmin: userAdminService });
+// Kevin 21-11: oude bonnen van spelacties (klap, verzamelen) elke minuut een stukje opruimen; anders groeit de database
+// met bots met miljoenen rijen per dag. Klein stukje = nooit lang stil.
+const receiptPruneTimer = setInterval(() => {
+  try { pruneOperationReceipts(db); } catch (error) { console.error("[bonnen] opruimen mislukt:", error.message); }
+}, 60000);
+if (typeof receiptPruneTimer.unref === "function") receiptPruneTimer.unref();
 const RESTORE_GRAPH_ROUTE = "/api/editor/graph/restore";
 
 function timingMs(startedAt) {
@@ -643,8 +650,10 @@ async function handleApi(req, res, url) {
       return sendJson(res, 200, node03RuntimeService.playCharacterForRequest(req, await readJson(req)));
     }
     if (req.method === "GET" && url.pathname === "/api/game/player") {
-      const snapshot = mmoService.getPlayerSnapshot(req);
-      return sendJson(res, 200, snapshot);
+      // Kevin 21-11: ?world=0 (bots) = zonder de hele wereld; anders de wereldtekst uit de cache.
+      const text = mmoService.getPlayerSnapshotJson(req, { lean: url.searchParams.get("world") === "0" });
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+      return res.end(text);
     }
     // Kevin 20-11: bots loslaten of weghalen (alleen admin). GET = stand, POST {action: "add", count} of {action: "stop"}.
     if (url.pathname === "/api/game/bots" && (req.method === "GET" || req.method === "POST")) {

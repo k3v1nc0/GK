@@ -446,7 +446,14 @@ export class Node04QuestRuntimeService {
         }
         return result;
       },
-      buildResponse: (result) => Object.assign({ ok: true, operationId }, result, { snapshot: this.snapshotForRequestFromContext(ctx) })
+      buildResponse: (result) => Object.assign({ ok: true, operationId }, result, { snapshot: this.snapshotForRequestFromContext(ctx) }),
+      // Kevin 21-11 (CPU): de hele queststand niet in de bon (database); bij een herhaling vers maken.
+      storeResponse: (response) => {
+        if (!response || typeof response !== "object" || !("snapshot" in response)) return response;
+        const { snapshot, ...rest } = response;
+        return rest;
+      },
+      restoreResponse: (stored) => Object.assign({}, stored, { snapshot: this.snapshotForRequestFromContext(ctx) })
     });
   }
 
