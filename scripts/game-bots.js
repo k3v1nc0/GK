@@ -7,11 +7,17 @@
 // Elke 2 s gaat een stand naar de server (kills, quests, verkeer per bot), die de game toont bij Instellingen > Bots.
 // Kevin 21-11: bots zoeken hun route zelf met dezelfde routezoeker als de game (over bruggen en wegen), en van een bot
 // die met "+1 met logboek" is losgelaten schrijven we elke beslissing op (map bot-logs naast de database).
+// Kevin 21-11 (brug met vlag): bots lopen met dezelfde loopkaart als de server voor die speler (een loopvlak of botsing met
+// "Alleen als vlag" telt alleen als de vlag voor de bot klopt). Kan de bot niet bij het doel van een quest (geen route, of
+// steeds vast), dan zet hij die quest even opzij en doet hij een andere (bijv. eerst hout naar de smid, dan is de brug er).
+// Verandert een vlag, dan probeert hij de opzij gezette quests meteen opnieuw. Werkt voor elk soort doel: verslaan,
+// verzamelen, inleveren, praten, gebied, reizen; onbekende doelen: erheen lopen en in de buurt bezig zijn.
 import fs from "node:fs";
 import path from "node:path";
 import WebSocket from "ws";
 import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../apps/web/public/shared/protocol-v1.js";
 import { createPlayerNavigator } from "../apps/web/public/shared/player-navigation.js";
+import { walkabilityForFlags } from "../apps/web/public/shared/movement-kernel.js";
 
 const BASE = String(process.env.GK_BOTS_BASE || "http://127.0.0.1:3001").replace(/\/$/, "");
 const ORIGIN = process.env.GK_BOTS_ORIGIN || BASE;
@@ -26,6 +32,9 @@ const QUEST_STUCK_MS = 150000;
 const STATUS_MS = 2000;
 const LOG_DIR = process.env.GK_BOTS_LOG_DIR || "";
 const ROUTE_MIN_M = 6;
+const PARK_MS = 120000; // quest waar de bot niet bij kan: zo lang opzij (of tot een vlag verandert)
+const UNREACHABLE_MS = 60000; // plek of ding zonder route: zo lang niet opnieuw proberen
+const TALK_MS = 8000;
 
 let navWorld = null;
 const navigators = new Map();
@@ -36,12 +45,24 @@ const totals = { kills: 0, questsAccepted: 0, questsDone: 0, gathered: 0, deaths
 const killedAt = new Map(); // vijand-id -> tijd: een vijand die meerdere bots zien sterven telt één keer
 let statusAt = Date.now();
 
-function navigatorFor(radius) {
+// Zoals de server (world-flags.js passes): gate = { id | flagId, on }.
+function flagPasses(on, gate) {
+  const id = gate?.flagId || gate?.id;
+  if (!id) return true;
+  return on.has(String(id)) === (gate.on !== false);
+}
+
+// De loopkaart van deze bot: zonder de loopvlakken (brug) en botsingen die er door vlaggen voor hem niet zijn.
+function navigatorFor(bot) {
   if (!navWorld?.index) return null;
-  const key = Math.round(radius * 100);
+  const key = Math.round(bot.radius * 100) + "|" + (navWorld.flagged ? bot.flagKey : "");
   let nav = navigators.get(key);
   if (!nav) {
-    nav = createPlayerNavigator({ index: navWorld.index, solids: navWorld.solids || [], radius });
+    const passes = (gate) => flagPasses(bot.flagsOn, gate);
+    const index = navWorld.flagged ? walkabilityForFlags(navWorld.index, passes, navWorld.flagCache) : navWorld.index;
+    const solids = navWorld.flagged ? navWorld.solids.filter((solid) => !solid?.flag || passes(solid.flag)) : navWorld.solids;
+    if (navigators.size > 40) navigators.clear();
+    nav = createPlayerNavigator({ index, solids, radius: bot.radius });
     navigators.set(key, nav);
   }
   return nav;
@@ -65,12 +86,81 @@ function trace(bot, kind, text) {
 
 function questLine(bot) {
   const snap = bot.quest;
-  const quest = (snap?.quests?.active || []).find((entry) => !bot.blacklist.has(entry.questId)) || null;
-  if (!quest) return "geen actieve quest (" + (snap?.quests?.available || []).length + " te halen)";
+  const parked = Array.from(bot.parked.keys()).filter((id) => isParked(bot, id));
+  const aside = parked.length ? " · opzij: " + parked.join(", ") : "";
+  const quest = (snap?.quests?.active || []).find((entry) => entry.questId === bot.questId) || null;
+  if (!quest) return "geen quest bezig (" + (snap?.quests?.active || []).length + " actief, " + (snap?.quests?.available || []).length + " te halen)" + aside;
   const step = quest.activeStep || {};
   const goals = (step.objectives || []).map((objective) => (objective.objectiveType || "?") + " " + objective.currentValue + "/" + objective.requiredValue).join(", ");
   return quest.questId + " [" + quest.status + "] stap " + (step.displayName || quest.activeStepId || "?") + (goals ? " (" + goals + ")" : "")
-    + (step.canTurnIn ? " kan inleveren" : "") + (step.canReach ? " kan praten" : "") + (step.complete ? " klaar" : "");
+    + (step.canTurnIn ? " kan inleveren" : "") + (step.canReach ? " kan praten" : "") + (step.complete ? " klaar" : "") + aside;
+}
+
+// Nieuwe queststand (van een poll of het antwoord op een actie). Andere vlaggen = andere wereld voor deze bot.
+function setQuest(bot, snap) {
+  bot.quest = snap;
+  bot.questAt = Date.now();
+  if (bot.traced && !bot.questsTraced && snap?.quests) {
+    // Eén keer: alle quests van deze bot met hun stand (verlaten/al gedaan tellen ook), zodat je ziet wat hij kan doen.
+    bot.questsTraced = true;
+    const list = (snap.quests.all || []).map((quest) => quest.questId + " " + quest.status + (quest.abandoned ? " verlaten" : "") + (quest.doneBefore ? " al gedaan" : "")
+      + (quest.canRepeat ? " herhaalbaar" : "") + " (" + (quest.startMode || "npc") + ")");
+    trace(bot, "quests", list.length ? list.join(" · ") : "geen");
+    trace(bot, "vlag", "aan voor mij: " + ((snap.world?.flags || []).join(", ") || "geen") + (snap.world?.hidden?.length ? " · verborgen: " + snap.world.hidden.length : "")
+      + " · startgebieden: " + (snap.startAreas || []).length);
+  }
+  if (!snap?.world) return;
+  const flags = (Array.isArray(snap.world.flags) ? snap.world.flags : []).map(String).sort();
+  const key = flags.join("|");
+  if (key === bot.flagKey) return;
+  bot.flagsOn = new Set(flags);
+  bot.flagKey = key;
+  trace(bot, "vlag", flags.length ? "aan voor mij: " + flags.join(", ") : "geen vlag aan");
+  // Bijv. de brug is er nu: opzij gezette quests en onbereikbare plekken meteen opnieuw proberen.
+  bot.parked.clear();
+  bot.unreachable.clear();
+  bot.badSpots = [];
+  bot.giveUps.clear();
+  if (bot.goal) planRoute(bot);
+}
+
+function isParked(bot, questId) {
+  const until = bot.parked.get(questId);
+  if (!until) return false;
+  if (Date.now() < until) return true;
+  bot.parked.delete(questId);
+  return false;
+}
+
+function parkQuest(bot, questId, why, ms = PARK_MS) {
+  if (!questId) return;
+  bot.parked.set(questId, Date.now() + ms);
+  bot.giveUps.delete(questId);
+  bot.goal = null;
+  bot.progress = { key: "", at: Date.now() };
+  trace(bot, "quest", questId + " even opzij (" + Math.round(ms / 1000) + " s of tot een vlag verandert): " + why);
+}
+
+function blocked(bot, key) {
+  return Boolean(key) && Date.now() < (bot.unreachable.get(key) || 0);
+}
+
+// Een plek zonder route: alles binnen 6 m daarvan ook even overslaan (zoeken naar "geen route" kost het meest).
+function badSpot(bot, point) {
+  const now = Date.now();
+  return bot.badSpots.some((spot) => spot.until > now && Math.hypot(spot.x - Number(point.x), spot.z - Number(point.z)) < 6);
+}
+
+function markUnreachable(bot, key, point = null) {
+  const until = Date.now() + UNREACHABLE_MS;
+  if (key) {
+    if (bot.unreachable.size > 300) bot.unreachable.clear();
+    bot.unreachable.set(key, until);
+  }
+  if (point && Number.isFinite(Number(point.x))) {
+    bot.badSpots = bot.badSpots.filter((spot) => spot.until > Date.now()).slice(-60);
+    bot.badSpots.push({ x: Number(point.x), z: Number(point.z), until });
+  }
 }
 
 function noteError(text) {
@@ -135,21 +225,28 @@ function act03(bot, action, targetId, extra = {}) {
 async function act04(bot, action, extra = {}) {
   const result = await call(bot, "POST", "/api/game/node04/action", Object.assign({ action, operationId: operationId(bot) }, extra));
   // Het antwoord bevat de nieuwe queststand: die gebruiken in plaats van opnieuw op te vragen.
-  if (result.json?.snapshot?.quests) {
-    bot.quest = result.json.snapshot;
-    bot.questAt = Date.now();
-  }
+  if (result.json?.snapshot?.quests) setQuest(bot, result.json.snapshot);
   return result;
 }
 
-function go(bot, target, near, doing, followId = null) {
+// false = daar kan de bot niet komen (geen route op zijn loopkaart); key onthoudt dat even (ding of plek).
+function go(bot, target, near, doing, followId = null, key = null) {
   const x = Number(target.x);
   const z = Number(target.z);
+  const spotKey = key || "p:" + Math.round(x) + "," + Math.round(z);
+  if (blocked(bot, spotKey) || badSpot(bot, { x, z })) return false;
   const same = bot.goal && Math.hypot(bot.goal.x - x, bot.goal.z - z) < 2.5;
-  bot.goal = { x, z, near: Math.max(0.4, near), followId, route: same ? bot.goal.route : null, routeTried: same ? bot.goal.routeTried : false, why: doing };
+  bot.goal = { x, z, near: Math.max(0.4, near), followId, key: spotKey, route: same ? bot.goal.route : null, routeTried: same ? bot.goal.routeTried : false,
+    reachable: same ? bot.goal.reachable : true, why: doing };
   if (bot.doing !== doing) trace(bot, "doel", doing + " -> (" + round1(x) + ", " + round1(z) + "), " + round1(distance(serverSpot(bot), bot.goal)) + " m");
   bot.doing = doing;
   if (!bot.goal.routeTried) planRoute(bot);
+  if (bot.goal.reachable === false) {
+    markUnreachable(bot, spotKey, { x, z });
+    bot.goal = null;
+    return false;
+  }
+  return true;
 }
 
 // Route zoeken zoals de game van een speler doet (zelfde routezoeker, via wegen en bruggen). Geen kaart of geen route:
@@ -159,10 +256,12 @@ function planRoute(bot) {
   if (!goal) return;
   goal.routeTried = true;
   goal.route = null;
+  goal.reachable = true;
   const from = serverSpot(bot);
   if (distance(from, goal) < ROUTE_MIN_M) return;
-  const nav = navigatorFor(bot.radius);
+  const nav = navigatorFor(bot);
   if (!nav) { trace(bot, "route", "geen loopkaart, rechtdoor"); return; }
+  bot.routeBudget -= 1;
   const started = Date.now();
   let result = null;
   try {
@@ -176,6 +275,10 @@ function planRoute(bot) {
     bot.x = from.x;
     bot.z = from.z;
     trace(bot, "route", goal.route.length + " punten, " + ms + " ms" + (result.viaRoad || result.road ? ", via de weg" : ""));
+  } else if (result?.reason === "no_path" || result?.reason === "goal_blocked") {
+    // Op zijn loopkaart is er geen weg (bijv. de brug is er voor hem nog niet).
+    goal.reachable = false;
+    trace(bot, "route", "kan er niet komen (" + result.reason + ", " + ms + " ms)");
   } else {
     trace(bot, "route", "geen route (" + (result?.reason || "?") + ", " + ms + " ms), rechtdoor");
   }
@@ -191,6 +294,7 @@ function createBot(info, anchor) {
     lastAttackAt: 0, lastHitId: null, lastGatherAt: 0, dead: false, attackWait: 0, radius: 0.5, takenAt: new Map(),
     traced: info.trace === true, tracedAt: Date.now(), traceLines: [], traceFile: "", lastTraceKey: "", lastTraceAt: 0,
     blacklist: new Set(), progress: { key: "", at: Date.now() },
+    flagsOn: new Set(), flagKey: "", badSpots: [], routeBudget: 2, questsTraced: false, parked: new Map(), unreachable: new Map(), giveUps: new Map(), talkedAt: new Map(), stalls: new Map(), questId: null,
     stuck: { x: 0, z: 0, at: Date.now(), tries: 0 },
     downBytes: 0, upMsgs: 0, doing: "start", timers: [], stopped: false, busy: false, placedWaiter: null, reconnects: 0
   });
@@ -310,6 +414,13 @@ function checkStuck(bot) {
     + (bot.goal.route ? ", route nog " + bot.goal.route.length + " punten" : ", geen route"));
   if (bot.stuck.tries > 4) {
     trace(bot, "vast", "doel opgegeven na 4 pogingen");
+    markUnreachable(bot, bot.goal.key, bot.goal);
+    // Twee keer vast op weg naar het doel van de quest: die quest even opzij en iets anders doen.
+    if (bot.questId && /^(quest|levert in|reist)/.test(bot.goal.why || "")) {
+      const count = (bot.giveUps.get(bot.questId) || 0) + 1;
+      bot.giveUps.set(bot.questId, count);
+      if (count >= 2) parkQuest(bot, bot.questId, "steeds vast onderweg");
+    }
     bot.goal = null;
     bot.stuck.tries = 0;
     return;
@@ -326,15 +437,23 @@ function checkStuck(bot) {
   trace(bot, "vast", "stap opzij naar (" + round1(bot.detour.x) + ", " + round1(bot.detour.z) + ")");
 }
 
+// Dichtstbijzijnde eerst; waar geen route heen is (andere kant van het water) slaat de bot over.
+function byDistance(spot, list, score = null) {
+  return list.filter((entry) => Number.isFinite(Number(entry?.x)) && Number.isFinite(Number(entry?.z)))
+    .map((entry) => ({ entry, d: score ? score(entry) : distance(spot, entry) }))
+    .sort((a, b) => a.d - b.d).map((item) => item.entry);
+}
+
 function fight(bot, range) {
   const spot = serverSpot(bot);
-  const enemies = Array.from(bot.actors.values()).filter((actor) => actor.k === "a" && actor.s !== "d" && distance(spot, actor) <= range);
-  const enemy = nearest(spot, enemies);
-  if (!enemy) return false;
-  if (distance(spot, enemy) > 2.4) {
-    go(bot, enemy, 1.6, "vecht", enemy.id);
-    return true;
+  const enemies = Array.from(bot.actors.values()).filter((actor) => actor.k === "a" && actor.s !== "d" && distance(spot, actor) <= range && !blocked(bot, "t:" + actor.id) && !badSpot(bot, actor));
+  let enemy = null;
+  for (const candidate of byDistance(spot, enemies).slice(0, 3)) {
+    if (distance(spot, candidate) <= 2.4) { enemy = candidate; break; }
+    if (bot.routeBudget <= 0) break; // routes zoeken kost tijd voor alle bots: volgende ronde verder
+    if (go(bot, candidate, 1.6, "vecht", candidate.id, "t:" + candidate.id)) return true;
   }
+  if (!enemy) return false;
   bot.goal = null;
   bot.doing = "vecht";
   const now = Date.now();
@@ -351,23 +470,31 @@ function fight(bot, range) {
 }
 
 // Grondstoffen (actor:snapshot) en spullen op de grond (pickups, zoals "Wood" voor een verzamel-quest).
-function gather(bot, range) {
+// wanted = open questdoelen: wat daar bij naam in voorkomt (bijv. "Wood") gaat voor.
+function gather(bot, range, wanted = null) {
   const spot = serverSpot(bot);
   const now = Date.now();
-  const fresh = (id) => now - (bot.takenAt.get(id) || 0) > 30000;
+  const fresh = (id) => now - (bot.takenAt.get(id) || 0) > 30000 && !blocked(bot, "t:" + id);
+  const near = (thing) => distance(spot, thing) <= range && !badSpot(bot, thing);
+  const named = new Map();
+  for (const target of bot.quest?.node03?.interactionTargets || []) if (target?.instanceId) named.set(target.instanceId, target);
   const resources = Array.from(bot.actors.values())
-    .filter((actor) => actor.k === "r" && actor.s === "i" && fresh(actor.id) && distance(spot, actor) <= range)
-    .map((actor) => ({ id: actor.id, x: actor.x, z: actor.z, action: "gather" }));
-  const pickups = (bot.quest?.node03?.interactionTargets || [])
-    .filter((target) => target && target.action === "pickup" && target.available !== false && fresh(target.instanceId) && distance(spot, target) <= range)
+    .filter((actor) => actor.k === "r" && actor.s === "i" && fresh(actor.id) && near(actor))
+    .map((actor) => ({ id: actor.id, x: actor.x, z: actor.z, action: "gather", name: named.get(actor.id)?.displayName || "" }));
+  const pickups = Array.from(named.values())
+    .filter((target) => target.action === "pickup" && target.available !== false && fresh(target.instanceId) && near(target))
     .map((target) => ({ id: target.instanceId, x: Number(target.x), z: Number(target.z), action: "pickup", name: target.displayName || "" }));
-  const thing = nearest(spot, resources.concat(pickups));
+  const words = (wanted || []).map((objective) => [objective.displayName, objective.message, objective.itemRef, objective.resourceRef].filter(Boolean).join(" ")).join(" ").toLowerCase();
+  const score = (thing) => distance(spot, thing) - (words && thing.name && words.includes(String(thing.name).toLowerCase()) ? 25 : 0);
+  let thing = null;
+  for (const candidate of byDistance(spot, resources.concat(pickups), score).slice(0, 3)) {
+    const doing = candidate.action === "pickup" ? "pakt op" : "verzamelt";
+    if (distance(spot, candidate) <= 2) { thing = candidate; break; }
+    if (bot.routeBudget <= 0) break;
+    if (go(bot, candidate, 1.2, doing, null, "t:" + candidate.id)) return true;
+  }
   if (!thing) return false;
   const doing = thing.action === "pickup" ? "pakt op" : "verzamelt";
-  if (distance(spot, thing) > 2) {
-    go(bot, thing, 1.2, doing);
-    return true;
-  }
   bot.goal = null;
   bot.doing = doing;
   if (now - bot.lastGatherAt >= GATHER_MS) {
@@ -396,6 +523,7 @@ function wander(bot, center, radius, doing) {
 
 async function talk(bot, target) {
   bot.doing = "praat";
+  bot.talkedAt.set(target.dialogueId, Date.now());
   const start = await act04(bot, "start_dialogue", { dialogueId: target.dialogueId, targetId: target.targetId || null });
   let dialogue = start.json?.dialogue || null;
   for (let round = 0; round < 4 && dialogue; round += 1) {
@@ -410,107 +538,220 @@ async function talk(bot, target) {
   }
 }
 
-// De quest die de bot nu doet. true = de bot heeft iets te doen gekregen.
+function canTalk(bot, target) {
+  return Boolean(target?.dialogueId) && Date.now() - (bot.talkedAt.get(target.dialogueId) || 0) > TALK_MS;
+}
+
+// Zoeken: rondlopen, steeds verder van de plek waar de bot loskwam zolang de quest niet opschiet.
+function explore(bot, doing) {
+  const radius = Math.min(60, WANDER_M + (Date.now() - bot.progress.at) / 1000 * 0.3);
+  wander(bot, bot.anchor, radius, doing);
+}
+
+// Quests: welke de bot doet. Kan hij niet bij het doel, dan die quest even opzij en een andere (of een nieuwe aannemen).
+// true = de bot heeft iets te doen gekregen.
 async function doQuest(bot) {
   const snap = bot.quest;
   if (!snap?.quests) return false;
+  const usable = (quest) => Boolean(quest) && !bot.blacklist.has(quest.questId) && !isParked(bot, quest.questId);
+  const all = snap.quests.active || [];
+  const active = all.filter(usable);
+  // De server geeft alleen doelen voor de gevolgde quest: staat die opzij, dan een andere volgen.
+  const serverTracked = all.find((quest) => quest.questId === snap.trackedQuest?.questId) || all.find((quest) => quest.tracked) || all[0] || null;
+  const tracked = usable(serverTracked) ? serverTracked : active[0] || null;
+  if (tracked && serverTracked && tracked.questId !== serverTracked.questId) {
+    trace(bot, "quest", "volgt nu " + tracked.questId + " (" + (tracked.displayName || "") + ")");
+    const result = await act04(bot, "track", { questId: tracked.questId });
+    if (!result.ok) parkQuest(bot, tracked.questId, "volgen lukt niet");
+    return true;
+  }
+  if (bot.questId !== (tracked?.questId || null)) {
+    bot.questId = tracked?.questId || null;
+    if (tracked) trace(bot, "quest", "bezig met " + tracked.questId + " (" + (tracked.displayName || "") + ")");
+  }
+  if (tracked) return workOnQuest(bot, tracked, snap);
+  return takeQuest(bot, snap, usable);
+}
+
+async function workOnQuest(bot, tracked, snap) {
   const now = Date.now();
   const spot = serverSpot(bot);
-  const tracked = (snap.quests.active || []).find((quest) => !bot.blacklist.has(quest.questId)) || null;
-  if (tracked) {
-    const step = tracked.activeStep || {};
-    const key = tracked.questId + ":" + tracked.status + ":" + tracked.activeStepId + ":" + (step.objectives || []).map((objective) => objective.currentValue).join(",");
-    if (bot.progress.key !== key) bot.progress = { key, at: now };
-    if (step.broken || now - bot.progress.at > QUEST_STUCK_MS) {
-      // Komt niet verder (of de quest is aangepast): laten vallen en iets anders doen.
-      bot.blacklist.add(tracked.questId);
-      bot.progress = { key: "", at: now };
-      if (tracked.canAbandon !== false) await act04(bot, "abandon", { questId: tracked.questId });
-      return true;
-    }
-    if (Array.isArray(step.rewardChoice) && step.rewardChoice.length) {
-      const result = await act04(bot, "choose_reward", { questId: tracked.questId, choiceId: String(step.rewardChoice[0].index ?? 0) });
-      if (result.ok) totals.questsDone += 1;
-      return true;
-    }
-    const collecting = (step.objectives || []).some((objective) => objective.objectiveType === "collect" && !objective.complete);
-    const busyNear = (range) => (collecting ? gather(bot, range) || fight(bot, range) : fight(bot, range) || gather(bot, range));
-    const targets = (snap.questTargets || []).filter((target) => !target.questId || target.questId === tracked.questId);
-    const target = nearest(spot, targets.filter((entry) => entry.action !== "travel")) || nearest(spot, targets);
-    if (step.canTurnIn) {
-      const result = await act04(bot, "turn_in", { questId: tracked.questId, targetId: target?.targetId || null });
-      if (result.ok) { totals.questsDone += 1; return true; }
-    }
-    if (step.canReach) {
-      const result = await act04(bot, "reach", { questId: tracked.questId, targetId: target?.targetId || null });
-      if (result.ok) return true;
-    }
-    if (target) {
-      const reach = Math.max(1.5, (Number(target.range) || 3) - 0.6);
-      const away = distance(spot, target);
-      if (bot.traced && bot.lastTargetId !== target.instanceId) {
-        bot.lastTargetId = target.instanceId;
-        trace(bot, "questdoel", (target.displayName || target.instanceId) + " [" + target.action + "] op (" + round1(target.x) + ", " + round1(target.z) + "), " + round1(away) + " m");
-      }
-      if (target.action === "travel") {
-        if (away > reach) { go(bot, target, reach * 0.7, "reist"); return true; }
-        bot.doing = "reist";
-        await call(bot, "POST", "/api/game/travel/zone-link", { linkId: target.instanceId });
-        bot.questAt = 0;
-        return true;
-      }
-      if (away > reach + 3) {
-        // Onderweg naar het doel: een vijand vlak bij je pak je mee.
-        if (fight(bot, 6)) return true;
-        go(bot, target, reach * 0.7, "quest");
-        return true;
-      }
-      if (target.action === "node04:start_dialogue" && target.dialogueId) { await talk(bot, target); return true; }
-      if (step.complete || tracked.status === "ready_to_turn_in") {
-        // Klaar: inleveren gaat meestal via het gesprek met de NPC bij het doel.
-        const npc = nearest(spot, (snap.dialogueTargets || []).concat(snap.questGivers || []).filter((entry) => entry.dialogueId && distance(spot, entry) <= 6));
-        if (npc) {
-          if (distance(spot, npc) > reach) { go(bot, npc, reach * 0.7, "levert in"); return true; }
-          await talk(bot, npc);
-          return true;
-        }
-      }
-      if (busyNear(30)) return true;
-      wander(bot, target, 8, "quest");
-      return true;
-    }
-    if (busyNear(SIGHT_M)) return true;
-    return false;
+  const step = tracked.activeStep || {};
+  const key = tracked.questId + ":" + tracked.status + ":" + tracked.activeStepId + ":" + (step.objectives || []).map((objective) => objective.currentValue).join(",");
+  if (bot.progress.key !== key) bot.progress = { key, at: now };
+  if (step.broken) {
+    // Quest is aangepast sinds het aannemen: verlaten (dan opnieuw aannemen).
+    if (tracked.canAbandon !== false) await act04(bot, "abandon", { questId: tracked.questId });
+    parkQuest(bot, tracked.questId, "quest is aangepast", 30000);
+    return true;
   }
-  const available = (snap.quests.available || []).filter((quest) => !bot.blacklist.has(quest.questId));
-  if (!available.length) return false;
-  const givers = (snap.questGivers || []).filter((giver) => giver.hasAvailableQuest);
-  const giver = nearest(spot, givers);
+  if (now - bot.progress.at > QUEST_STUCK_MS) {
+    // Schiet niet op: eerst opzij; na twee keer verlaten en niet meer doen.
+    const stalls = (bot.stalls.get(tracked.questId) || 0) + 1;
+    bot.stalls.set(tracked.questId, stalls);
+    if (stalls >= 3) {
+      bot.blacklist.add(tracked.questId);
+      trace(bot, "quest", tracked.questId + " opgegeven (schiet niet op)");
+      if (tracked.canAbandon !== false) await act04(bot, "abandon", { questId: tracked.questId });
+      bot.progress = { key: "", at: now };
+    } else {
+      parkQuest(bot, tracked.questId, "schiet " + Math.round(QUEST_STUCK_MS / 1000) + " s niet op", PARK_MS * stalls);
+    }
+    return true;
+  }
+  if (Array.isArray(step.rewardChoice) && step.rewardChoice.length) {
+    const result = await act04(bot, "choose_reward", { questId: tracked.questId, choiceId: String(step.rewardChoice[0].index ?? 0) });
+    if (result.ok) totals.questsDone += 1;
+    return true;
+  }
+  const open = (step.objectives || []).filter((objective) => !objective.complete && objective.needed !== false);
+  const kills = open.some((objective) => objective.objectiveType === "defeat");
+  // Spullen nodig: verzamelen, of inleveren terwijl je ze nog niet hebt (dan eerst zoeken, pas daarna naar de NPC).
+  const needItems = open.filter((objective) => objective.objectiveType === "collect" || objective.objectiveType === "gather" || (objective.objectiveType === "deliver" && !objective.ready));
+  const deliverFirst = open.some((objective) => objective.objectiveType === "deliver" && !objective.ready) && !open.some((objective) => objective.objectiveType === "deliver" && objective.ready);
+  const busyNear = (range) => (needItems.length && !kills ? gather(bot, range, needItems) || fight(bot, range) : fight(bot, range) || gather(bot, range, needItems));
+  const targets = (snap.questTargets || []).filter((target) => !target.questId || target.questId === tracked.questId);
+  const target = nearest(spot, targets.filter((entry) => entry.action !== "travel")) || nearest(spot, targets);
+  if (step.canTurnIn) {
+    const result = await act04(bot, "turn_in", { questId: tracked.questId, targetId: target?.targetId || null });
+    if (result.ok) { totals.questsDone += 1; return true; }
+  }
+  if (step.canReach) {
+    const result = await act04(bot, "reach", { questId: tracked.questId, targetId: target?.targetId || null });
+    if (result.ok) return true;
+  }
+  if (deliverFirst && target?.action !== "travel") {
+    const need = needItems.map((objective) => objective.message || objective.itemRef || objective.objectiveType).join(", ");
+    if (bot.lastNeed !== need) { bot.lastNeed = need; trace(bot, "quest", "eerst spullen halen: " + need); }
+    if (busyNear(SIGHT_M)) return true;
+    explore(bot, "zoekt spullen");
+    return true;
+  }
+  if (target) {
+    const reach = Math.max(1.5, (Number(target.range) || 3) - 0.6);
+    const away = distance(spot, target);
+    const name = target.displayName || target.instanceId;
+    if (bot.traced && bot.lastTargetId !== target.instanceId) {
+      bot.lastTargetId = target.instanceId;
+      trace(bot, "questdoel", name + " [" + target.action + "] op (" + round1(target.x) + ", " + round1(target.z) + "), " + round1(away) + " m");
+    }
+    const targetKey = "q:" + tracked.questId + ":" + target.instanceId;
+    if (target.action === "travel") {
+      if (away > reach) {
+        if (!go(bot, target, reach * 0.7, "reist", null, targetKey)) parkQuest(bot, tracked.questId, "kan niet bij " + name);
+        return true;
+      }
+      bot.doing = "reist";
+      await call(bot, "POST", "/api/game/travel/zone-link", { linkId: target.instanceId });
+      bot.questAt = 0;
+      return true;
+    }
+    if (away > reach + 3) {
+      // Onderweg naar het doel: een vijand vlak bij je pak je mee.
+      if (fight(bot, 6)) return true;
+      if (!go(bot, target, reach * 0.7, "quest", null, targetKey)) parkQuest(bot, tracked.questId, "kan niet bij " + name);
+      return true;
+    }
+    // Bij het doel: de stand sneller opvragen (gebied in, plek bereikt).
+    bot.questAt = Math.min(bot.questAt, now - POLL_MS + 2500);
+    if (target.action === "node04:start_dialogue" && canTalk(bot, target)) { await talk(bot, target); return true; }
+    if (step.complete || tracked.status === "ready_to_turn_in") {
+      // Klaar: inleveren gaat meestal via het gesprek met de NPC bij het doel.
+      const npc = nearest(spot, (snap.dialogueTargets || []).concat(snap.questGivers || []).filter((entry) => entry.dialogueId && distance(spot, entry) <= 6));
+      if (npc && canTalk(bot, npc)) {
+        if (distance(spot, npc) > reach) { go(bot, npc, reach * 0.7, "levert in"); return true; }
+        await talk(bot, npc);
+        return true;
+      }
+    }
+    if (busyNear(30)) return true;
+    wander(bot, target, 8, "quest");
+    return true;
+  }
+  // Geen plek bij het doel: in de buurt bezig zijn, anders de ster op de kaart, het zoekgebied, of verder zoeken.
+  if (busyNear(SIGHT_M)) return true;
+  const mark = byDistance(spot, Array.isArray(step.marks) ? step.marks : []).find((entry) => !blocked(bot, "m:" + entry.id));
+  if (mark && go(bot, mark, 2, "quest ster", null, "m:" + mark.id)) return true;
+  const area = step.map?.center;
+  if (area && Number.isFinite(Number(area.x))) {
+    const radius = Math.max(3, Number(step.map.radius) || 8);
+    if (distance(spot, area) > radius && go(bot, area, radius * 0.5, "quest gebied", null, "g:" + tracked.questId)) return true;
+    if (distance(spot, area) <= radius) { wander(bot, area, radius, "quest gebied"); return true; }
+  }
+  if (needItems.length || kills) { explore(bot, "zoekt"); return true; }
+  return false;
+}
+
+// Geen quest bezig: een quest aannemen. Ook een verlaten quest (de NPC biedt hem weer aan) of een herhaalbare telt;
+// nieuwe eerst. Niets bij een gever: een startgebied in lopen (dan start de quest vanzelf).
+async function takeQuest(bot, snap, usable) {
+  const now = Date.now();
+  const spot = serverSpot(bot);
+  const rank = (quest) => (quest.doneBefore ? 2 : quest.abandoned ? 1 : 0);
+  const open = (snap.quests.all || snap.quests.available || [])
+    .filter((quest) => quest.status === "available" && (!quest.doneBefore || quest.canRepeat) && quest.startMode !== "area" && quest.startMode !== "world" && usable(quest))
+    .sort((a, b) => rank(a) - rank(b));
+  if (!open.length) return walkIntoStartArea(bot, snap, usable);
+  const quest = open[0];
+  const givers = (snap.questGivers || []).filter((giver) => (giver.hasAvailableQuest || giver.targetId === quest.giverTargetId) && !blocked(bot, "g:" + giver.instanceId) && !badSpot(bot, giver));
+  const giver = givers.find((entry) => quest.giverTargetId && entry.targetId === quest.giverTargetId) || nearest(spot, givers);
   if (giver) {
     // Aannemen kan op praatafstand; staat de NPC ingesloten (andere bots, een huis), dan na 20 s toch aannemen.
     const reach = Math.max(1.5, (Number(giver.range) || 3) - 0.6) + 3;
     if (!bot.giverSince) bot.giverSince = now;
-    if (distance(spot, giver) > reach && now - bot.giverSince < 20000) { go(bot, giver, reach * 0.5, "naar questgever"); return true; }
+    if (distance(spot, giver) > reach && now - bot.giverSince < 20000) {
+      if (!go(bot, giver, reach * 0.5, "naar questgever", null, "g:" + giver.instanceId)) {
+        trace(bot, "quest", "kan niet bij questgever " + (giver.displayName || giver.instanceId));
+        bot.giverSince = 0;
+      }
+      return true;
+    }
   }
   bot.giverSince = 0;
-  const quest = available[0];
   bot.doing = "neemt quest aan";
-  const result = await act04(bot, "accept_quest", { questId: quest.questId, targetId: giver?.targetId || null });
-  if (result.ok) totals.questsAccepted += 1;
-  else bot.blacklist.add(quest.questId);
+  const result = await act04(bot, "accept_quest", { questId: quest.questId, targetId: giver?.targetId || quest.giverTargetId || null });
+  if (result.ok) {
+    totals.questsAccepted += 1;
+    trace(bot, "quest", "aangenomen: " + quest.questId + (quest.abandoned ? " (was verlaten)" : quest.doneBefore ? " (nog een keer)" : ""));
+  } else if (result.status === 404) bot.blacklist.add(quest.questId);
+  else parkQuest(bot, quest.questId, "aannemen lukt niet (" + result.status + ")");
+  return true;
+}
+
+function centerOf(points) {
+  let x = 0;
+  let z = 0;
+  for (const point of points) { x += Number(point.x) || 0; z += Number(point.z) || 0; }
+  return { x: x / points.length, z: z / points.length };
+}
+
+function walkIntoStartArea(bot, snap, usable) {
+  const spot = serverSpot(bot);
+  const areas = (snap.startAreas || []).filter((area) => Array.isArray(area.points) && area.points.length >= 3 && usable({ questId: area.questId }))
+    .map((area) => Object.assign({ questId: area.questId, areaId: area.areaId }, centerOf(area.points)))
+    .filter((area) => !blocked(bot, "s:" + area.areaId) && !badSpot(bot, area));
+  const area = nearest(spot, areas);
+  if (!area) return false;
+  if (distance(spot, area) > 2) {
+    if (!go(bot, area, 1.5, "naar startgebied", null, "s:" + area.areaId)) parkQuest(bot, area.questId, "kan niet bij het startgebied");
+    return true;
+  }
+  // Erin: meteen de stand opvragen (zoals de game), dan start de quest.
+  bot.questAt = 0;
+  markUnreachable(bot, "s:" + area.areaId);
   return true;
 }
 
 async function think(bot) {
   if (bot.busy || bot.stopped || !bot.ws || bot.ws.readyState !== 1) return;
   bot.busy = true;
+  bot.routeBudget = 2;
   try {
     const now = Date.now();
     if (now - bot.questAt > POLL_MS) {
       const state = await call(bot, "GET", "/api/game/node04/state");
       if (state.status === 200 && state.json) {
-        bot.quest = state.json;
-        bot.questAt = now;
+        setQuest(bot, state.json);
         const health = state.json.node03?.stats?.health || {};
         const dead = Number(health.max) > 0 && Number(health.current) <= 0;
         if (dead && !bot.dead) totals.deaths += 1;
@@ -702,7 +943,9 @@ process.on("message", (message) => {
       setTimeout(() => startWithRetry(bot, 1), index * 150);
     });
   } else if (message.type === "world") {
-    navWorld = message.index ? { index: message.index, solids: Array.isArray(message.solids) ? message.solids : [] } : null;
+    const solids = Array.isArray(message.solids) ? message.solids : [];
+    const flagged = Boolean(message.index) && ((message.index.walkables || []).some((walkable) => walkable?.flag) || solids.some((solid) => solid?.flag));
+    navWorld = message.index ? { index: message.index, solids, flagged, flagCache: new Map() } : null;
     navigators.clear();
   } else if (message.type === "placed") {
     const bot = bots.get(message.userId);
