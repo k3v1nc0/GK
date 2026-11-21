@@ -4,13 +4,18 @@
 // gameloop niet ophoudt. Accounts heten bot_001, bot_002, ... (geen wachtwoord waarmee je kunt inloggen) en worden
 // hergebruikt; "Alle bots weg" sluit hun verbindingen en wist hun sessies.
 import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { fork } from "node:child_process";
 import { allowedOrigins } from "./request-boundary.js";
+import { profileServer } from "./perf-profile.js";
 
 const BOT_MAX = Math.max(1, Math.min(300, Number(process.env.GK_BOTS_MAX || 100)));
 const BOT_NAME = /^bot_\d{3}$/;
 const BOT_EMAIL = "@bots.gk.invalid";
+// Kevin 21-11: na elke groep bots vanzelf meten waar de servertijd heen gaat (eerst even laten inlopen).
+const AUTO_PROFILE_AFTER_MS = 45000;
+const AUTO_PROFILE_SECONDS = 15;
 
 function httpError(status, message) {
   const error = new Error(message);
@@ -19,7 +24,7 @@ function httpError(status, message) {
 }
 
 export class BotManager {
-  constructor({ db, authService, mmoService, rootDir, host, port }) {
+  constructor({ db, authService, mmoService, rootDir, host, port, logsDir = "" }) {
     this.db = db;
     this.authService = authService;
     this.mmoService = mmoService;
@@ -33,6 +38,9 @@ export class BotManager {
     this.anchor = null;
     this.startedAt = 0;
     this.lastProfile = null;
+    this.logsDir = logsDir || path.join(rootDir, "storage", "bot-logs");
+    this.worldBuildSent = null;
+    this.profileTimer = null;
   }
 
   view() {
@@ -53,12 +61,14 @@ export class BotManager {
       upMsgsPerBot: status.upMsgsPerBot ?? null,
       errors: Array.isArray(status.errors) ? status.errors.slice(-3) : [],
       minutes: this.startedAt ? Math.round((Date.now() - this.startedAt) / 6000) / 10 : 0,
-      profile: this.lastProfile || null
+      profile: this.lastProfile || null,
+      profileSoon: Boolean(this.profileTimer),
+      trace: status.trace || null
     };
   }
 
   // Een groepje erbij, rond de plek van de admin.
-  release(req, count) {
+  release(req, count, options = {}) {
     const snapshot = this.mmoService.getPlayerSnapshot(req);
     const position = snapshot?.position || {};
     this.anchor = { x: Number(position.x) || 0, z: Number(position.z) || 0, zoneId: position.zoneId || null };
@@ -78,14 +88,51 @@ export class BotManager {
         name,
         sessionId: session.sessionId,
         cookie: this.authService.cookieName + "=" + session.sessionToken,
-        csrf: this.authService.csrfTokenForSessionId(session.sessionId)
+        csrf: this.authService.csrfTokenForSessionId(session.sessionId),
+        // Kevin 21-11: "+1 met logboek": van deze bot schrijven we alles op wat hij doet en waar hij vastloopt.
+        trace: options.trace === true && fresh.length === 0
       });
     }
     if (!fresh.length) throw httpError(400, "Geen vrije bot-accounts.");
     this.ensureChild();
+    this.sendWorld();
     this.child.send({ type: "add", anchor: this.anchor, bots: fresh });
     if (!this.startedAt) this.startedAt = Date.now();
+    this.scheduleProfile();
     return this.view();
+  }
+
+  // De bots zoeken hun route zelf (zoals de game van een speler): ze krijgen dezelfde loopkaart als de server.
+  sendWorld() {
+    if (!this.child) return;
+    let context = null;
+    try { context = this.mmoService.getPublishedWorldContext(); } catch {}
+    const buildId = context?.canonicalBuildId || "basis";
+    if (this.worldBuildSent === buildId) return;
+    this.worldBuildSent = buildId;
+    try {
+      this.child.send({ type: "world", buildId, index: context?.walkabilityIndex || null, solids: context?.solidColliders || [] });
+    } catch (error) {
+      console.error("[bots] loopkaart doorgeven mislukt:", error.message);
+      try { this.child.send({ type: "world", buildId, index: null, solids: [] }); } catch {}
+    }
+  }
+
+  scheduleProfile() {
+    if (this.profileTimer) clearTimeout(this.profileTimer);
+    this.profileTimer = setTimeout(() => {
+      this.profileTimer = null;
+      if (!this.bots.size) return;
+      const bots = this.bots.size;
+      profileServer(AUTO_PROFILE_SECONDS, this.rootDir).then((result) => {
+        this.lastProfile = Object.assign({ bots, auto: true }, result);
+        try {
+          fs.mkdirSync(this.logsDir, { recursive: true });
+          fs.writeFileSync(path.join(this.logsDir, "meting-" + bots + "-bots.json"), JSON.stringify(this.lastProfile, null, 2));
+        } catch {}
+      }).catch(() => {});
+    }, AUTO_PROFILE_AFTER_MS);
+    this.profileTimer.unref?.();
   }
 
   stop() {
@@ -103,6 +150,7 @@ export class BotManager {
     this.bots.clear();
     this.status = null;
     this.startedAt = 0;
+    if (this.profileTimer) { clearTimeout(this.profileTimer); this.profileTimer = null; }
     return this.view();
   }
 
@@ -124,9 +172,12 @@ export class BotManager {
     if (this.child && this.child.connected) return;
     const child = fork(path.join(this.rootDir, "scripts", "game-bots.js"), [], {
       cwd: this.rootDir,
-      env: Object.assign({}, process.env, { GK_BOTS_BASE: this.base, GK_BOTS_ORIGIN: this.origin }),
-      stdio: ["ignore", "ignore", "pipe", "ipc"]
+      env: Object.assign({}, process.env, { GK_BOTS_BASE: this.base, GK_BOTS_ORIGIN: this.origin, GK_BOTS_LOG_DIR: this.logsDir }),
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
+      // Loopkaart (met getypte arrays) heel doorgeven.
+      serialization: "advanced"
     });
+    this.worldBuildSent = null;
     child.stderr?.on("data", (data) => process.stderr.write("[bots] " + data));
     child.on("message", (message) => this.onChildMessage(message));
     child.on("exit", () => {

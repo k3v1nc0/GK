@@ -88,7 +88,7 @@ const wssV1 = new WebSocketServer({
 const host = process.env.HOST || "127.0.0.1";
 assertIsolatedNetwork({ host, port });
 // Kevin 20-11: bots in de echte game, los te laten door de admin (Instellingen > Bots).
-const botManager = new BotManager({ db, authService, mmoService, rootDir, host, port });
+const botManager = new BotManager({ db, authService, mmoService, rootDir, host, port, logsDir: path.join(path.dirname(resolveDatabasePath(rootDir)), "bot-logs") });
 const RESTORE_GRAPH_ROUTE = "/api/editor/graph/restore";
 
 function timingMs(startedAt) {
@@ -658,7 +658,7 @@ async function handleApi(req, res, url) {
         botManager.lastProfile = await profileServer(body.seconds || 15, rootDir);
         return sendJson(res, 200, botManager.view());
       }
-      return sendJson(res, 200, botManager.release(req, body.count));
+      return sendJson(res, 200, botManager.release(req, body.count, { trace: body.trace === true }));
     }
     if (req.method === "POST" && url.pathname === "/api/game/perf/reset") {
       const user = authService.requireEditor(req);

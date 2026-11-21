@@ -4069,7 +4069,7 @@ export function createGkHud(api) {
     renderSheet();
     Promise.resolve(api.postJson("/api/game/bots", body)).then(function (result) {
       if (result) ui.bots = result;
-      if (body.action === "add") toast(body.count + " bots komen naast je.", { icon: "person", ms: 2500 });
+      if (body.action === "add") toast(body.trace ? "1 bot met logboek komt naast je." : body.count + " bots komen naast je.", { icon: "person", ms: 2500 });
       else if (body.action === "profile") toast("Meting klaar: zie Bots (admin).", { icon: "hourglass", ms: 2500 });
       else toast("Alle bots zijn weg.", { icon: "person", ms: 2500 });
     }).catch(function (error) {
@@ -4096,13 +4096,20 @@ export function createGkHud(api) {
         h("div", { class: "gkSeg" }, [5, 10, 25].map(function (n) {
           return h("button", { type: "button", "data-act": "bots-add", "data-id": String(n), disabled: ui.botsBusy || running >= max }, ["+" + n]);
         }))]),
+      // Kevin 21-11: één bot met logboek, om te zien waar hij vastloopt (bijv. bij de brug).
+      h("div", { class: "gkRow" }, [ico("scroll-unfurled"), h("span", null, ["1 bot met logboek", h("small", { text: "Zet hem waar je wilt testen (bijv. voor de brug). Alles wat hij doet komt hieronder en in een bestand op de server." })]),
+        h("button", { type: "button", class: "gkBtn", "data-act": "bots-trace", disabled: ui.botsBusy || running >= max }, ["+1"])]),
+      b.trace ? h("div", { class: "gkRow" }, [h("span", null, ["Logboek " + b.trace.name + (b.trace.file ? " (" + b.trace.file + ")" : "")].concat((b.trace.lines || []).map(function (line) {
+        return h("small", { text: line });
+      })))]) : null,
       h("div", { class: "gkRow" }, [ico("crossed-swords"), h("span", null, [running ? running + " bots (" + num(b.connected, 0) + " verbonden, " + num(b.minutes, 0) + " min)" : "Geen bots", h("small", { text: detail })]),
         h("button", { type: "button", class: "gkBtn gkWarn", "data-act": "bots-stop", disabled: ui.botsBusy || !running }, ["Alle bots weg"])]),
       // Kevin 21-11: meten waar de servertijd heen gaat (15 s CPU-profiel in de server zelf).
       h("div", { class: "gkRow" }, [ico("hourglass"), h("span", null, ["Waar gaat de servertijd heen?", h("small", { text: "Meet 15 seconden terwijl de bots lopen. Maak daarna een schermfoto van de uitkomst." })]),
         h("button", { type: "button", class: "gkBtn", "data-act": "bots-profile", disabled: Boolean(ui.botsBusy) }, [ui.botsBusy === "profile" ? "Meet..." : "Meten"])]),
+      b.profileSoon ? h("div", { class: "gkRow" }, [h("span", null, ["Meting volgt vanzelf, 45 s na de laatste groep (15 s meten)."])]) : null,
       b.profile ? h("div", { class: "gkRow" }, [h("span", null, [
-        "Meting (" + b.profile.seconds + " s): server bezig " + b.profile.busyPct + "%, geheugen opruimen " + b.profile.gcPct + "%",
+        "Meting" + (b.profile.bots ? " bij " + b.profile.bots + " bots" : "") + " (" + b.profile.seconds + " s): server bezig " + b.profile.busyPct + "%, geheugen opruimen " + b.profile.gcPct + "%",
         h("small", { text: "Per bestand: " + (b.profile.files || []).map(function (row) { return row.pct + "% " + row.name; }).join(" · ") }),
         h("small", { text: "Per functie: " + (b.profile.functions || []).slice(0, 12).map(function (row) { return row.pct + "% " + row.name; }).join(" · ") })
       ])]) : null
@@ -5665,6 +5672,7 @@ export function createGkHud(api) {
       case "bots-add": botsAction({ action: "add", count: Number(id) || 5 }); break;
       case "bots-stop": botsAction({ action: "stop" }); break;
       case "bots-profile": botsAction({ action: "profile", seconds: 15 }); break;
+      case "bots-trace": botsAction({ action: "add", count: 1, trace: true }); break;
       case "attack": attack(); break;
       case "heal": heal(); break;
       case "skill": useSlot(Number(id)); break;
