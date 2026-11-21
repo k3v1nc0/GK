@@ -4071,6 +4071,7 @@ export function createGkHud(api) {
       if (result) ui.bots = result;
       if (body.action === "add") toast(body.trace ? "1 bot met logboek komt naast je." : body.count + " bots komen naast je.", { icon: "person", ms: 2500 });
       else if (body.action === "profile") toast("Meting klaar: zie Bots (admin).", { icon: "hourglass", ms: 2500 });
+      else if (body.action === "wipe") toast((result?.wiped || 0) + " bot-accounts gewist. Nieuwe bots beginnen op level 1.", { icon: "trash-can", ms: 3000 });
       else toast("Alle bots zijn weg.", { icon: "person", ms: 2500 });
     }).catch(function (error) {
       toast(error?.message || "Bots: dat lukte niet.", { tone: "error" });
@@ -4104,6 +4105,9 @@ export function createGkHud(api) {
       })))]) : null,
       h("div", { class: "gkRow" }, [ico("crossed-swords"), h("span", null, [running ? running + " bots (" + num(b.connected, 0) + " verbonden, " + num(b.minutes, 0) + " min)" : "Geen bots", h("small", { text: detail })]),
         h("button", { type: "button", class: "gkBtn gkWarn", "data-act": "bots-stop", disabled: ui.botsBusy || !running }, ["Alle bots weg"])]),
+      // Kevin 21-11: schone lei: alle bot-accounts helemaal wissen (level, tas, quests, account). Twee keer klikken.
+      h("div", { class: "gkRow" }, [ico("trash-can"), h("span", null, ["Schone lei", h("small", { text: "Wist alle bot-accounts helemaal (level, tas, quests, account). Nieuwe bots beginnen op level 1." })]),
+        h("button", { type: "button", class: "gkBtn gkWarn", "data-act": "bots-wipe", disabled: Boolean(ui.botsBusy) }, [ui.botsWipeArmed && Date.now() - ui.botsWipeArmed < 5000 ? "Zeker? Klik nog eens" : "Alles wissen"])]),
       // Kevin 21-11: meten waar de servertijd heen gaat (15 s CPU-profiel in de server zelf).
       h("div", { class: "gkRow" }, [ico("hourglass"), h("span", null, ["Waar gaat de servertijd heen?", h("small", { text: "Meet 15 seconden terwijl de bots lopen. Maak daarna een schermfoto van de uitkomst." })]),
         h("button", { type: "button", class: "gkBtn", "data-act": "bots-profile", disabled: Boolean(ui.botsBusy) }, [ui.botsBusy === "profile" ? "Meet..." : "Meten"])]),
@@ -5673,6 +5677,10 @@ export function createGkHud(api) {
       case "bots-stop": botsAction({ action: "stop" }); break;
       case "bots-profile": botsAction({ action: "profile", seconds: 15 }); break;
       case "bots-trace": botsAction({ action: "add", count: 1, trace: true }); break;
+      case "bots-wipe":
+        if (ui.botsWipeArmed && Date.now() - ui.botsWipeArmed < 5000) { ui.botsWipeArmed = 0; botsAction({ action: "wipe" }); }
+        else { ui.botsWipeArmed = Date.now(); renderSheet(); setTimeout(function () { if (ui.botsWipeArmed && Date.now() - ui.botsWipeArmed >= 5000) { ui.botsWipeArmed = 0; renderSheet(); } }, 5100); }
+        break;
       case "attack": attack(); break;
       case "heal": heal(); break;
       case "skill": useSlot(Number(id)); break;

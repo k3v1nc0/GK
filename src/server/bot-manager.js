@@ -24,7 +24,8 @@ function httpError(status, message) {
 }
 
 export class BotManager {
-  constructor({ db, authService, mmoService, rootDir, host, port, logsDir = "" }) {
+  constructor({ db, authService, mmoService, rootDir, host, port, logsDir = "", userAdmin = null }) {
+    this.userAdmin = userAdmin;
     this.db = db;
     this.authService = authService;
     this.mmoService = mmoService;
@@ -133,6 +134,22 @@ export class BotManager {
       }).catch(() => {});
     }, AUTO_PROFILE_AFTER_MS);
     this.profileTimer.unref?.();
+  }
+
+  // Kevin 21-11: schone lei: alle bots weg en hun accounts helemaal wissen (zoals Verwijderen bij Gebruikers).
+  // Alleen echte bot-accounts (bot_123 met ...@bots.gk.invalid en rol speler); volgende keer beginnen ze op level 1.
+  wipe(adminId) {
+    this.stop();
+    if (!this.userAdmin) throw httpError(500, "Gebruikersbeheer ontbreekt.");
+    const rows = this.db.prepare("SELECT id, username, email, role FROM users WHERE email LIKE ?").all("%" + BOT_EMAIL);
+    let wiped = 0;
+    for (const row of rows) {
+      if (row.role !== "player" || !BOT_NAME.test(row.username || "") || row.email !== row.username + BOT_EMAIL) continue;
+      this.userAdmin.remove(row.id, adminId);
+      wiped += 1;
+    }
+    this.lastProfile = null;
+    return Object.assign(this.view(), { wiped });
   }
 
   stop() {

@@ -88,7 +88,7 @@ const wssV1 = new WebSocketServer({
 const host = process.env.HOST || "127.0.0.1";
 assertIsolatedNetwork({ host, port });
 // Kevin 20-11: bots in de echte game, los te laten door de admin (Instellingen > Bots).
-const botManager = new BotManager({ db, authService, mmoService, rootDir, host, port, logsDir: path.join(path.dirname(resolveDatabasePath(rootDir)), "bot-logs") });
+const botManager = new BotManager({ db, authService, mmoService, rootDir, host, port, logsDir: path.join(path.dirname(resolveDatabasePath(rootDir)), "bot-logs") , userAdmin: userAdminService });
 const RESTORE_GRAPH_ROUTE = "/api/editor/graph/restore";
 
 function timingMs(startedAt) {
@@ -653,6 +653,7 @@ async function handleApi(req, res, url) {
       if (req.method === "GET") return sendJson(res, 200, botManager.view());
       const body = await readJson(req);
       if (body.action === "stop") return sendJson(res, 200, botManager.stop());
+      if (body.action === "wipe") return sendJson(res, 200, botManager.wipe(user.id));
       // Kevin 21-11: meten waar de servertijd heen gaat (CPU-profiel van een paar seconden, in deze server).
       if (body.action === "profile") {
         botManager.lastProfile = await profileServer(body.seconds || 15, rootDir);
