@@ -12,6 +12,9 @@
 // steeds vast), dan zet hij die quest even opzij en doet hij een andere (bijv. eerst hout naar de smid, dan is de brug er).
 // Verandert een vlag, dan probeert hij de opzij gezette quests meteen opnieuw. Werkt voor elk soort doel: verslaan,
 // verzamelen, inleveren, praten, gebied, reizen; onbekende doelen: erheen lopen en in de buurt bezig zijn.
+// Kevin 21-11 (avond): wie de bot aanvalt slaat hij terug; een groepsuitnodiging neemt hij aan, en in een groep met een
+// speler blijft hij bij die speler en helpt hij mee vechten. Na respawn (of een andere besturingsbeurt) neemt hij de
+// beurt van de server over (player:input_ignored), anders negeert de server zijn looppunten.
 import fs from "node:fs";
 import path from "node:path";
 import WebSocket from "ws";
@@ -35,6 +38,10 @@ const ROUTE_MIN_M = 6;
 const PARK_MS = 120000; // quest waar de bot niet bij kan: zo lang opzij (of tot een vlag verandert)
 const UNREACHABLE_MS = 60000; // plek of ding zonder route: zo lang niet opnieuw proberen
 const TALK_MS = 8000;
+const DEFEND_MS = 8000; // zo lang na een klap terugvechten
+const ASSIST_MS = 12000; // zo lang helpen nadat een groepsgenoot vocht
+const FOLLOW_M = 7; // in een groep: binnen deze afstand van de speler blijven
+const BOT_NAME = /^bot_\d{3}$/;
 
 let navWorld = null;
 const navigators = new Map();
@@ -294,6 +301,7 @@ function createBot(info, anchor) {
     lastAttackAt: 0, lastHitId: null, lastGatherAt: 0, dead: false, attackWait: 0, radius: 0.5, takenAt: new Map(),
     traced: info.trace === true, tracedAt: Date.now(), traceLines: [], traceFile: "", lastTraceKey: "", lastTraceAt: 0,
     blacklist: new Set(), progress: { key: "", at: Date.now() },
+    epoch: 0, lastIgnored: "", attackedBy: null, assist: null, party: null, netOf: new Map(), seen: new Map(),
     flagsOn: new Set(), flagKey: "", badSpots: [], routeBudget: 2, questsTraced: false, parked: new Map(), unreachable: new Map(), giveUps: new Map(), talkedAt: new Map(), stalls: new Map(), questId: null,
     stuck: { x: 0, z: 0, at: Date.now(), tries: 0 },
     downBytes: 0, upMsgs: 0, doing: "start", timers: [], stopped: false, busy: false, placedWaiter: null, reconnects: 0
@@ -331,8 +339,32 @@ function onMessage(bot, data) {
         setSelf(bot, record.x, record.z, false);
       } else if (bot.netId && record?.i === bot.netId) {
         setSelf(bot, record.x, record.z, record.t === 1);
+      } else if (record) {
+        // Andere spelers: alleen de plek van groepsgenoten bijhouden (om bij de speler te blijven).
+        if (record.playerId && record.n) bot.netOf.set(record.n, record.playerId);
+        const id = record.playerId || bot.netOf.get(record.i);
+        if (id && bot.party && Number.isFinite(Number(record.x))) bot.seen.set(id, { x: Number(record.x), z: Number(record.z), at: Date.now() });
       }
     }
+  } else if (type === "player:input_ignored") {
+    // De server heeft een nieuwe besturingsbeurt (bijv. na respawn): die overnemen, anders blijft alles genegeerd.
+    const epoch = Number(message.controllerEpoch) || 0;
+    if (epoch > bot.epoch) bot.epoch = epoch;
+    if (message.reason === "stale_input_seq") bot.seq = Math.max(bot.seq, (Number(message.clientInputSeq) || 0) + 1);
+    if (bot.lastIgnored !== message.reason) {
+      bot.lastIgnored = message.reason;
+      trace(bot, "server", "looppunt genegeerd: " + message.reason + " (beurt " + epoch + ")");
+    }
+  } else if (type === "actor:event") {
+    onActorEvent(bot, message);
+  } else if (type === "party:state") {
+    const before = (bot.party?.members || []).map((member) => member.id).join(",");
+    bot.party = message.party && Array.isArray(message.party.members) ? message.party : null;
+    const after = (bot.party?.members || []).map((member) => member.id).join(",");
+    if (before !== after) trace(bot, "groep", bot.party ? "in groep met " + bot.party.members.map((member) => member.name).join(", ") : "geen groep");
+    if (!bot.party) bot.seen.clear();
+  } else if (type === "party:invite" && message.invite?.inviteId) {
+    acceptInvite(bot, message.invite);
   } else if (type === "actor:snapshot") {
     if (message.full) {
       const keep = new Set((message.actors || []).map((entry) => entry.id));
@@ -350,6 +382,34 @@ function onMessage(bot, data) {
     }
     for (const id of Array.isArray(message.gone) ? message.gone : []) bot.actors.delete(id);
   }
+}
+
+function isMate(bot, playerId) {
+  return Boolean(playerId) && playerId !== bot.playerId && (bot.party?.members || []).some((member) => member.id === playerId);
+}
+
+// Klappen: wie de bot raakt, slaat hij terug; raakt een vijand een groepsgenoot (of slaat die een vijand), dan helpt hij.
+function onActorEvent(bot, event) {
+  const now = Date.now();
+  if (event.e === "attack" && event.target === bot.playerId) {
+    if (!bot.attackedBy || bot.attackedBy.id !== event.id) trace(bot, "vecht", "aangevallen door " + event.id + (event.remainingHealth != null ? ", leven " + event.remainingHealth : ""));
+    bot.attackedBy = { id: event.id, at: now };
+    if (event.defeated === true && !bot.dead) {
+      bot.dead = true;
+      totals.deaths += 1;
+      trace(bot, "vecht", "verslagen door " + event.id);
+    }
+  } else if (event.e === "attack" && isMate(bot, event.target)) {
+    bot.assist = { id: event.id, at: now };
+  } else if (event.e === "hit" && isMate(bot, event.by)) {
+    bot.assist = { id: event.id, at: now };
+  }
+}
+
+async function acceptInvite(bot, invite) {
+  trace(bot, "groep", "uitnodiging van " + (invite.fromName || invite.fromId));
+  const result = await call(bot, "POST", "/api/game/party/invites/" + encodeURIComponent(invite.inviteId) + "/accept", {});
+  if (!result.ok) trace(bot, "groep", "aannemen lukt niet (" + result.status + ")");
 }
 
 // 20x per seconde: een stukje lopen naar het doel en dat als looppunt sturen (zoals de game).
@@ -388,10 +448,10 @@ function stepMovement(bot) {
     }
   }
   if (moving) {
-    send(bot, { type: "player:input_state", payload: { clientSessionId: bot.clientSessionId, inputSeq: bot.seq++, clientSentAt: now, controllerEpoch: 0,
+    send(bot, { type: "player:input_state", payload: { clientSessionId: bot.clientSessionId, inputSeq: bot.seq++, clientSentAt: now, controllerEpoch: bot.epoch,
       input: { moveX: Math.round(bot.dirX * 1000) / 1000, moveZ: Math.round(bot.dirZ * 1000) / 1000, pathPoint: { x: Math.round(bot.x * 1000) / 1000, z: Math.round(bot.z * 1000) / 1000 } } } });
   } else if (bot.wasMoving) {
-    send(bot, { type: "player:input_state", payload: { clientSessionId: bot.clientSessionId, inputSeq: bot.seq++, clientSentAt: now, controllerEpoch: 0, input: { moveX: 0, moveZ: 0, stop: true } } });
+    send(bot, { type: "player:input_state", payload: { clientSessionId: bot.clientSessionId, inputSeq: bot.seq++, clientSentAt: now, controllerEpoch: bot.epoch, input: { moveX: 0, moveZ: 0, stop: true } } });
   }
   bot.wasMoving = moving;
 }
@@ -454,8 +514,22 @@ function fight(bot, range) {
     if (go(bot, candidate, 1.6, "vecht", candidate.id, "t:" + candidate.id)) return true;
   }
   if (!enemy) return false;
+  strike(bot, enemy, "vecht");
+  return true;
+}
+
+// Eén vijand aanpakken (terugvechten, helpen): erheen of slaan.
+function attackActor(bot, id, doing) {
+  const enemy = bot.actors.get(id);
+  if (!enemy || enemy.k !== "a" || enemy.s === "d") return false;
+  if (distance(serverSpot(bot), enemy) > 2.4) return go(bot, enemy, 1.6, doing, enemy.id, "t:" + enemy.id);
+  strike(bot, enemy, doing);
+  return true;
+}
+
+function strike(bot, enemy, doing) {
   bot.goal = null;
-  bot.doing = "vecht";
+  bot.doing = doing;
   const now = Date.now();
   // Zoals de game: niet sneller slaan dan de cooldown; bij "nog in cooldown" (429) iets langer wachten.
   if (now - bot.lastAttackAt >= ATTACK_MS + bot.attackWait) {
@@ -466,6 +540,26 @@ function fight(bot, range) {
       else if (result.ok) bot.attackWait = Math.max(0, bot.attackWait - 100);
     }).catch(() => {});
   }
+}
+
+// Terugvechten en, in een groep met een speler, bij die speler blijven en meehelpen. true = daar is de bot mee bezig.
+function defendAndHelp(bot) {
+  const now = Date.now();
+  if (bot.attackedBy && now - bot.attackedBy.at < DEFEND_MS && attackActor(bot, bot.attackedBy.id, "vecht terug")) return true;
+  if (bot.assist && now - bot.assist.at < ASSIST_MS && attackActor(bot, bot.assist.id, "helpt")) return true;
+  const mates = (bot.party?.members || []).filter((member) => member.id !== bot.playerId && !BOT_NAME.test(member.name || ""));
+  if (!mates.length) return false;
+  const leader = mates.find((member) => member.leader) || mates[0];
+  const where = bot.seen.get(leader.id);
+  if (!where || now - where.at > 10000) return false; // speler niet in zicht: gewoon zelf verder
+  if (distance(serverSpot(bot), where) > FOLLOW_M) {
+    if (go(bot, where, 3, "volgt " + leader.name, null, "f:" + Math.round(where.x / 4) + "," + Math.round(where.z / 4))) return true;
+    return false;
+  }
+  // Bij de speler: vijanden vlakbij aanpakken, anders wachten.
+  if (fight(bot, 8)) return true;
+  bot.goal = null;
+  bot.doing = "bij " + leader.name;
   return true;
 }
 
@@ -486,12 +580,14 @@ function gather(bot, range, wanted = null) {
     .map((target) => ({ id: target.instanceId, x: Number(target.x), z: Number(target.z), action: "pickup", name: target.displayName || "" }));
   const words = (wanted || []).map((objective) => [objective.displayName, objective.message, objective.itemRef, objective.resourceRef].filter(Boolean).join(" ")).join(" ").toLowerCase();
   const score = (thing) => distance(spot, thing) - (words && thing.name && words.includes(String(thing.name).toLowerCase()) ? 25 : 0);
+  // Pakken kan binnen het bereik van het ding (zoals de server: bereik + straal), niet pas op 2 m: een boom houdt je op afstand.
+  const reachOf = (thing) => Math.max(1.6, (Number(named.get(thing.id)?.range) || 3) + Math.min(1, Number(named.get(thing.id)?.radius) || 0) - 0.6);
   let thing = null;
   for (const candidate of byDistance(spot, resources.concat(pickups), score).slice(0, 3)) {
     const doing = candidate.action === "pickup" ? "pakt op" : "verzamelt";
-    if (distance(spot, candidate) <= 2) { thing = candidate; break; }
+    if (distance(spot, candidate) <= reachOf(candidate)) { thing = candidate; break; }
     if (bot.routeBudget <= 0) break;
-    if (go(bot, candidate, 1.2, doing, null, "t:" + candidate.id)) return true;
+    if (go(bot, candidate, reachOf(candidate) * 0.6, doing, null, "t:" + candidate.id)) return true;
   }
   if (!thing) return false;
   const doing = thing.action === "pickup" ? "pakt op" : "verzamelt";
@@ -762,10 +858,23 @@ async function think(bot) {
       bot.doing = "respawn";
       bot.goal = null;
       const result = await act03(bot, "respawn", null);
-      if (result.ok) { bot.dead = false; bot.questAt = 0; }
+      if (result.ok) {
+        bot.dead = false;
+        bot.questAt = 0;
+        bot.attackedBy = null;
+        bot.assist = null;
+        const position = result.json?.position;
+        if (position) {
+          setSelf(bot, position.x, position.z, true);
+          bot.epoch = Math.max(bot.epoch, Number(position.controllerEpoch) || 0);
+        }
+      } else if (result.status === 409) {
+        bot.dead = false; // toch niet dood
+      }
       return;
     }
     checkStuck(bot);
+    if (defendAndHelp(bot)) return;
     if (await doQuest(bot)) return;
     if (fight(bot, SIGHT_M) || gather(bot, SIGHT_M)) return;
     wander(bot, bot.anchor, WANDER_M, "loopt rond");
