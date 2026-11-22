@@ -942,7 +942,7 @@ async function connect(bot) {
       if (!authed) {
         let first = null;
         try { first = JSON.parse(String(data)); } catch {}
-        if (first?.type === "auth_ok") { authed = true; resolve(); }
+        if (first?.type === "auth_ok") { authed = true; bot.reconnects = 0; resolve(); }
       }
       onMessage(bot, data);
     });
@@ -956,7 +956,8 @@ async function connect(bot) {
         }
       }
     });
-    ws.once("error", (error) => { if (!authed) reject(error); });
+    // Altijd een luisteraar: een tweede socketfout zonder luisteraar laat anders het hele bot-proces vallen.
+    ws.on("error", (error) => { if (!authed) reject(error); });
   });
 }
 
@@ -1059,9 +1060,26 @@ function reportStatus() {
     downKbPerBotMax: down.length ? Math.round(Math.max(...down) * 10) / 10 : null,
     upMsgsPerBot: average(up),
     errors: totals.errors.slice(),
+    rssMb: Math.round(process.memoryUsage().rss / 1048576),
     trace: tracedBot ? { name: tracedBot.name, file: tracedBot.traceFile, lines: tracedBot.traceLines.slice(-15) } : null
   });
 }
+
+// Kevin 22-11 (nachttest: om ±2-3 uur waren alle bots tegelijk weg): één onverwachte fout mag niet het hele
+// bot-proces stoppen. Opschrijven (bots-fouten.log in de logmap + serverlog) en doorgaan.
+function crashLog(kind, error) {
+  const text = error?.stack || error?.message || String(error);
+  noteError(kind + ": " + String(error?.message || error).slice(0, 120));
+  const line = new Date().toISOString() + " " + kind + ": " + text;
+  try { process.stderr.write(line + "\n"); } catch {}
+  if (!LOG_DIR) return;
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+    fs.appendFileSync(path.join(LOG_DIR, "bots-fouten.log"), line + "\n");
+  } catch {}
+}
+process.on("uncaughtException", (error) => crashLog("onverwachte fout", error));
+process.on("unhandledRejection", (error) => crashLog("onafgehandelde fout", error));
 
 function stopAll() {
   for (const bot of bots.values()) stopBot(bot);

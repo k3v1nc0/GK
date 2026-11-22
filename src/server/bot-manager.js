@@ -10,6 +10,7 @@ import path from "node:path";
 import { fork } from "node:child_process";
 import { allowedOrigins } from "./request-boundary.js";
 import { profileServer } from "./perf-profile.js";
+import { resolveDatabasePath } from "./db.js";
 
 const BOT_MAX = Math.max(1, Math.min(300, Number(process.env.GK_BOTS_MAX || 100)));
 const BOT_NAME = /^bot_\d{3}$/;
@@ -17,6 +18,8 @@ const BOT_EMAIL = "@bots.gk.invalid";
 // Kevin 21-11: na elke groep bots vanzelf meten waar de servertijd heen gaat (eerst even laten inlopen).
 const AUTO_PROFILE_AFTER_MS = 45000;
 const AUTO_PROFILE_SECONDS = 15;
+// Kevin 22-11: nachtlog (bots-nacht-<datum>.log in de logmap): elke 5 minuten hoe het gaat, plus start/stop.
+const NIGHT_LOG_MS = 5 * 60 * 1000;
 
 function httpError(status, message) {
   const error = new Error(message);
@@ -43,6 +46,48 @@ export class BotManager {
     this.logsDir = logsDir || path.join(rootDir, "storage", "bot-logs");
     this.worldBuildSent = null;
     this.profileTimer = null;
+    this.nightTimer = null;
+    this.dbPath = (() => { try { return resolveDatabasePath(rootDir); } catch { return ""; } })();
+    // Server (opnieuw) gestart: alleen opschrijven als er al eens bots draaiden (de logmap bestaat).
+    if (fs.existsSync(this.logsDir)) this.nightLine("server gestart");
+  }
+
+  nightLine(note) {
+    try {
+      const status = this.status || {};
+      const mb = (bytes) => Math.round(bytes / 1048576);
+      const size = (file) => { try { return fs.statSync(file).size; } catch { return 0; } };
+      let freeGb = "";
+      try {
+        const disk = fs.statfsSync(this.logsDir);
+        freeGb = "vrij " + (disk.bavail * disk.bsize / 1073741824).toFixed(1) + " GB";
+      } catch {}
+      const parts = [
+        new Date().toISOString(), note,
+        "bots " + this.bots.size + " (verbonden " + (Number(status.connected) || 0) + ")",
+        "server " + mb(process.memoryUsage().rss) + " MB",
+        status.rssMb != null ? "bots-proces " + status.rssMb + " MB" : "",
+        this.dbPath ? "database " + mb(size(this.dbPath) + size(this.dbPath + "-wal")) + " MB" : "",
+        freeGb,
+        "kills " + (Number(status.kills) || 0) + " · quests " + (Number(status.questsDone) || 0),
+        Array.isArray(status.errors) && status.errors.length ? "laatste fout: " + status.errors[status.errors.length - 1] : ""
+      ].filter(Boolean);
+      fs.mkdirSync(this.logsDir, { recursive: true });
+      fs.appendFileSync(path.join(this.logsDir, "bots-nacht-" + new Date().toISOString().slice(0, 10) + ".log"), parts.join(" · ") + "\n");
+    } catch {}
+  }
+
+  startNightLog() {
+    if (this.nightTimer) return;
+    this.nightTimer = setInterval(() => {
+      if (!this.bots.size) {
+        clearInterval(this.nightTimer);
+        this.nightTimer = null;
+        return;
+      }
+      this.nightLine("stand");
+    }, NIGHT_LOG_MS);
+    this.nightTimer.unref?.();
   }
 
   view() {
@@ -100,6 +145,8 @@ export class BotManager {
     this.sendWorld();
     this.child.send({ type: "add", anchor: this.anchor, bots: fresh });
     if (!this.startedAt) this.startedAt = Date.now();
+    this.nightLine("+" + fresh.length + " bots losgelaten");
+    this.startNightLog();
     this.scheduleProfile();
     return this.view();
   }
@@ -154,6 +201,7 @@ export class BotManager {
   }
 
   stop() {
+    if (this.bots.size) this.nightLine("bots gestopt (" + this.bots.size + ")");
     const child = this.child;
     this.child = null;
     if (child) {
@@ -200,8 +248,10 @@ export class BotManager {
     try { os.setPriority(child.pid, 10); } catch {}
     child.stderr?.on("data", (data) => process.stderr.write("[bots] " + data));
     child.on("message", (message) => this.onChildMessage(message));
-    child.on("exit", () => {
+    child.on("exit", (code, signal) => {
       if (this.child === child) {
+        // Onverwacht weg (niet via "Alle bots weg"): met reden in de nachtlog.
+        this.nightLine("bot-proces onverwacht gestopt (code " + code + (signal ? ", signaal " + signal : "") + ")");
         this.child = null;
         // Proces weg (fout of gestopt): sessies opruimen, zodat er geen spookbots blijven staan.
         this.stop();
