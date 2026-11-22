@@ -17,6 +17,7 @@
 // beurt van de server over (player:input_ignored), anders negeert de server zijn looppunten.
 import fs from "node:fs";
 import path from "node:path";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 import WebSocket from "ws";
 import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../apps/web/public/shared/protocol-v1.js";
 import { createPlayerNavigator } from "../apps/web/public/shared/player-navigation.js";
@@ -53,6 +54,14 @@ const bots = new Map();
 const totals = { kills: 0, questsAccepted: 0, questsDone: 0, gathered: 0, deaths: 0, errors: [] };
 const killedAt = new Map(); // vijand-id -> tijd: een vijand die meerdere bots zien sterven telt één keer
 let statusAt = Date.now();
+// Langste hapering van dit proces sinds de vorige statusmelding (ms); de nachtlog toont de grootste per 5 minuten.
+const loopLag = monitorEventLoopDelay({ resolution: 20 });
+loopLag.enable();
+function loopLagMaxMs() {
+  const value = Math.round(loopLag.max / 1e6);
+  loopLag.reset();
+  return value;
+}
 
 // Zoals de server (world-flags.js passes): gate = { id | flagId, on }.
 function flagPasses(on, gate) {
@@ -64,7 +73,10 @@ function flagPasses(on, gate) {
 // De loopkaart van deze bot: zonder de loopvlakken (brug) en botsingen die er door vlaggen voor hem niet zijn.
 function navigatorFor(bot) {
   if (!navWorld?.index) return null;
-  const key = Math.round(bot.radius * 100) + "|" + (navWorld.flagged ? bot.flagKey : "");
+  // Kevin 22-11 (nachttest): alleen de vlaggen die iets aan de loopkaart veranderen (brug, muur, botser met vlag) tellen.
+  // Met alle questvlaggen kreeg elke bot een eigen kaart; boven de 40 werd alles weggegooid en opnieuw gebouwd, het
+  // bot-proces hing dan zo lang dat de server de verbindingen sloot.
+  const key = Math.round(bot.radius * 100) + "|" + (navWorld.flagged ? navWorld.gateIds.filter((id) => bot.flagsOn.has(id)).join("|") : "");
   let nav = navigators.get(key);
   if (!nav) {
     const passes = (gate) => flagPasses(bot.flagsOn, gate);
@@ -948,17 +960,47 @@ async function connect(bot) {
     });
     ws.once("close", (code) => {
       if (!authed) reject(new Error("socket dicht " + code));
-      else if (!bot.stopped) {
+      else if (!bot.stopped && bot.ws === ws) {
         noteError(bot.name + ": verbinding dicht (" + code + "), opnieuw");
-        if (bot.reconnects < 5) {
-          bot.reconnects += 1;
-          setTimeout(() => { if (!bot.stopped) connect(bot).catch((error) => noteError(bot.name + ": " + error.message)); }, 3000);
-        }
+        logDrop(bot, code);
+        reconnect(bot);
       }
     });
     // Altijd een luisteraar: een tweede socketfout zonder luisteraar laat anders het hele bot-proces vallen.
     ws.on("error", (error) => { if (!authed) reject(error); });
   });
+}
+
+// Kevin 22-11: na een haper (server of bot-proces even druk) gewoon blijven proberen, steeds iets langer wachten
+// (3 s tot 60 s). Vroeger gaf een bot het na één mislukte poging (4401) voorgoed op.
+function reconnect(bot) {
+  if (bot.stopped || bot.reconnecting) return;
+  bot.reconnecting = true;
+  bot.doing = "opnieuw verbinden";
+  const wait = Math.min(60000, 3000 * 2 ** Math.min(5, bot.reconnects)) + Math.random() * 2000;
+  bot.reconnects += 1;
+  setTimeout(() => {
+    bot.reconnecting = false;
+    if (bot.stopped) return;
+    connect(bot).catch((error) => {
+      noteError(bot.name + ": " + error.message);
+      reconnect(bot);
+    });
+  }, wait);
+}
+
+// Elke weggevallen verbinding in bots-fouten.log (met code), hooguit 1 regel per 10 s; zo zien we wat er gebeurde.
+let dropLog = { at: 0, skipped: 0 };
+function logDrop(bot, code) {
+  if (!LOG_DIR) return;
+  const now = Date.now();
+  if (now - dropLog.at < 10000) { dropLog.skipped += 1; return; }
+  const extra = dropLog.skipped ? " (+" + dropLog.skipped + " andere sinds de vorige regel)" : "";
+  dropLog = { at: now, skipped: 0 };
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+    fs.appendFileSync(path.join(LOG_DIR, "bots-fouten.log"), new Date().toISOString() + " " + bot.name + " verbinding dicht, code " + code + extra + "\n");
+  } catch {}
 }
 
 async function startBot(bot) {
@@ -1016,13 +1058,10 @@ function startWithRetry(bot, attempt) {
   startBot(bot).catch((error) => {
     if (bot.stopped) return;
     try { bot.ws?.close(); } catch {}
-    if (attempt < 4) {
-      bot.doing = "opnieuw verbinden";
-      setTimeout(() => startWithRetry(bot, attempt + 1), 2000 * attempt + Math.random() * 1000);
-      return;
-    }
-    noteError(bot.name + " start: " + (error?.message || error));
-    bot.doing = "fout";
+    if (attempt === 4) noteError(bot.name + " start: " + (error?.message || error));
+    // Kevin 22-11: niet opgeven; na 4 snelle pogingen elke ~30 s opnieuw.
+    bot.doing = "opnieuw verbinden";
+    setTimeout(() => startWithRetry(bot, attempt + 1), (attempt < 4 ? 2000 * attempt : 30000) + Math.random() * 1000);
   });
 }
 
@@ -1061,6 +1100,7 @@ function reportStatus() {
     upMsgsPerBot: average(up),
     errors: totals.errors.slice(),
     rssMb: Math.round(process.memoryUsage().rss / 1048576),
+    lagMaxMs: loopLagMaxMs(),
     trace: tracedBot ? { name: tracedBot.name, file: tracedBot.traceFile, lines: tracedBot.traceLines.slice(-15) } : null
   });
 }
@@ -1099,7 +1139,14 @@ process.on("message", (message) => {
   } else if (message.type === "world") {
     const solids = Array.isArray(message.solids) ? message.solids : [];
     const flagged = Boolean(message.index) && ((message.index.walkables || []).some((walkable) => walkable?.flag) || solids.some((solid) => solid?.flag));
-    navWorld = message.index ? { index: message.index, solids, flagged, flagCache: new Map() } : null;
+    const gateIds = new Set();
+    if (message.index) {
+      for (const entry of [].concat(message.index.walkables || [], message.index.walls || [], solids)) {
+        const id = entry?.flag?.id ?? entry?.flag?.flagId;
+        if (id != null) gateIds.add(String(id));
+      }
+    }
+    navWorld = message.index ? { index: message.index, solids, flagged, flagCache: new Map(), gateIds: Array.from(gateIds).sort() } : null;
     navigators.clear();
   } else if (message.type === "placed") {
     const bot = bots.get(message.userId);

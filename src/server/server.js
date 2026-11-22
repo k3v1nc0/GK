@@ -92,10 +92,32 @@ assertIsolatedNetwork({ host, port });
 const botManager = new BotManager({ db, authService, mmoService, rootDir, host, port, logsDir: path.join(path.dirname(resolveDatabasePath(rootDir)), "bot-logs") , userAdmin: userAdminService });
 // Kevin 21-11: oude bonnen van spelacties (klap, verzamelen) elke minuut een stukje opruimen; anders groeit de database
 // met bots met miljoenen rijen per dag. Klein stukje = nooit lang stil.
+// Kevin 22-11: kleinere stukjes (oude bonnen van vóór 21-11 zijn groot); duurt het toch lang, dan in de log.
 const receiptPruneTimer = setInterval(() => {
-  try { pruneOperationReceipts(db); } catch (error) { console.error("[bonnen] opruimen mislukt:", error.message); }
-}, 60000);
+  const startedAt = performance.now();
+  try {
+    const removed = pruneOperationReceipts(db, { batch: 500 });
+    const ms = performance.now() - startedAt;
+    if (ms > 200) console.warn("[bonnen] " + removed + " opgeruimd in " + Math.round(ms) + " ms");
+  } catch (error) { console.error("[bonnen] opruimen mislukt:", error.message); }
+}, 20000);
 if (typeof receiptPruneTimer.unref === "function") receiptPruneTimer.unref();
+// Kevin 22-11 (nachttest): als de server stopt, opschrijven waarom: in de nachtlog (bot-logs) en bij een crash de
+// hele fout in server-fouten.log. Daarna stopt hij zoals altijd (geen ander gedrag, alleen een spoor).
+function crashTrace(kind, error) {
+  const text = error?.stack || error?.message || String(error);
+  try {
+    fs.mkdirSync(botManager.logsDir, { recursive: true });
+    fs.appendFileSync(path.join(botManager.logsDir, "server-fouten.log"), new Date().toISOString() + " " + kind + ": " + text + "\n");
+  } catch {}
+  botManager.nightLine("server gecrasht (" + kind + "): " + String(error?.message || error).slice(0, 160));
+  console.error("[server] " + kind + ":", text);
+}
+process.on("uncaughtException", (error) => { crashTrace("onverwachte fout", error); process.exit(1); });
+process.on("unhandledRejection", (error) => { crashTrace("onafgehandelde fout", error); process.exit(1); });
+for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143]]) {
+  process.on(signal, () => { botManager.nightLine("server gestopt (" + signal + ")"); process.exit(code); });
+}
 const RESTORE_GRAPH_ROUTE = "/api/editor/graph/restore";
 
 function timingMs(startedAt) {

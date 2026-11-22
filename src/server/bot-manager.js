@@ -11,6 +11,7 @@ import { fork } from "node:child_process";
 import { allowedOrigins } from "./request-boundary.js";
 import { profileServer } from "./perf-profile.js";
 import { resolveDatabasePath } from "./db.js";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 
 const BOT_MAX = Math.max(1, Math.min(300, Number(process.env.GK_BOTS_MAX || 100)));
 const BOT_NAME = /^bot_\d{3}$/;
@@ -47,6 +48,10 @@ export class BotManager {
     this.worldBuildSent = null;
     this.profileTimer = null;
     this.nightTimer = null;
+    // Langste hapering (ms) van de server en van het bot-proces sinds de vorige nachtlogregel.
+    this.serverLag = monitorEventLoopDelay({ resolution: 20 });
+    this.serverLag.enable();
+    this.botLagMaxMs = 0;
     this.dbPath = (() => { try { return resolveDatabasePath(rootDir); } catch { return ""; } })();
     // Server (opnieuw) gestart: alleen opschrijven als er al eens bots draaiden (de logmap bestaat).
     if (fs.existsSync(this.logsDir)) this.nightLine("server gestart");
@@ -69,11 +74,14 @@ export class BotManager {
         status.rssMb != null ? "bots-proces " + status.rssMb + " MB" : "",
         this.dbPath ? "database " + mb(size(this.dbPath) + size(this.dbPath + "-wal")) + " MB" : "",
         freeGb,
+        "hapering server " + Math.round(this.serverLag.max / 1e6) + " ms, bots " + this.botLagMaxMs + " ms",
         "kills " + (Number(status.kills) || 0) + " · quests " + (Number(status.questsDone) || 0),
         Array.isArray(status.errors) && status.errors.length ? "laatste fout: " + status.errors[status.errors.length - 1] : ""
       ].filter(Boolean);
       fs.mkdirSync(this.logsDir, { recursive: true });
       fs.appendFileSync(path.join(this.logsDir, "bots-nacht-" + new Date().toISOString().slice(0, 10) + ".log"), parts.join(" · ") + "\n");
+      this.serverLag.reset();
+      this.botLagMaxMs = 0;
     } catch {}
   }
 
@@ -262,7 +270,10 @@ export class BotManager {
 
   onChildMessage(message) {
     if (!message || typeof message !== "object") return;
-    if (message.type === "status") this.status = message;
+    if (message.type === "status") {
+      this.status = message;
+      this.botLagMaxMs = Math.max(this.botLagMaxMs, Number(message.lagMaxMs) || 0);
+    }
     if (message.type === "connected") this.placeBot(message.userId);
   }
 
