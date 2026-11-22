@@ -995,13 +995,15 @@ export function solidCollisionEntriesForWorld(world) {
     const x = Number(position.x);
     const z = Number(position.z);
     const radius = Number(entity.collisionRadius);
-    if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(radius) || radius <= 0) continue;
+    const points = normalizeCollisionPointList(entity.collisionPoints);
+    if (!Number.isFinite(x) || !Number.isFinite(z) || (points.length < 3 && (!Number.isFinite(radius) || radius <= 0))) continue;
     entries.push({
       id: String(entity.id || entity.entityId || entity.nodeId || "entity") + "::solid",
       entityId: entity.id || entity.entityId || entity.nodeId || null,
       x: x,
       z: z,
       radius: radius,
+      ...(points.length >= 3 ? { points, minX: Math.min(...points.map(p => p.x)), maxX: Math.max(...points.map(p => p.x)), minZ: Math.min(...points.map(p => p.z)), maxZ: Math.max(...points.map(p => p.z)) } : {}),
       enabled: true,
       // Quest Builder stap 9: alleen als een vlag aan (of uit) staat; per speler gefilterd.
       ...(entity.flag?.id ? { flag: { id: String(entity.flag.id), on: entity.flag.on !== false } } : {})
@@ -1106,6 +1108,28 @@ export function pushAwayFromSolids(point, radius, solids) {
   if (!Array.isArray(solids) || !solids.length) return point;
   for (const solid of solids) {
     if (solid?.enabled === false) continue;
+    if (solid.points?.length >= 3) {
+      if (point.x < solid.minX - radius || point.x > solid.maxX + radius || point.z < solid.minZ - radius || point.z > solid.maxZ + radius) continue;
+      const boundary = closestPointOnPolygonBoundary(point.x, point.z, solid.points);
+      const inside = pointInPolygon2D(point.x, point.z, solid.points);
+      const distance = Math.sqrt(boundary.distanceSq);
+      if (!inside && distance >= radius) continue;
+      let dx = inside ? boundary.x - point.x : point.x - boundary.x;
+      let dz = inside ? boundary.z - point.z : point.z - boundary.z;
+      let length = Math.hypot(dx, dz);
+      if (length < COLLISION_EPSILON) {
+        dx = boundary.end.z - boundary.start.z;
+        dz = boundary.start.x - boundary.end.x;
+        length = Math.hypot(dx, dz);
+        // Ook gespiegelde modellen (negatieve schaal) hebben een buitenkant.
+        if (length && pointInPolygon2D(boundary.x + dx / length * 0.0001, boundary.z + dz / length * 0.0001, solid.points)) { dx = -dx; dz = -dz; }
+      }
+      if (length) {
+        point.x = boundary.x + dx / length * (radius + COLLISION_EPSILON);
+        point.z = boundary.z + dz / length * (radius + COLLISION_EPSILON);
+      }
+      continue;
+    }
     const solidRadius = Math.max(0, num(solid?.radius, 0));
     if (solidRadius <= 0) continue;
     const dx = point.x - num(solid?.x, 0);

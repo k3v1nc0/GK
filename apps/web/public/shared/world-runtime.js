@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues } from "./node-types.js?v=20261106-perf1";
@@ -4695,6 +4696,11 @@ export function createGkWorldRuntime(canvas, options = {}) {
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
   const loader = new GLTFLoader();
+  const dracoLoader = new DRACOLoader();
+  dracoLoader.setDecoderPath("/vendor/three/examples/jsm/libs/draco/gltf/");
+  // De lokale Three.js-installatie bevat de JS-decoder, maar geen WASM-bestand.
+  dracoLoader.setDecoderConfig({ type: "js" });
+  loader.setDRACOLoader(dracoLoader);
   const textureLoader = new THREE.TextureLoader();
   const modelCache = new Map();
   const entityRoots = new Map();
@@ -5358,6 +5364,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
           x: num(entity?.transform?.position?.x, 0),
           z: num(entity?.transform?.position?.z, 0),
           radius: num(entity?.collisionRadius, 1),
+          ...(entity.collisionPoints?.length >= 3 ? { points: entity.collisionPoints } : {}),
           enabled: true,
           runtimeManaged: true,
           scatterInstance: entity?.type === "scatter" || entity?.kind === "scatter",
@@ -15516,6 +15523,7 @@ function resolveChunkDebugCenter(policy) {
         x: num(entity.transform?.position?.x, 0),
         z: num(entity.transform?.position?.z, 0),
         radius: num(entity.collisionRadius, 1),
+        ...(entity.collisionPoints?.length >= 3 ? { points: entity.collisionPoints } : {}),
         enabled: !runtimeTargetSuppressed,
         runtimeTargetSuppressed,
         runtimeChunkActive: true,
@@ -19849,6 +19857,7 @@ function resolveChunkDebugCenter(policy) {
     playerPathClient?.destroy();
     disposed = true;
     terrainLayer.dispose();
+    dracoLoader.dispose();
     waterLayer.dispose();
     skyLayer.dispose();
     rejectFrameProfileWaiters(new Error("runtime destroyed"));

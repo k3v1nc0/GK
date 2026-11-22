@@ -741,6 +741,8 @@ const state = {
     selectedTargetId: "",
     lastRangeRenderAt: 0,
     pendingTargetAction: null,
+    keyboardPausedForAction: false,
+    suspendedPointerMovement: null,
     reloadQueued: false,
     // Fase 5: vak 1 slaat vanzelf door op deze vijand; een vaardigheid wacht kort als er net een actie loopt.
     autoAttack: { targetId: "", timer: 0, following: false, followAt: 0 },
@@ -7386,17 +7388,28 @@ function maybeRunPendingNode03TargetAction(reason = "range") {
   }
   const attempt = Math.max(0, Number(pending.attempts || 0) || 0) + 1;
   clearNode03PendingTargetAction(pending.targetId);
-  if (hasMovementInput()) {
+  const wasMoving = hasMovementInput();
+  suspendPointerMovementForInteraction();
+  state.node03.keyboardPausedForAction = true;
+  if (wasMoving) {
     // Binnen bereik op het scherm betekent nog niet binnen bereik op de server (die loopt iets achter).
     // Stuur daarom de huidige plek als laatste doel; de stop volgt pas als vangnet.
-    clearMovementInput("node03-target-action", { finalPointerTarget: localStopPointForServer() });
+    clearMovementInput("node03-target-action", { finalPointerTarget: localStopPointForServer(), preserveKeyboard: true });
   }
-  window.setTimeout(function () {
-    runNode03Action(pending.action, pending.targetId, {
-      skipMoveToTarget: true,
-      pendingTargetAction: true,
-      pendingAttempt: attempt
-    });
+  window.setTimeout(async function () {
+    try {
+      await runNode03Action(pending.action, pending.targetId, {
+        skipMoveToTarget: true,
+        pendingTargetAction: true,
+        pendingAttempt: attempt
+      });
+    } finally {
+      state.node03.keyboardPausedForAction = false;
+      if (hasKeyboardMovementInput() && isMmoGameplayReady() && !isNode03Defeated()) {
+        noteLocalControlStart(false, "keyboard-resume");
+        sendInputState({ force: true });
+      }
+    }
   }, NODE03_PENDING_TARGET_ACTION_DELAY_MS);
   return true;
 }
@@ -12231,7 +12244,47 @@ function showHudError(message) {
   showGameHudDialogueNotice(message, { title: "Error", tone: "error" });
 }
 
+// Bewaar de loopopdracht apart van de tijdelijke route naar een interactie.
+function suspendPointerMovementForInteraction() {
+  if (state.node03.suspendedPointerMovement || !state.pointer.active || state.pointer.interactionRoute) return;
+  state.node03.suspendedPointerMovement = {
+    held: isPointerHoldActive(),
+    pointerId: state.pointer.pointerId,
+    screenX: state.pointer.screenX,
+    screenY: state.pointer.screenY,
+    downAt: state.pointer.downAt,
+    target: state.pointer.target ? { ...state.pointer.target } : null
+  };
+}
+
+function resumePointerMovementAfterInteraction() {
+  const saved = state.node03.suspendedPointerMovement;
+  if (!saved || interactionOwnsMovement() || state.node03.pendingTargetAction || state.pointer.active) return;
+  state.node03.suspendedPointerMovement = null;
+  if (hasKeyboardMovementInput() || !isMmoGameplayReady() || isNode03Defeated()) return;
+  if (saved.held) {
+    state.pointer.active = true;
+    state.pointer.pointerId = saved.pointerId;
+    state.pointer.mode = "drag_to_move";
+    state.pointer.moved = true;
+    state.pointer.dragged = true;
+    state.pointer.downAt = saved.downAt;
+    state.pointer.screenX = saved.screenX;
+    state.pointer.screenY = saved.screenY;
+    refreshPointerTargetFromScreenPosition(saved.screenX, saved.screenY);
+    noteLocalControlStart(false, "pointer-resume");
+  } else if (saved.target) {
+    startClickToMoveTarget(saved.target.x, saved.target.z, "interaction-resume");
+  }
+  if (hasMovementInput()) sendInputState({ force: true });
+}
+
+function interactionOwnsMovement() {
+  return state.node03.keyboardPausedForAction || (state.pointer.active && state.pointer.interactionRoute === true);
+}
+
 function hasKeyboardMovementInput() {
+  if (interactionOwnsMovement()) return false;
   return state.input.move_forward || state.input.move_back || state.input.move_left || state.input.move_right || hasStickMovementInput();
 }
 
@@ -12356,6 +12409,9 @@ function startClickToMoveTarget(worldX, worldZ, source = null, options = {}) {
     renderNode04Hud();
     return false;
   }
+  const interactionRoute = ["node03-target", "node04-target", "node05-target", "hud-talk", "attack-follow", "lore-target", "portal-target"].includes(source);
+  if (interactionRoute) suspendPointerMovementForInteraction();
+  else state.node03.suspendedPointerMovement = null;
   if (source !== "attack-follow") stopAutoAttack();
   interruptActiveClickRoute(source ? source + "-replaced" : "click-route-replaced");
   clearPointerTarget(false);
@@ -12373,6 +12429,7 @@ function startClickToMoveTarget(worldX, worldZ, source = null, options = {}) {
   state.pointer.dragged = false;
   state.pointer.lastHoldVector = null;
   state.pointer.target = { x: Number(worldX) || 0, z: Number(worldZ) || 0 };
+  state.pointer.interactionRoute = interactionRoute;
   state.pointer.routeArrivalRadius = Math.max(0, num(options.arrivalRadius, 0));
   if (pointerTargetDistance() <= clickMoveSelfRadius()) {
     clearPointerTarget(false);
@@ -13491,6 +13548,8 @@ function applyFallbackPosition(response) {
 }
 
 function clearLocalMovementForTeleport() {
+  state.node03.suspendedPointerMovement = null;
+  state.node03.keyboardPausedForAction = false;
   state.ownCorrection = null;
   state.net.pendingInputs = [];
   state.net.postInputPredictionHoldUntil = 0;
@@ -13790,18 +13849,26 @@ function clearMovementInput(reason, options = {}) {
   }
   if (sendFinalIntent && options.resetSprint !== true) startPostInputPredictionHold(reason);
   state.ownCorrection = null;
-  state.input.move_forward = false;
-  state.input.move_back = false;
-  state.input.move_left = false;
-  state.input.move_right = false;
+  // Een interactie onderbreekt de besturing tijdelijk; keyup blijft de echte toetsstand bijhouden.
+  const preserveKeyboard = options.preserveKeyboard === true || (
+    state.pointer.interactionRoute === true && ["click-target-arrived", "click-target-blocked", "click-route-unavailable", "attack-follow-in-range", "attack-follow-stopped"].includes(reason)
+  );
+  if (!preserveKeyboard) {
+    state.input.move_forward = false;
+    state.input.move_back = false;
+    state.input.move_left = false;
+    state.input.move_right = false;
+    state.node03.keyboardPausedForAction = false;
+    state.node03.suspendedPointerMovement = null;
+  }
   // Camera-keuze: ook de joystick staat dan stil (de vinger mag blijven liggen; opnieuw duwen loopt weer).
-  if (cameraInput.stick.x || cameraInput.stick.y) {
+  if (!preserveKeyboard && (cameraInput.stick.x || cameraInput.stick.y)) {
     cameraInput.stick.x = 0;
     cameraInput.stick.y = 0;
     const knob = cameraInput.joystick?.firstChild;
     if (knob) knob.style.transform = "translate(-50%, -50%)";
   }
-  if (cameraInput.stick.sprinting) {
+  if (!preserveKeyboard && cameraInput.stick.sprinting) {
     cameraInput.stick.sprinting = false;
     state.input.sprint = false;
   }
@@ -13882,6 +13949,7 @@ function stepMovement(now) {
     return;
   }
 
+  resumePointerMovementAfterInteraction();
   updateAutoAttackFollow(now);
 
   // Ook zonder loopinput moet het gesprek de wachtstand van de NPC blijven vernieuwen.
@@ -14089,6 +14157,13 @@ function bindKeyboardControls() {
     if (!movementKey) return;
     event.preventDefault();
     if (!isMmoGameplayReady()) return;
+    if (interactionOwnsMovement()) {
+      if (event.code === "KeyW" || event.code === "ArrowUp") setInput("move_forward", true);
+      if (event.code === "KeyS" || event.code === "ArrowDown") setInput("move_back", true);
+      if (event.code === "KeyA" || event.code === "ArrowLeft") setInput("move_left", true);
+      if (event.code === "KeyD" || event.code === "ArrowRight") setInput("move_right", true);
+      return;
+    }
     const keysBefore = keyboardMovementSignature();
     if (!event.repeat && !hasKeyboardMovementInput()) {
       noteLocalControlStart(false, "keyboard");
@@ -14130,6 +14205,7 @@ function bindKeyboardControls() {
     else if (event.code === "KeyA" || event.code === "ArrowLeft") setInput("move_left", false);
     else if (event.code === "KeyD" || event.code === "ArrowRight") setInput("move_right", false);
     else handled = false;
+    if (handled && interactionOwnsMovement()) return;
     if (handled && !hasKeyboardMovementInput() && !state.pointer.active) {
       clearMovementInput("keyup", { finalPointerTarget: localStopPointForServer() });
     } else if (handled) {
@@ -14147,6 +14223,7 @@ function clearPointerTarget(keepTarget = false) {
   state.pointer.route = null;
   state.pointer.routeWorldKey = null;
   state.pointer.active = false;
+  state.pointer.interactionRoute = false;
   state.pointer.pointerId = null;
   state.pointer.mode = "none";
   state.pointer.downX = 0;
@@ -14194,6 +14271,13 @@ function handleGamePointerDown(event, source = "pointer") {
   }
   // Camera-keuze: tweede vinger terwijl de eerste de camera draait = knijpen (zoomen).
   if (event.pointerType === "touch" && beginCameraPinch(event)) return;
+  const pickedNode03Target = state.runtime && typeof state.runtime.pickRuntimeTargetAt === "function"
+    ? state.runtime.pickRuntimeTargetAt(event.clientX, event.clientY)
+    : null;
+  if (pickedNode03Target?.instanceId && pickedNode03Target?.action) {
+    activateRuntimeTarget(pickedNode03Target);
+    return;
+  }
   // Alleen een tweede vinger terwijl de eerste nog echt op het scherm staat betekent sprint.
   // Een nieuwe tik na een eerdere klikroute moet die route juist vervangen.
   if (event.pointerType === "touch" && isPointerHoldActive() && event.pointerId !== state.pointer.pointerId) {
@@ -14203,13 +14287,6 @@ function handleGamePointerDown(event, source = "pointer") {
       try { canvas.setPointerCapture(event.pointerId); } catch {}
     }
     if (hasMovementInput()) sendInputState({ force: true });
-    return;
-  }
-  const pickedNode03Target = state.runtime && typeof state.runtime.pickRuntimeTargetAt === "function"
-    ? state.runtime.pickRuntimeTargetAt(event.clientX, event.clientY)
-    : null;
-  if (pickedNode03Target?.instanceId && pickedNode03Target?.action) {
-    activateRuntimeTarget(pickedNode03Target);
     return;
   }
   // MMO (3-11): vinger op een andere speler: lang drukken = menu. Kort tikken loopt gewoon (hieronder).
@@ -14223,6 +14300,7 @@ function handleGamePointerDown(event, source = "pointer") {
     beginCameraOrbit(event, { tapToMove: cameraNow.clickToMove, hold: state.pointer.playerHold });
     return;
   }
+  state.node03.suspendedPointerMovement = null;
   stopAutoAttack();
   clearNode03PendingTargetAction();
   interruptActiveClickRoute("world-click-route-replaced");
@@ -14256,6 +14334,13 @@ function handleGamePointerDown(event, source = "pointer") {
 }
 
 function handleGamePointerMove(event) {
+  const suspended = state.node03.suspendedPointerMovement;
+  if (suspended?.held && suspended.pointerId === event.pointerId) {
+    suspended.screenX = event.clientX;
+    suspended.screenY = event.clientY;
+    event.preventDefault();
+    return;
+  }
   if (moveCameraGesture(event)) return;
   const hold = state.pointer.playerHold;
   if (hold && event.pointerId === hold.pointerId && Math.hypot(event.clientX - hold.x, event.clientY - hold.y) > PLAYER_HOLD_SLOP_PX) cancelPlayerHold();
@@ -14279,6 +14364,14 @@ function handleGamePointerMove(event) {
 }
 
 function releaseGamePointer(event) {
+  const suspended = state.node03.suspendedPointerMovement;
+  if (suspended?.held && (!event || event.pointerId === suspended.pointerId)) {
+    state.node03.suspendedPointerMovement = null;
+    if (event) event.preventDefault();
+    return;
+  }
+  // Het loslaten van de tik op een item mag de automatische interactieroute niet stoppen.
+  if (state.pointer.interactionRoute && state.pointer.pointerId === null) return;
   if (state.pointer.playerHold && (!event || event.pointerId === undefined || event.pointerId === state.pointer.playerHold.pointerId)) cancelPlayerHold();
   if (endCameraGesture(event)) return;
   if (!state.pointer.active && state.pointer.pointerId === null && state.pointer.sprintPointerId === null) return;
@@ -14677,6 +14770,7 @@ function updateStickFromEvent(event, starting) {
     stick.sprinting = sprint;
     state.input.sprint = sprint;
   }
+  if (interactionOwnsMovement()) return;
   const moving = hasStickMovementInput();
   const now = performance.now();
   if (moving && !wasMoving) {
@@ -14715,6 +14809,7 @@ function endStickInput() {
   }
   const knob = cameraInput.joystick?.firstChild;
   if (knob) knob.style.transform = "translate(-50%, -50%)";
+  if (interactionOwnsMovement()) return;
   if (wasMoving && !hasKeyboardMovementInput() && !state.pointer.active) {
     clearMovementInput("joystick-up", { finalPointerTarget: localStopPointForServer() });
   } else if (wasMoving) {
@@ -15155,6 +15250,12 @@ function ensureGkHud() {
     activate: activateRuntimeTargetDirect,
     // Zowel klikken, E als aankomen na het lopen begint in HUD.talkTo.
     beginNpcTalk: function (target) {
+      // De HUD opent het gesprek zodra de NPC binnen bereik is, soms vóór het route-eindpunt.
+      // Geef de nog ingedrukte looptoetsen dan meteen terug aan de speler.
+      if (target?.inRange !== false && isWalkingToTarget(target)) {
+        clearMovementInput("click-target-arrived", { finalPointerTarget: localStopPointForServer() });
+        if (hasKeyboardMovementInput()) sendInputState({ force: true });
+      }
       const entityId = [target?.entityRef, target?.linkedEntityId, target?.linkedEntity?.entityId, target?.visualEntityId]
         .find(function (id) { return String(id || "").startsWith("npc_entity."); });
       const npcId = target?.npcId || (entityId ? String(entityId).slice("npc_entity.".length) : "");

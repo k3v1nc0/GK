@@ -6,6 +6,7 @@
 //
 // De uitkomst heeft precies het formaat dat de game (world-runtime.js) en de spelserver (mmo/node03) al lezen.
 import { CANONICAL_KINDS } from "../../shared/authoring/kinds.js";
+import { transformModelCollision } from "../model-collision.js";
 import { applyCanonicalBuild, EDITOR_DOC_PREFIX } from "./runtime-overlay.js";
 import { sha256, stableStringify } from "./stable-json.js";
 import { OBJECTIVE_KINDS } from "../../../apps/web/public/shared/quest-graph.js";
@@ -1054,6 +1055,13 @@ function withGame(world, source, options) {
     for (const asset of options.assetService.manifestForIds(usedAssetIds)) known.set(asset.id, asset);
   }
   const worldMusic = source.worldMusic || null;
+  // Alleen vaste modelplaatsingen; spelers/NPC's en scatter houden hun straal.
+  for (const entity of entities) {
+    if (!entity.solid || entity.walkable || !(entity.id.startsWith("placed.") || entity.id.startsWith(EDITOR_DOC_PREFIX + "placed_model:"))) continue;
+    const shape = options.assetService?.modelCollisionForAsset?.(known.get(entity.modelAssetId));
+    const points = transformModelCollision(shape, entity.transform);
+    if (points?.length >= 3) entity.collisionPoints = points;
+  }
   return Object.assign({}, world, {
     gameProject: nextProject,
     zones: nextZones,

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { readModelCollision } from "./model-collision.js";
 import { cleanValuesForType } from "./field-validation.js";
 import { NODE_TYPES, defaultValuesForType } from "../shared/node-types.js";
 import { decodeTerrainChunk, parseTerrainChunkKey, TERRAIN_CHUNK_BYTES, TERRAIN_CHUNK_SHA_PATTERN, TERRAIN_PAINT_VERTS } from "../../apps/web/public/shared/terrain.js";
@@ -167,6 +168,7 @@ export class AssetService {
   constructor(db, rootDir, options = {}) {
     this.db = db;
     this.rootDir = rootDir;
+    this.modelCollisionCache = new Map();
     this.assetsDir = path.resolve(options.assetsDir || path.join(rootDir, "assets"));
     this.uploadsDir = path.join(this.assetsDir, "uploads");
     this.thumbnailsDir = path.join(this.assetsDir, "thumbnails");
@@ -190,6 +192,23 @@ export class AssetService {
 
   getMany(ids) {
     return ids.map((id) => this.get(id)).filter(Boolean);
+  }
+
+  modelCollisionForAsset(asset) {
+    if (asset?.assetType !== "model" || !asset.sourcePath?.startsWith("/assets/")) return null;
+    const key = asset.sha256 || asset.updatedAt || asset.sourcePath;
+    const cached = this.modelCollisionCache.get(asset.id);
+    if (cached?.key === key) return cached.shape;
+    let shape = null;
+    try {
+      const file = path.resolve(this.assetsDir, asset.sourcePath.slice("/assets/".length));
+      if (!file.startsWith(this.assetsDir + path.sep)) return null;
+      shape = readModelCollision(fs.readFileSync(file));
+    } catch (error) {
+      console.warn("[collision] Modelomtrek niet beschikbaar voor " + asset.id + ": " + error.message);
+    }
+    this.modelCollisionCache.set(asset.id, { key, shape });
+    return shape;
   }
 
   setThumbnailUpdateListener(listener) {
