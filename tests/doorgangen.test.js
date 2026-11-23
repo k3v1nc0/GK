@@ -62,5 +62,21 @@ test("deelgebied met Binnen: geldig en de instellingen voor de game", () => {
   const settings = indoorSettingsOf({ indoor: true, indoorLight: 50, indoorCameraPitch: 200 });
   assert.equal(settings.light, 0.5);
   assert.equal(settings.cameraPitch, 89, "binnen min/max");
-  assert.equal(settings.background, "#0b0b10");
+  assert.equal(settings.background, "#000000");
+  assert.deepEqual(settings.outline, null, "geen vorm = geen rand");
+  const box = indoorSettingsOf({ indoor: true, shape: "box", minXMm: 0, maxXMm: 30000, minZMm: 0, maxZMm: 20000 });
+  assert.deepEqual(box.outline, [[0, 0], [30, 0], [30, 20], [0, 20]], "rand in meters, voor zwart buiten het gebied");
+});
+
+test("Kevin 23-11: een heel deelgebied in één keer verven (vloer), en weer weghalen", async () => {
+  const { applyTerrainPaintOutline, createPaintfield, terrainPaintAt } = await import("../apps/web/public/shared/terrain.js");
+  const { areaOutlineMeters } = await import("../apps/web/public/shared/spatial.js");
+  const pf = createPaintfield();
+  const outline = areaOutlineMeters({ shape: "box", minXMm: 5000, maxXMm: 25000, minZMm: 5000, maxZMm: 15000 });
+  const result = applyTerrainPaintOutline(pf, { outline, texture: "terrain_texture:tex.vloer", touched: new Set() });
+  assert.ok(result.changed.size > 0);
+  assert.ok(terrainPaintAt(pf, 15, 10)["terrain_texture:tex.vloer"] > 0.95, "binnen = helemaal vloer");
+  assert.equal(terrainPaintAt(pf, 40, 10)["terrain_texture:tex.vloer"] || 0, 0, "buiten het deelgebied geen verf");
+  applyTerrainPaintOutline(pf, { outline, texture: "" });
+  assert.equal(terrainPaintAt(pf, 15, 10)["terrain_texture:tex.vloer"] || 0, 0, "gum haalt de vloer weg");
 });

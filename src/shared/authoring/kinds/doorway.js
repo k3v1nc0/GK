@@ -21,9 +21,9 @@ const height = (label) => ({ type: "number", required: false, min: -1000, max: 1
   ui: ui("↕️", "slider", "viewport", { step: 0.1, unit: "m", more: true }), default: 0, help: POS_HELP });
 const model = (label, group) => ({ type: "asset", assetType: "model", required: false, maxLength: 160, audience: "client", label,
   ui: ui("🧊", "asset", "werkbank", { group }), default: null,
-  help: help("Het model van deze kant: een deur, een grot-ingang, een trap. Leeg = onzichtbaar.",
-    "Sleep een model uit de Bibliotheek op dit vak. Onzichtbaar werkt het best met 'Erin lopen'.",
-    "Je ziet een blauw blokje in de editor → dat is een kant zonder model; in de game is hij onzichtbaar.") });
+  help: help("Het model van deze kant: een deur, een grot-ingang, een trap. Leeg = een rechtop staand vlak met een pijl (editor en game).",
+    "Groene pijl omhoog = hier kun je door. Rode pijl omlaag = kant B van 'Alleen van A naar B': hier kom je alleen aan. Sleep een model op dit vak om in plaats van de pijl een deur of trap te tonen.",
+    "Je ziet de pijl en wilt een deur → sleep een model op dit vak. De pijl is rood → zet 'Alleen van A naar B' uit als je ook terug moet kunnen.") });
 const scale = (group) => ({ type: "number", required: false, min: 0.01, max: 100, audience: "client", label: "Grootte",
   ui: ui("📏", "slider", "werkbank", { step: 0.05, unit: "×", range: [0.1, 5], group }), default: 1,
   help: help("Hoe groot het model van deze kant getekend wordt.", "1 = zoals het model is gemaakt. Of klik de kant in de 3D-view en druk T.",

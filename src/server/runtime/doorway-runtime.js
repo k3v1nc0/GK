@@ -2,6 +2,8 @@
 // De server beslist alles: of je dichtbij genoeg bent, of je erdoor mag (vlag, sleutel, level, gevecht) en waar je
 // aankomt. De game vraagt alleen "gebruik kant A van doorgang X". Geen tabel: een doorgang onthoudt niets per speler.
 
+import { areaOutlineMeters } from "../../../apps/web/public/shared/spatial.js";
+
 // Wat de server extra toestaat bovenop "Gebruiken binnen" (de game ziet je net iets eerder dan de server).
 export const DOORWAY_RANGE_SLACK_M = 1.5;
 
@@ -99,8 +101,10 @@ export function indoorSettingsOf(area) {
   return {
     cameraDistance: clampNum(area.indoorCameraDistance, 16, 4, 80),
     cameraPitch: clampNum(area.indoorCameraPitch, 65, 30, 89),
-    background: /^#[0-9a-f]{6}$/i.test(String(area.indoorBackground || "")) ? area.indoorBackground : "#0b0b10",
+    background: /^#[0-9a-f]{6}$/i.test(String(area.indoorBackground || "")) ? area.indoorBackground : "#000000",
     light: clampNum(area.indoorLight, 80, 0, 200) / 100,
-    sun: clampNum(area.indoorSun, 20, 0, 100) / 100
+    sun: clampNum(area.indoorSun, 20, 0, 100) / 100,
+    // Kevin 23-11: de rand van het gebied; de game maakt alles erbuiten zwart (de kleur hierboven).
+    outline: areaOutlineMeters(area)
   };
 }

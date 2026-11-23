@@ -494,6 +494,32 @@ export function applyTerrainPaint(pf, brush = {}) {
   });
 }
 
+// Kevin 23-11: een hele vorm in één keer verven (een deelgebied als vloer van een huis of grot), daarna kun je er
+// met de gewone kwast weer overheen verven. outline = [[x, z], ...] in meters; binnen de vorm = helemaal deze textuur.
+// texture "" = de verf binnen de vorm weghalen (gum).
+export function applyTerrainPaintOutline(pf, brush = {}) {
+  const outline = Array.isArray(brush.outline) ? brush.outline.filter((point) => Array.isArray(point) && Number.isFinite(point[0]) && Number.isFinite(point[1])) : [];
+  if (!pf || outline.length < 3) return { changed: new Set(), full: new Set() };
+  let minX = Infinity; let maxX = -Infinity; let minZ = Infinity; let maxZ = -Infinity;
+  for (const [x, z] of outline) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z); }
+  const inside = (x, z) => {
+    let hit = false;
+    for (let i = 0, j = outline.length - 1; i < outline.length; j = i, i += 1) {
+      const [xi, zi] = outline[i];
+      const [xj, zj] = outline[j];
+      if ((zi > z) !== (zj > z) && x < (xj - xi) * (z - zi) / ((zj - zi) || 1e-9) + xi) hit = !hit;
+    }
+    return hit;
+  };
+  return paintRaster(pf, {
+    texture: String(brush.texture || ""), bounds: brush.bounds || null, touched: brush.touched || null, beforeTouch: brush.beforeTouch,
+    original: brush.original instanceof Map ? brush.original : null,
+    ix0: Math.floor(minX / PAINT_STEP), ix1: Math.ceil(maxX / PAINT_STEP), iz0: Math.floor(minZ / PAINT_STEP), iz1: Math.ceil(maxZ / PAINT_STEP)
+  }, function (ix, iz) {
+    return inside(ix * PAINT_STEP, iz * PAINT_STEP) ? 1 : 0;
+  });
+}
+
 // ---------- Ronde 3: water (los, plat vlak) en helling ----------
 // Een watervlak: midden x/z, breedte (x) en diepte (z) in meters, draaiing in graden (zelfde draairichting als de
 // loopvlakken in de movement-kernel), height = hoogte van het wateroppervlak boven de basisgrond.

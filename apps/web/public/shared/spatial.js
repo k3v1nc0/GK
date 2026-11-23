@@ -100,6 +100,25 @@ export function areaBoundsMm(area) {
   return { minXMm: Math.min(...xs), maxXMm: Math.max(...xs), minZMm: Math.min(...zs), maxZMm: Math.max(...zs) };
 }
 
+// Kevin 23-11: de rand van een deelgebied in meters ([x, z] per hoek), zodat de game alles erbuiten zwart maakt.
+export function areaOutlineMeters(area) {
+  const num = (value) => (Number.isFinite(Number(value)) ? Number(value) : 0);
+  const m = (mm) => Math.round(num(mm)) / 1000;
+  if (area?.shape === "box") {
+    return [[m(area.minXMm), m(area.minZMm)], [m(area.maxXMm), m(area.minZMm)], [m(area.maxXMm), m(area.maxZMm)], [m(area.minXMm), m(area.maxZMm)]];
+  }
+  if (area?.shape === "cylinder") {
+    const out = [];
+    for (let i = 0; i < 32; i += 1) {
+      const angle = (i / 32) * Math.PI * 2;
+      out.push([m(num(area.centerXMm) + Math.cos(angle) * num(area.radiusMm)), m(num(area.centerZMm) + Math.sin(angle) * num(area.radiusMm))]);
+    }
+    return out;
+  }
+  if (Array.isArray(area?.pointsMm) && area.pointsMm.length >= 3) return area.pointsMm.slice(0, 256).map((point) => [m(point[0]), m(point[1])]);
+  return null;
+}
+
 // paddingMm > 0 = hysteresis: het punt telt nog als binnen als het hooguit paddingMm buiten de vorm ligt.
 export function areaContains(area, xMm, zMm, paddingMm = 0) {
   if (area.shape === "box") return rectContains(paddingMm > 0 ? expandRect(area, paddingMm) : area, xMm, zMm);

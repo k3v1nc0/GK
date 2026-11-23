@@ -863,16 +863,17 @@ function withGame(world, source, options) {
       rotationY: portal.rotationY, unlockMeters: portal.unlockMeters, interactMeters: portal.interactMeters, arriveMeters: portal.arriveMeters, startUnlocked: portal.startUnlocked === true,
       respawnHere: portal.respawnHere !== false }, portal.flagId ? { flag: { id: portal.flagId, on: portal.flagOn !== false } } : {}));
   }
-  // Doorgangen (22-11): twee kanten (A en B), elk met een eigen model. In de editor staan beide kanten er altijd
-  // (zonder model een blauw blokje); in de game alleen een kant met model. De server zet je van de ene kant naar de andere.
+  // Doorgangen (22-11): twee kanten (A en B), elk met een eigen model. Kevin 23-11: zonder model staat er (in de editor
+  // en in de game) een rechtop staand vlak met een pijl: groen = je kunt hier door; rood en omgekeerd = kant B van een
+  // doorgang die maar één kant op gaat (hier kom je alleen aan). De server zet je van de ene kant naar de andere.
   const doorways = [];
   for (const door of game?.doorways || []) {
     for (const side of ["a", "b"]) {
       const end = door[side] || {};
       const entityId = editor ? EDITOR_DOC_PREFIX + "doorway:" + door.doorwayId + (side === "b" ? "#b" : "") : "doorway_entity." + door.doorwayId + "." + side;
-      if (!editor && !end.modelAssetId) continue;
-      entities.push(modelEntity({ id: entityId, label: door.displayName + (editor ? (side === "a" ? " (A)" : " (B)") : ""), modelAssetId: end.modelAssetId, x: end.x, y: end.y, z: end.z,
-        rotationY: end.rotationY, scale: end.scale, flagId: editor ? null : door.flagId, flagOn: door.flagOn }));
+      entities.push(Object.assign(modelEntity({ id: entityId, label: door.displayName + (editor ? (side === "a" ? " (A)" : " (B)") : ""), modelAssetId: end.modelAssetId, x: end.x, y: end.y, z: end.z,
+        rotationY: end.rotationY, scale: end.scale, flagId: editor ? null : door.flagId, flagOn: door.flagOn }),
+      end.modelAssetId ? {} : { doorwayArrow: side === "b" && door.oneWay === true ? "red" : "green" }));
       if (!editor && door.flagId) flagGates.push({ entityId, npcId: null, flagId: door.flagId, on: door.flagOn !== false });
     }
     doorways.push(Object.assign({ id: door.doorwayId, displayName: door.displayName, useMode: door.useMode, useMeters: door.useMeters, arriveMeters: door.arriveMeters,

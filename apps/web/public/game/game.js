@@ -1,4 +1,4 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261122-doorgang1";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261123-binnen2";
 import { nextPlayerRouteWaypoint } from "../shared/player-path-client.js?v=20261108-roads9";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20261106-perf1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
@@ -8613,10 +8613,10 @@ function doorwayRuntimeTargets() {
         instanceId: "door_target." + door.id + "." + side, doorwayId: door.id, side: side, entityKind: "doorway", targetKind: "doorway",
         action: "door_use_target", prompt: door.useMode === "walk" ? "Erheen" : "Naar binnen", displayName: door.displayName || "Doorgang",
         x: num(end.x, 0), y: num(end.y, 0), z: num(end.z, 0), radius: 1, range: doorUseRange(door), useMeters: doorUseRange(door), available: true
-      }, end.hasModel ? {
+      }, {
         visualEntityId: entityId, linkedEntityId: entityId, entityRef: entityId, linkedEntity: { entityId: entityId, nodeId: entityId }
-      } : {}, {
-        // Net als een portal: geen blauw blokje; het model zelf is het klikvlak (zonder model: onzichtbaar, werkt met Erin lopen).
+      }, {
+        // Net als een portal: geen blauw blokje; het model (of zonder model het pijl-vlak, Kevin 23-11) is het klikvlak.
         renderBody: false
       })));
     }

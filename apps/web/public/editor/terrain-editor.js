@@ -5,11 +5,13 @@
 // Ctrl+Z / Ctrl+Y werken zolang je in Terrein bent. Opslaan = de veranderde vakken (hoogte .bin, verf .png) naar de
 // server en de kaart "Terrein" bijwerken; de tab verlaten slaat ook op. De streken zelf worden niet bewaard.
 import {
-  applyTerrainBrush, applyTerrainPaint, applyTerrainStamp, clonePaintChunk, encodeTerrainChunk, normalizeTerrainWater,
+  applyTerrainBrush, applyTerrainPaint, applyTerrainPaintOutline, applyTerrainStamp, clonePaintChunk, encodeTerrainChunk, normalizeTerrainWater,
   sampleTerrainRegion, terrainChunkIsFlat, terrainPaintIsEmpty, terrainStampFootprint, tidyPaintChunk, waterContains, waterCorners, TERRAIN_PAINT_VERTS
-} from "../shared/terrain.js";
+} from "../shared/terrain.js?v=20261123-binnen2";
 import { decodePng, encodePng, pngToHeights } from "../shared/png.js";
 import { slug } from "./canonical-api.js";
+import { areaSoort } from "../shared/area-soorten.js?v=20261108-roads7";
+import { areaBoundsMm, areaContains, areaOutlineMeters, metersToMm } from "../shared/spatial.js?v=20261123-binnen2";
 
 const BRUSHES = [
   { id: "raise", icon: "⬆️", label: "Verhogen" },
@@ -40,7 +42,9 @@ const settings = {
   tool: "height", brush: "raise", radius: 10, strength: 40, softness: 60, heavyTint: true,
   flattenFixed: false, flattenHeight: 0, edgeStep: 3,
   stamp: "", stampSize: 64, stampHeight: 20, stampRotation: 0, stampBlend: "add", stampEdge: 15,
-  paintTexture: ""
+  paintTexture: "",
+  // Kevin 23-11: Verf met de kwast, of in één klik een heel deelgebied vullen (de vloer van een huis of grot).
+  paintFill: false
 };
 try { Object.assign(settings, JSON.parse(window.localStorage.getItem(STORE_KEY) || "{}")); } catch {}
 if (!TOOLS.some(function (tool) { return tool.id === settings.tool; })) settings.tool = "height";
@@ -420,6 +424,10 @@ function cursorFor(hit, color) {
     else rt.terrainSetCursor({ x: hit.x, z: hit.z, radius: 1, softness: 0, color: "#4fd1ff" });
     return;
   }
+  if (settings.tool === "paint" && settings.paintFill) {
+    rt.terrainSetCursor({ x: hit.x, z: hit.z, radius: 1, softness: 0, color: color || "#ffd34d" });
+    return;
+  }
   const hard = settings.brush === "edge" && settings.tool === "height";
   rt.terrainSetCursor({ x: hit.x, z: hit.z, radius: settings.radius, softness: hard ? 0 : settings.softness / 100, color: color || "#ffffff" });
 }
@@ -661,8 +669,58 @@ window.addEventListener("pointerdown", function (event) {
     startWaterDrag(event);
     return;
   }
+  if (settings.tool === "paint" && settings.paintFill) {
+    suppressClickUntil = Date.now() + 400;
+    fillDeelgebied(event);
+    return;
+  }
   startStroke(event);
 }, true);
+
+// Kevin 23-11: het kleinste deelgebied (Area tool) onder de muis.
+function deelgebiedAt(x, z) {
+  const xMm = metersToMm(x);
+  const zMm = metersToMm(z);
+  let best = null;
+  let bestSize = Infinity;
+  for (const doc of docsOf("area")) {
+    const body = doc.body || {};
+    if (doc.archived || areaSoort(body) !== "deelgebied") continue;
+    try {
+      if (!areaContains(body, xMm, zMm)) continue;
+      const b = areaBoundsMm(body);
+      const size = (b.maxXMm - b.minXMm) * (b.maxZMm - b.minZMm);
+      if (size < bestSize) { best = doc; bestSize = size; }
+    } catch {}
+  }
+  return best;
+}
+
+// Kevin 23-11: klik in een deelgebied = het hele deelgebied krijgt de gekozen textuur (Shift of Grond = verf weg).
+// Daarna kun je er met de kwast gewoon overheen verven. Ctrl+Z maakt het in één keer ongedaan.
+function fillDeelgebied(event) {
+  const rt = runtime();
+  if (!rt || !rt.terrainActive()) {
+    status("Terrein is nog niet klaar: wacht tot de 3D-view geladen is.", "error");
+    return;
+  }
+  const hit = rt.terrainRaycastScreen(event.clientX, event.clientY);
+  if (!hit) return;
+  const doc = deelgebiedAt(hit.x, hit.z);
+  if (!doc) { status("Klik binnen een deelgebied (teken er eerst een met de Area tool).", "error"); return; }
+  const before = new Map();
+  const touched = new Set();
+  const erasing = paintErasing(event.shiftKey);
+  const result = applyTerrainPaintOutline(rt.terrainPaintfield(), {
+    outline: areaOutlineMeters(doc.body), texture: erasing ? "" : settings.paintTexture, bounds: rt.terrainBounds(), touched, original: before,
+    beforeTouch: function (key, chunk) { before.set(key, chunk); }
+  });
+  if (result.changed.size) rt.terrainPaintChanged(result.changed);
+  if (touched.size) pushUndo({ kind: "paint", before, after: snapshotAfter("paint", touched) });
+  if (result.full.size) status("Verf: " + result.full.size + " " + (result.full.size === 1 ? "vak heeft" : "vakken hebben") + " al 4 texturen; daar kwam geen verf. Gum eerst een textuur weg (Shift + verven).", "error");
+  else status((erasing ? "Verf weggehaald in " : "Gevuld: ") + docName(doc) + ". Verf er met de kwast overheen waar je wilt.");
+  renderLive();
+}
 
 window.addEventListener("pointermove", function (event) {
   if (!open) return;
@@ -1039,8 +1097,18 @@ function paintBody() {
         : el("span", { class: "terreinChosenIcon", text: "🧽" }),
     el("span", { text: doc ? docName(doc) : "Grond (gum): haalt verf weg" })
   ]);
+  const modes = [{ id: "brush", icon: "🖌️", label: "Kwast" }, { id: "fill", icon: "🪣", label: "Vul deelgebied" }];
+  const modeRow = choiceRow(modes, settings.paintFill ? "fill" : "brush", function (id) { settings.paintFill = id === "fill"; remember(); renderTools(); });
+  if (settings.paintFill) {
+    return [
+      chosen,
+      modeRow,
+      el("div", { class: "terreinTip", text: "Klik binnen een deelgebied (Area tool): het hele deelgebied krijgt deze textuur, bijvoorbeeld de vloer van een huis of grot. Shift + klik = de verf in het deelgebied weghalen. Daarna kun je met de Kwast er weer overheen verven." })
+    ];
+  }
   return [
     chosen,
+    modeRow,
     ...brushSliders(true),
     el("div", { class: "terreinTip", text: "Kies rechts een textuur of kleur. Linkermuis = verven, Shift = gummen. Sterkte 100 % = helemaal (gum: helemaal weg); Zachte rand loopt naar buiten af. Per vak van 64 m passen 4 texturen: de grond + 3 eigen." })
   ];
