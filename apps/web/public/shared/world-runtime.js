@@ -15954,9 +15954,11 @@ function resolveChunkDebugCenter(policy) {
   // grover (tot 50 cm hoogteverschil) en kwam dan boven de vlek uit. Deze vertex-shader zet het punt voor de diepte-
   // toets een stukje naar de camera toe (op het scherm blijft het op dezelfde plek), zodat de vloer er niet meer
   // overheen komt. Muren en figuren staan verder dan dat stukje voor de vlek en dekken hem gewoon af.
+  // Kevin 23-11 (6): dichtbij (tot 60 m tekent het terrein fijn) maar 15 cm, anders scheen de vlek tot de knieën over
+  // een figuur heen; pas verder weg (grof terrein) loopt het op naar depthBiasFar.
   function windowLightVertexShader(withWorld) {
     return [
-      "uniform float depthBias;",
+      "uniform float depthBias; uniform float depthBiasFar;",
       "varying vec2 vUv;",
       withWorld ? "varying vec3 vWorld;" : "",
       "void main() {",
@@ -15965,7 +15967,8 @@ function resolveChunkDebugCenter(policy) {
       "  vec4 mv = modelViewMatrix * vec4(position, 1.0);",
       "  gl_Position = projectionMatrix * mv;",
       "  float len = max(length(mv.xyz), 0.001);",
-      "  vec4 nearer = projectionMatrix * vec4(mv.xyz * max(1.0 - depthBias / len, 0.25), 1.0);",
+      "  float bias = mix(depthBias, depthBiasFar, smoothstep(60.0, 90.0, len));",
+      "  vec4 nearer = projectionMatrix * vec4(mv.xyz * max(1.0 - bias / len, 0.25), 1.0);",
       "  gl_Position.z = nearer.z / nearer.w * gl_Position.w;",
       "}"
     ].join("\n");
@@ -16136,7 +16139,7 @@ function resolveChunkDebugCenter(policy) {
     // De vlek: zonder raam-PNG zachte randen; met PNG de vorm van het raam (windowLightMask). u loopt net als het raam
     // van links naar rechts, v van de onderkant van het raam (dichtbij) naar de bovenkant (ver weg).
     const patchMaterial = new THREE.ShaderMaterial({
-      uniforms: { map: { value: null }, hasMap: { value: 0 }, color: { value: new THREE.Color("#fff1c9") }, opacity: { value: 0.5 }, depthBias: { value: 0.6 } },
+      uniforms: { map: { value: null }, hasMap: { value: 0 }, color: { value: new THREE.Color("#fff1c9") }, opacity: { value: 0.5 }, depthBias: { value: 0.15 }, depthBiasFar: { value: 0.6 } },
       vertexShader: windowLightVertexShader(false),
       fragmentShader: [
         "uniform sampler2D map; uniform float hasMap; uniform vec3 color; uniform float opacity;",
@@ -16194,7 +16197,7 @@ function resolveChunkDebugCenter(policy) {
         beamOrigin: { value: w00.clone() }, beamInverse: { value: toBeam }, beamFloorY: { value: floorY },
         beamLength: { value: Math.max(0.1, (w00.y + height - floorY) / Math.sin(SUN_TILT)) },
         // Kleiner dan een muurdikte, anders zou je de bundel van buiten door de muur zien.
-        depthBias: { value: 0.15 }
+        depthBias: { value: 0.15 }, depthBiasFar: { value: 0.15 }
       },
       vertexShader: windowLightVertexShader(true),
       fragmentShader: [
