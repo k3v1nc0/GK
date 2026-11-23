@@ -1,11 +1,11 @@
-// Kevin 23-11: 🧱 Muur (Area tool). Je tekent een kamer met punten; langs elke rand staat een muur. Met Randen
-// kies je per rand Muur, Deur, Raam of Open. Gedeeld door de server (botsing) en de browser (tekenen), zodat de
+// Kevin 23-11: 🧱 Muur. Je tekent muren als net (punten en lijnen, zoals de Weg). Per lijn kies je Muur, Deur, Raam
+// of Open (kaart, onder ⚙️ meer). Gedeeld door de server (botsing) en de browser (tekenen), zodat de
 // muur die je ziet precies de muur is waar je tegenaan loopt.
 
 export const WALL_EDGE_KINDS = Object.freeze(["wall", "door", "window", "open"]);
 // Per soort rand een lijst randnummers in de instellingen; een rand die nergens in staat is een muur.
 export const WALL_EDGE_KEYS = Object.freeze({ door: "doorEdges", window: "windowEdges", open: "openEdges" });
-export const WALL_DEFAULTS = Object.freeze({ height: 3, thickness: 0.3, textureMeters: 2, doorHeight: 2.4, windowSill: 1, windowTop: 2.2 });
+export const WALL_DEFAULTS = Object.freeze({ height: 3, thickness: 0.3, textureMeters: 2, doorHeight: 2.4, windowSill: 1, windowTop: 2.2, windowLight: 1 });
 
 const num = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
@@ -33,6 +33,32 @@ export function editWallEdges(pointCount, settings, selectedEdges, kind) {
   return out;
 }
 
+// Kevin 23-11 (2): een 🧱 Muur is een net zoals de Weg: punten en lijnen, aan één punt zoveel muren als je wilt
+// (T-splitsing, kruising). Een lijn is [punt, punt] of [punt, punt, soort] met soort 1 = deur, 2 = raam, 3 = open
+// (geen soort = muur). Een oude muur zonder lijnen is een gesloten ring (rand i = punt i naar punt i+1).
+export const WALL_KIND_CODES = Object.freeze({ wall: 0, door: 1, window: 2, open: 3 });
+export function wallLinkKind(link) {
+  return WALL_EDGE_KINDS[Number.isInteger(link?.[2]) ? link[2] : 0] || "wall";
+}
+export function wallLinkWithKind(link, kind) {
+  const code = WALL_KIND_CODES[kind] || 0;
+  return code ? [link[0], link[1], code] : [link[0], link[1]];
+}
+// Lijnen van een muur-document (pointsMm + links + settings): het net, of de ring met de soorten uit de oude lijsten.
+export function wallNetLinks(pointCount, links, settings = {}) {
+  const count = Math.max(0, Number(pointCount) || 0);
+  if (Array.isArray(links)) {
+    return links.filter((link) => Array.isArray(link) && link.length >= 2 && link[0] !== link[1]
+      && Number.isInteger(link[0]) && Number.isInteger(link[1]) && link[0] >= 0 && link[1] >= 0 && link[0] < count && link[1] < count)
+      .map((link) => wallLinkWithKind(link, wallLinkKind(link)));
+  }
+  if (count < 2) return [];
+  const kinds = wallEdgeKinds(count, settings);
+  const ring = [];
+  for (let i = 0; i < (count === 2 ? 1 : count); i += 1) ring.push(wallLinkWithKind([i, (i + 1) % count], kinds[i]));
+  return ring;
+}
+
 // Area-waarden (meters, zoals areaNodeValues ze geeft) -> muur voor de wereld.
 export function wallFromAreaValues(id, values = {}) {
   const points = (Array.isArray(values.points) ? values.points : [])
@@ -49,7 +75,9 @@ export function wallFromAreaValues(id, values = {}) {
     doorHeight: clamp(num(values.doorHeight, WALL_DEFAULTS.doorHeight), 0.5, height),
     windowSill: clamp(num(values.windowSill, WALL_DEFAULTS.windowSill), 0, height),
     windowTop: clamp(num(values.windowTop, WALL_DEFAULTS.windowTop), 0, height),
-    edges: wallEdgeKinds(points.length, values)
+    windowTextureAssetId: values.windowTextureAssetId || null,
+    windowLight: clamp(num(values.windowLight, WALL_DEFAULTS.windowLight), 0, 3),
+    links: wallNetLinks(points.length, values.links, values).map((link) => ({ a: link[0], b: link[1], kind: wallLinkKind(link) }))
   };
 }
 
@@ -57,54 +85,88 @@ function solidKind(kind) {
   return kind === "wall" || kind === "window" || kind === "door";
 }
 
-// Per rand een stuk muur, met de hoek dicht: waar twee muren in een hoek samenkomen loopt elk stuk een halve dikte door.
-// Uitkomst per stuk: begin- en eindpunt (al verlengd), de soort rand en de hoogtes [van, tot] boven de grond.
+function wallLinksOf(wall, n) {
+  if (Array.isArray(wall?.links)) return wall.links.filter((link) => link && link.a !== link.b && link.a >= 0 && link.b >= 0 && link.a < n && link.b < n);
+  // Oud (zonder lijnen): ring met de soorten per rand.
+  const edges = Array.isArray(wall?.edges) ? wall.edges : [];
+  return n < 2 ? [] : Array.from({ length: n === 2 ? 1 : n }, (_, i) => ({ a: i, b: (i + 1) % n, kind: edges[i] || "wall" }));
+}
+
+// Per lijn een stuk muur, met de hoeken dicht: waar een andere muur onder een hoek aan hetzelfde punt zit, loopt het stuk
+// een halve dikte door (hoek, T-splitsing, kruising). Een raam is een dicht stuk (het licht komt van wallWindows).
+// Uitkomst per stuk: begin- en eindpunt (al verlengd), de soort lijn en de hoogtes [van, tot] boven de grond.
 export function wallPieces(wall) {
   const points = Array.isArray(wall?.points) ? wall.points : [];
   const n = points.length;
   if (n < 2) return [];
   const half = num(wall.thickness, WALL_DEFAULTS.thickness) / 2;
   const height = num(wall.height, WALL_DEFAULTS.height);
-  const edges = Array.isArray(wall.edges) ? wall.edges : [];
-  const dirOf = (i) => {
-    const a = points[i]; const b = points[(i + 1) % n];
+  const links = wallLinksOf(wall, n);
+  const dirOf = (link) => {
+    const a = points[link.a]; const b = points[link.b];
     const length = Math.hypot(b.x - a.x, b.z - a.z);
     return length > 0.001 ? { x: (b.x - a.x) / length, z: (b.z - a.z) / length, length } : null;
   };
+  const dirs = links.map(dirOf);
+  const atPoint = new Map();
+  links.forEach((link, k) => {
+    if (!solidKind(link.kind || "wall") || !dirs[k]) return;
+    for (const end of [link.a, link.b]) { if (!atPoint.has(end)) atPoint.set(end, []); atPoint.get(end).push(k); }
+  });
   const pieces = [];
-  for (let i = 0; i < n; i += 1) {
-    const kind = edges[i] || "wall";
-    if (kind === "open") continue;
-    const dir = dirOf(i);
-    if (!dir) continue;
-    const a = points[i];
-    const b = points[(i + 1) % n];
-    // Doorlopen in de hoek als de buurrand ook een muur is en er een echte hoek zit (geen rechte lijn).
-    const extendAt = (neighbour) => {
-      const other = dirOf(neighbour);
-      if (!other || !solidKind(edges[neighbour] || "wall")) return 0;
-      return Math.abs(dir.x * other.x + dir.z * other.z) < 0.985 ? half : 0;
-    };
-    const startExtra = extendAt((i - 1 + n) % n);
-    const endExtra = extendAt((i + 1) % n);
+  links.forEach((link, k) => {
+    const kind = link.kind || "wall";
+    const dir = dirs[k];
+    if (kind === "open" || !dir) return;
+    const a = points[link.a];
+    const b = points[link.b];
+    // Doorlopen als er aan dat punt een andere muur onder een hoek zit (geen rechte lijn).
+    const extendAt = (end) => ((atPoint.get(end) || []).some((other) => other !== k && Math.abs(dir.x * dirs[other].x + dir.z * dirs[other].z) < 0.985) ? half : 0);
+    const startExtra = extendAt(link.a);
+    const endExtra = extendAt(link.b);
     const ax = a.x - dir.x * startExtra; const az = a.z - dir.z * startExtra;
     const bx = b.x + dir.x * endExtra; const bz = b.z + dir.z * endExtra;
     const baseY = Math.min(num(a.y, 0), num(b.y, 0)) - 0.05;
     const spans = [];
-    if (kind === "wall") spans.push([0, height]);
+    if (kind === "wall" || kind === "window") spans.push([0, height]);
     else if (kind === "door") { if (wall.doorHeight < height - 0.01) spans.push([wall.doorHeight, height]); }
-    else if (kind === "window") {
-      const sill = Math.min(wall.windowSill, wall.windowTop);
-      const top = Math.max(wall.windowSill, wall.windowTop);
-      if (sill > 0.01) spans.push([0, sill]);
-      if (top < height - 0.01) spans.push([top, height]);
-    }
     for (const [from, to] of spans) {
       if (to - from < 0.01) continue;
-      pieces.push({ edge: i, kind, ax, az, bx, bz, baseY, from: from + (from === 0 ? -0.05 : 0), to, thickness: half * 2 });
+      pieces.push({ edge: k, kind, ax, az, bx, bz, baseY, from: from + (from === 0 ? -0.05 : 0), to, thickness: half * 2 });
     }
-  }
+  });
   return pieces;
+}
+
+// Kevin 23-11 (2): een Raam-lijn is dicht, met aan de binnenkant een raam (eigen textuur, gloeit) en een zonnevlek op
+// de vloer. Binnen = de kant van het midden van alle muurpunten (bij een huis: de kamer in).
+// Uitkomst per raam: midden onderaan (x, z), richting langs de muur (ux, uz), naar binnen (nx, nz), breedte, van/tot.
+export function wallWindows(wall) {
+  const points = Array.isArray(wall?.points) ? wall.points : [];
+  const n = points.length;
+  if (n < 2) return [];
+  const links = wallLinksOf(wall, n);
+  if (!links.some((link) => link.kind === "window")) return [];
+  const cx = points.reduce((sum, p) => sum + p.x, 0) / n;
+  const cz = points.reduce((sum, p) => sum + p.z, 0) / n;
+  const half = num(wall.thickness, WALL_DEFAULTS.thickness) / 2;
+  const height = num(wall.height, WALL_DEFAULTS.height);
+  const sill = clamp(Math.min(num(wall.windowSill, WALL_DEFAULTS.windowSill), num(wall.windowTop, WALL_DEFAULTS.windowTop)), 0, height);
+  const top = clamp(Math.max(num(wall.windowSill, WALL_DEFAULTS.windowSill), num(wall.windowTop, WALL_DEFAULTS.windowTop)), 0, height);
+  const out = [];
+  links.forEach((link, k) => {
+    if (link.kind !== "window") return;
+    const a = points[link.a]; const b = points[link.b];
+    const length = Math.hypot(b.x - a.x, b.z - a.z);
+    if (length < 0.2 || top - sill < 0.05) return;
+    const ux = (b.x - a.x) / length; const uz = (b.z - a.z) / length;
+    let nx = -uz; let nz = ux;
+    const mx = (a.x + b.x) / 2; const mz = (a.z + b.z) / 2;
+    if (nx * (cx - mx) + nz * (cz - mz) < 0) { nx = -nx; nz = -nz; }
+    out.push({ edge: k, x: mx + nx * half, z: mz + nz * half, baseY: Math.min(num(a.y, 0), num(b.y, 0)), ux, uz, nx, nz,
+      width: length, sill, top, light: num(wall.windowLight, WALL_DEFAULTS.windowLight) });
+  });
+  return out;
 }
 
 // Botsing: elke rand die Muur of Raam is, als dichte rechthoek (een deur en een open rand laten je door).

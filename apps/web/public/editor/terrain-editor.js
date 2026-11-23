@@ -10,7 +10,7 @@ import {
 } from "../shared/terrain.js?v=20261123-binnen2";
 import { decodePng, encodePng, pngToHeights } from "../shared/png.js";
 import { slug } from "./canonical-api.js";
-import { areaSoort } from "../shared/area-soorten.js?v=20261123-muur1";
+import { areaSoort } from "../shared/area-soorten.js?v=20261123-muur2";
 import { areaBoundsMm, areaContains, areaOutlineMeters, metersToMm } from "../shared/spatial.js?v=20261123-binnen2";
 
 const BRUSHES = [

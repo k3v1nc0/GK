@@ -3,7 +3,7 @@
 // verhuisd pad, bos of blokkade er precies hetzelfde uitziet. De instellingen per soort staan in "settings";
 // hun regels (type, min, max, keuzes) komen uit de oude nodedefinitie, de naam/icoon/hulp staat hier.
 import { NODE_TYPES } from "./node-types.js?v=20261106-perf1";
-import { WALL_DEFAULTS, WALL_EDGE_KEYS } from "./walls.js?v=20261123-muur1";
+import { WALL_DEFAULTS, WALL_EDGE_KEYS, wallNetLinks } from "./walls.js?v=20261123-muur2";
 
 // Zelfde vorm als help() in src/shared/authoring/kinds/ui.js (dit bestand draait ook in de browser).
 const help = (waarvoor, goed, probleem) => Object.freeze({ waarvoor, goed, probleem });
@@ -29,7 +29,12 @@ const WALL_FIELDS = [
   wallNumber("windowSill", "Raam vanaf (m)", "🪟", 0, 50, WALL_DEFAULTS.windowSill, 0.1, [0, 3], true,
     "Hoe hoog boven de grond een Raam-rand begint.", "0.8 tot 1.2 m.", "Raam te laag → hoger."),
   wallNumber("windowTop", "Raam tot (m)", "🪟", 0, 50, WALL_DEFAULTS.windowTop, 0.1, [1, 5], true,
-    "Tot hoe hoog een Raam-rand open is.", "2 tot 2.4 m, lager dan de muurhoogte.", "Raam loopt tot het plafond → lager.")
+    "Tot hoe hoog het raam op een Raam-lijn komt.", "2 tot 2.4 m, lager dan de muurhoogte.", "Raam loopt tot het plafond → lager."),
+  // Kevin 23-11 (2): een Raam-lijn is dicht met aan de binnenkant een raam dat licht geeft (geen gat naar het zwart buiten).
+  { key: "windowTextureAssetId", spec: { type: "asset", label: "Raam-textuur", icon: "🖼️", default: null, more: true, assetTypes: ["texture", "image"],
+    help: help("Het plaatje van het raam (glas, sponning, tralies). Het gloeit, alsof er daglicht door valt.", "Sleep een raam-textuur uit de Bibliotheek op dit vak. Leeg = een licht vlak.", "Raam te fel of te donker → schuif Raamlicht.") } },
+  wallNumber("windowLight", "Raamlicht", "☀️", 0, 3, WALL_DEFAULTS.windowLight, 0.1, [0, 2], true,
+    "Hoe fel het raam en de zonnevlek op de vloer zijn (overdag; 's nachts vanzelf zwakker en blauwer).", "0.8 tot 1.2. 0 = geen licht.", "Vloer te fel → lager. Zie je de vlek niet → hoger.")
 ];
 const EDGE_LIST_KEYS = new Set(["closedEdges"].concat(Object.values(WALL_EDGE_KEYS)));
 
@@ -52,7 +57,8 @@ export const AREA_SOORTEN = Object.freeze({
   },
   // Kevin 23-11: 🧱 Muur. Teken de kamer met punten rondom; langs elke rand staat een muur. Met Randen kies je per
   // rand Muur, Deur, Raam of Open (walls.js). De game bouwt simpele blokken met botsing; Blender alleen voor decor.
-  muur: { label: "Muur", icon: "🧱", nodeType: "area_definition", closed: true, minPoints: 3, wall: true, geometry: [],
+  // Kevin 23-11 (2): een net zoals de Weg (punten en lijnen, T-splitsing, kruising); een oude muur zonder lijnen is een ring.
+  muur: { label: "Muur", icon: "🧱", nodeType: "area_definition", closed: false, minPoints: 2, wall: true, network: true, geometry: [],
     main: ["wallHeight", "wallThickness", "wallTextureAssetId", "wallColor"] },
   loopvlak: {
     label: "Loopvlak", icon: "🌉", nodeType: "walkable_surface", closed: true, minPoints: 3, height: true,
@@ -328,6 +334,9 @@ export function areaNodeValues(body, runtimeId) {
     Object.assign(values, { scatterId: runtimeId, areaCenterX: box.x, areaCenterZ: box.z, areaWidth: box.width, areaDepth: box.depth, areaRotationY: 0, sourceNodeIds: [] });
   } else if (soort === "pad") {
     Object.assign(values, { surfaceId: runtimeId, links: areaRoadLinks(body) });
+  } else if (soort === "muur") {
+    Object.assign(values, { areaId: runtimeId, shapeType: "polygon", x: box.x, y: 0, z: box.z, width: box.width, depth: box.depth,
+      links: wallNetLinks(points.length, body.links, body.settings || {}) });
   } else if (soort === "blokkade") {
     Object.assign(values, { blockerId: runtimeId, shapeType: "polygon", x: box.x, z: box.z, width: box.width, depth: box.depth });
   } else if (soort === "loopvlak") {
@@ -414,7 +423,7 @@ export function convertAreaSoort(body, soort, regions = []) {
   if (points) next.pointsMm = points.map((point) => (def.height ? [point[0], point[1], point.length > 2 ? point[2] : 0] : [point[0], point[1]]));
   next.soort = soort;
   next.shape = "polygon";
-  if (!def.road) delete next.links;
+  if (!def.road && !def.network) delete next.links;
   for (const field of ["minXMm", "maxXMm", "minZMm", "maxZMm", "centerXMm", "centerZMm", "radiusMm"]) delete next[field];
   if (soort === "deelgebied") {
     if (!next.regionRef && points) {

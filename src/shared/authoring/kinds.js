@@ -288,7 +288,7 @@ export const CANONICAL_KINDS = {
         ui: ui("🔷", "points", "viewport"), default: null, help: SHAPE_HELP },
       // 🛣️ Weg (8-11): welk punt met welk punt verbonden is ([punt, punt]); zonder = punten op een rij.
       links: { type: "linkList", required: false, maxItems: 8192, audience: "client", label: "Lijnen",
-        ui: ui("〰️", "points", "viewport", { soorten: ["pad"] }), default: null,
+        ui: ui("〰️", "points", "viewport", { soorten: ["pad", "muur"] }), default: null,
         help: help("De lijnen van het wegennet: welk punt aan welk punt vastzit. Aan één punt kunnen zoveel lijnen als je wilt.",
           "Teken in de 3D-view: F = punt of lijn erbij, twee punten kiezen + F = vastmaken.", "Een stuk weg zit nergens aan vast → kies een punt van dat stuk en een punt van de weg en druk F.") },
       // Alleen de server kiest de Area bij overlap; de client hoeft de prioriteit niet te kennen.
@@ -529,7 +529,9 @@ export function validateDocument(kind, body) {
     if (field.type === "linkList") {
       if (!Array.isArray(value)) { issues.push(issue(key, "FIELD_TYPE", field.label + " moet een lijst zijn.")); continue; }
       if (value.length > field.maxItems) issues.push(issue(key, "FIELD_RANGE", field.label + ": hooguit " + field.maxItems + "."));
-      if (value.some((link) => !Array.isArray(link) || link.length !== 2 || link.some((n) => !Number.isInteger(n) || n < 0) || link[0] === link[1])) {
+      // Kevin 23-11: bij een 🧱 Muur mag een lijn een derde getal hebben (1 = deur, 2 = raam, 3 = open).
+      if (value.some((link) => !Array.isArray(link) || link.length < 2 || link.length > 3 || link.slice(0, 2).some((n) => !Number.isInteger(n) || n < 0) || link[0] === link[1]
+        || (link.length === 3 && ![1, 2, 3].includes(link[2])))) {
         issues.push(issue(key, "FIELD_LINK", field.label + ": elke lijn is [punt, ander punt]."));
       }
       continue;
@@ -729,8 +731,9 @@ function areaShapeIssues(body, issues) {
   const points = Array.isArray(body.pointsMm) ? body.pointsMm : [];
   if (points.length < def.minPoints) issues.push(issue("pointsMm", "FIELD_REQUIRED", def.label + " heeft minstens " + def.minPoints + " punten nodig."));
   if (!def.road && points.length > 512) issues.push(issue("pointsMm", "FIELD_RANGE", def.label + ": hooguit 512 punten."));
-  if (!def.road && body.links) issues.push(issue("links", "SOORT_FIELD", "Lijnen horen alleen bij een weg."));
-  if (def.road && Array.isArray(body.links) && body.links.some((link) => Array.isArray(link) && link.some((n) => n >= points.length))) {
+  if (!def.road && !def.network && body.links) issues.push(issue("links", "SOORT_FIELD", "Lijnen horen alleen bij een weg of muur."));
+  if (def.road && Array.isArray(body.links) && body.links.some((link) => Array.isArray(link) && link.length === 3)) issues.push(issue("links", "FIELD_LINK", "Een weg heeft geen soort per lijn."));
+  if ((def.road || def.network) && Array.isArray(body.links) && body.links.some((link) => Array.isArray(link) && link.slice(0, 2).some((n) => n >= points.length))) {
     issues.push(issue("links", "FIELD_LINK", "Een lijn wijst naar een punt dat er niet is."));
   }
   if (!def.height && points.some((point) => point.length !== 2)) issues.push(issue("pointsMm", "FIELD_POINT", "Alleen een loopvlak heeft een hoogte per punt."));

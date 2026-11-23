@@ -32,7 +32,7 @@ import { createPlayerPathClient } from "./player-path-client.js?v=20261108-roads
 import { createTerrainLayer, seedTerrainChunk, seedTerrainPaint } from "./terrain-render.js?v=20261123-fix3";
 import { createWaterLayer } from "./water-render.js?v=20261030-terrein6";
 import { createSkyLayer } from "./sky-render.js?v=20261120-sky2";
-import { wallPieces } from "./walls.js?v=20261123-muur1";
+import { wallPieces, wallWindows } from "./walls.js?v=20261123-muur2";
 import { INDOOR_ZONE } from "./indoor-zone.js?v=20261123-binnentab1";
 export {
   effectiveGroundBounds,
@@ -4753,6 +4753,10 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let roadEditorOverlay = null;
   let roadEditorState = null;
   let roadEditorPositions = [];
+  // Kevin 23-11 (2): 🧱 Muur bewerken met hetzelfde gereedschap, op een eigen laag (de soort per lijn kleurt mee).
+  let wallEditorOverlay = null;
+  let wallEditorState = null;
+  let wallEditorPositions = [];
   // Werkbank Fase 10 (Kevin 16-11): de route van één NPC of vlieger (editor), zie setRouteEditorOverlay.
   let routeEditorOverlay = null;
   let routeEditorState = null;
@@ -4777,6 +4781,11 @@ export function createGkWorldRuntime(canvas, options = {}) {
   // Werkbank Fase 10: dag en nacht. De lampen onthouden hun eigen sterkte; setDaylight schaalt ze (1 = dag).
   const ambientLights = [];
   let daylightLevel = 1;
+  // Kevin 23-11 (2): ramen op muren (addWallWindow); hun licht volgt dag en nacht.
+  const windowLightRecords = [];
+  let windowGlowTexture = null;
+  const windowDayColor = new THREE.Color("#fff1c9");
+  const windowNightColor = new THREE.Color("#8fb0ff");
   // Binnenruimtes (22-11): zie setIndoor. indoorOutside = achtergrond en mist van buiten, om terug te zetten.
   let indoorCfg = null;
   let indoorOutside = null;
@@ -8135,6 +8144,11 @@ function resolveChunkDebugCenter(policy) {
     roadEditorOverlay.frustumCulled = false;
     markDebugOverlayTree(roadEditorOverlay, "terrain");
     scene.add(roadEditorOverlay);
+    wallEditorOverlay = new THREE.Group();
+    wallEditorOverlay.name = "GK editor terrain overlay (muur)";
+    wallEditorOverlay.frustumCulled = false;
+    markDebugOverlayTree(wallEditorOverlay, "terrain");
+    scene.add(wallEditorOverlay);
     routeEditorOverlay = new THREE.Group();
     routeEditorOverlay.name = "GK editor terrain overlay (route)";
     routeEditorOverlay.frustumCulled = false;
@@ -8926,6 +8940,7 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function clearContent() {
+    windowLightRecords.length = 0;
     clearTerrainEditorOverlay();
     clearScatterEditorOverlay();
     clearChunkDebugOverlay();
@@ -9719,20 +9734,22 @@ function resolveChunkDebugCenter(policy) {
   function roadOverlayY(x, z) {
     return num(world?.ground?.y, 0) + terrainLift(x, z) + 0.12;
   }
-  function buildRoadEditorOverlay() {
-    if (!roadEditorOverlay) return;
-    for (const child of Array.from(roadEditorOverlay.children)) {
-      roadEditorOverlay.remove(child);
+  function buildRoadEditorOverlay(channel = "road") {
+    const wall = channel === "wall";
+    const group = wall ? wallEditorOverlay : roadEditorOverlay;
+    if (!group) return;
+    for (const child of Array.from(group.children)) {
+      group.remove(child);
       disposeObject(child);
     }
-    roadEditorPositions = [];
-    const data = roadEditorState;
+    if (wall) wallEditorPositions = []; else roadEditorPositions = [];
+    const data = wall ? wallEditorState : roadEditorState;
     const points = Array.isArray(data?.points) ? data.points : [];
-    roadEditorOverlay.visible = mode === "editor" && points.length > 0;
-    if (!roadEditorOverlay.visible) { requestRender("road-overlay"); return; }
+    group.visible = mode === "editor" && points.length > 0;
+    if (!group.visible) { requestRender("road-overlay"); return; }
     const active = data.active === true;
     const pos = points.map((p) => new THREE.Vector3(num(p.x, 0), roadOverlayY(p.x, p.z), num(p.z, 0)));
-    roadEditorPositions = pos;
+    if (wall) wallEditorPositions = pos; else roadEditorPositions = pos;
     const selectedPoints = new Set(Array.isArray(data.selectedPoints) ? data.selectedPoints : []);
     const selectedLinks = new Set(Array.isArray(data.selectedLinks) ? data.selectedLinks : []);
     const ribbon = (list, width, color, opacity, order) => {
@@ -9754,10 +9771,16 @@ function resolveChunkDebugCenter(policy) {
       mesh.raycast = function () {};
       mesh.userData.debugOverlay = true;
       mesh.userData.debugOverlayKind = "terrain";
-      roadEditorOverlay.add(mesh);
+      group.add(mesh);
     };
     const links = Array.isArray(data.links) ? data.links : [];
-    ribbon(links.filter((_, k) => !selectedLinks.has(k)), active ? 0.35 : 0.25, active ? 0xffb347 : 0xd99a3c, active ? 0.95 : 0.7, 7002);
+    if (wall) {
+      // Muur: oranje = muur, groen = deur, blauw = raam, grijs = open (derde getal van de lijn).
+      const colors = [0xffb347, 0x4ade80, 0x60a5fa, 0x9ca3af];
+      for (let code = 0; code < colors.length; code += 1) {
+        ribbon(links.filter((link, k) => !selectedLinks.has(k) && (Number.isInteger(link[2]) ? link[2] : 0) === code), 0.35, colors[code], 0.95, 7002);
+      }
+    } else ribbon(links.filter((_, k) => !selectedLinks.has(k)), active ? 0.35 : 0.25, active ? 0xffb347 : 0xd99a3c, active ? 0.95 : 0.7, 7002);
     ribbon(links.filter((_, k) => selectedLinks.has(k)), 0.55, 0xffffff, 1, 7003);
     const sphere = (list, radius, color, order) => {
       if (!list.length) return;
@@ -9771,24 +9794,26 @@ function resolveChunkDebugCenter(policy) {
       mesh.raycast = function () {};
       mesh.userData.debugOverlay = true;
       mesh.userData.debugOverlayKind = "terrain";
-      roadEditorOverlay.add(mesh);
+      group.add(mesh);
     };
     const all = points.map((_, i) => i);
     sphere(all.filter((i) => !selectedPoints.has(i)), active ? 0.45 : 0.3, active ? 0x4ade80 : 0x9ccf8a, 7004);
     sphere(all.filter((i) => selectedPoints.has(i)), 0.6, 0xffffff, 7005);
     requestRender("road-overlay");
   }
-  function setRoadEditorOverlay(state) {
-    roadEditorState = state || null;
-    buildRoadEditorOverlay();
+  function setRoadEditorOverlay(state, channel = "road") {
+    if (channel === "wall") wallEditorState = state || null; else roadEditorState = state || null;
+    buildRoadEditorOverlay(channel);
   }
   // Wat ligt er onder de muis: { kind: "point", index } of { kind: "link", index }, of null. Punten gaan voor.
   function pickRoadEditor(clientX, clientY, radiusPx = 14, options = {}) {
     const exclude = new Set(Array.isArray(options?.exclude) ? options.exclude : []);
-    const data = roadEditorState;
+    const wall = options?.channel === "wall";
+    const data = wall ? wallEditorState : roadEditorState;
+    const placed = wall ? wallEditorPositions : roadEditorPositions;
     const points = Array.isArray(data?.points) ? data.points : [];
     if (mode !== "editor" || !points.length) return null;
-    const screen = points.map((p, i) => worldToScreen(roadEditorPositions[i] || { x: num(p.x, 0), y: roadOverlayY(p.x, p.z), z: num(p.z, 0) }));
+    const screen = points.map((p, i) => worldToScreen(placed[i] || { x: num(p.x, 0), y: roadOverlayY(p.x, p.z), z: num(p.z, 0) }));
     let best = null;
     screen.forEach((s, i) => {
       if (!s || exclude.has(i)) return;
@@ -11903,6 +11928,7 @@ function resolveChunkDebugCenter(policy) {
         for (const root of overlayRoots) hideRoot(root);
         hideRoot(multiSelectionBoundsHelper);
         hideRoot(roadEditorOverlay);
+        hideRoot(wallEditorOverlay);
         hideRoot(routeEditorOverlay);
         hideRoot(terrainEditorOverlay);
       };
@@ -15792,7 +15818,113 @@ function resolveChunkDebugCenter(policy) {
       content.add(mesh);
       runtimeStats.sceneObjects += 1;
       runtimeStats.meshes += 1;
+      for (const win of wallWindows(wall)) addWallWindow(worldData, wall, win, groundY);
     }
+    applyWindowLights();
+  }
+
+  // Kevin 23-11 (2): een raam op een Raam-lijn. Geen gat naar het zwart buiten en geen echte lamp (te zwaar voor de oude
+  // laptop): een gloeiend vlak met de raam-textuur, een zachte zonnevlek op de vloer en een vage lichtbundel ertussen.
+  // Alleen doorzichtige vlakken; overdag fel en warm, 's nachts zwak en blauw (applyWindowLights bij dag en nacht).
+  function windowGlowGradient() {
+    if (windowGlowTexture) return windowGlowTexture;
+    const canvas = document.createElement("canvas");
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext("2d");
+    const image = ctx.createImageData(64, 64);
+    for (let y = 0; y < 64; y += 1) {
+      for (let x = 0; x < 64; x += 1) {
+        // Zachte zijkanten (u) en naar het eind toe vager (v = 0 bij de muur, 1 ver weg).
+        const u = (x + 0.5) / 64; const v = (y + 0.5) / 64;
+        const side = Math.min(1, Math.min(u, 1 - u) / 0.18);
+        const fade = Math.min(1, v / 0.12) * Math.pow(1 - v, 1.2);
+        const value = Math.round(255 * side * side * fade);
+        const index = (y * 64 + x) * 4;
+        image.data[index] = 255; image.data[index + 1] = 255; image.data[index + 2] = 255; image.data[index + 3] = value;
+      }
+    }
+    ctx.putImageData(image, 0, 0);
+    windowGlowTexture = new THREE.CanvasTexture(canvas);
+    windowGlowTexture.colorSpace = THREE.SRGBColorSpace;
+    return windowGlowTexture;
+  }
+  function addWallWindow(worldData, wall, win, groundY) {
+    const baseY = groundY + num(win.baseY, 0);
+    const width = Math.max(0.1, win.width - 0.04);
+    const height = Math.max(0.05, win.top - win.sill);
+    const yaw = Math.atan2(win.nx, win.nz);
+    const mark = function (mesh, name, order, selectable = false) {
+      mesh.name = name + " " + String(wall.id || "");
+      mesh.renderOrder = order;
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
+      mesh.userData.runtimeAlive = true;
+      mesh.userData.gkWindowLight = true;
+      // Alleen het raam is aan te klikken in de editor (kiest de muur); de vlek en de bundel nooit.
+      if (mode === "editor" && selectable) mesh.userData.entityId = wall.id;
+      else mesh.raycast = function () {};
+      content.add(mesh);
+      runtimeStats.sceneObjects += 1;
+      runtimeStats.meshes += 1;
+      return mesh;
+    };
+    // Het raam zelf, 1 cm voor de muur.
+    const panelMaterial = new THREE.MeshBasicMaterial({ color: new THREE.Color("#dbeaff"), transparent: true, toneMapped: false, side: THREE.FrontSide });
+    const panel = mark(new THREE.Mesh(new THREE.PlaneGeometry(width, height), panelMaterial), "window", 2, true);
+    panel.position.set(win.x + win.nx * 0.012, baseY + (win.sill + win.top) / 2, win.z + win.nz * 0.012);
+    panel.rotation.y = yaw;
+    const asset = wall.windowTextureAssetId ? assetById(worldData, wall.windowTextureAssetId) : null;
+    if (asset) withWallTexture(asset, function (texture) {
+      if (panel.material !== panelMaterial) return;
+      panelMaterial.map = texture;
+      panelMaterial.needsUpdate = true;
+      requestRender("window-texture");
+    });
+    // Zonnevlek op de vloer: van "Raam vanaf" tot iets verder dan "Raam tot" de kamer in (zon schuin van boven), iets breder.
+    const near = Math.max(0.15, win.sill * 0.9);
+    const far = near + Math.max(0.6, height * 1.25);
+    const spread = 0.12 * (far - near);
+    const corner = function (along, inward) {
+      return [win.x + win.ux * along + win.nx * inward, win.z + win.uz * along + win.nz * inward];
+    };
+    const floorY = baseY + 0.03;
+    const quad = function (points, uvs) {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
+      geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+      geometry.setIndex([0, 1, 2, 0, 2, 3]);
+      geometry.computeBoundingSphere();
+      return geometry;
+    };
+    const n0 = corner(-width / 2, near); const n1 = corner(width / 2, near);
+    const f1 = corner(width / 2 + spread, far); const f0 = corner(-width / 2 - spread, far);
+    const patchMaterial = new THREE.MeshBasicMaterial({ map: windowGlowGradient(), color: new THREE.Color("#fff1c9"), transparent: true, opacity: 0.5,
+      blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+    mark(new THREE.Mesh(quad([n0[0], floorY, n0[1], n1[0], floorY, n1[1], f1[0], floorY, f1[1], f0[0], floorY, f0[1]], [0, 0, 1, 0, 1, 1, 0, 1]), patchMaterial), "window light", 3);
+    // Lichtbundel: van de bovenkant van het raam naar het verre eind van de vlek (heel vaag, alleen zichtbaar van opzij).
+    const w0 = corner(-width / 2, 0.02); const w1 = corner(width / 2, 0.02);
+    const topY = baseY + win.top;
+    const beamMaterial = new THREE.MeshBasicMaterial({ map: windowGlowGradient(), color: new THREE.Color("#fff1c9"), transparent: true, opacity: 0.1,
+      blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide });
+    mark(new THREE.Mesh(quad([w0[0], topY, w0[1], w1[0], topY, w1[1], f1[0], floorY, f1[1], f0[0], floorY, f0[1]], [0, 0.12, 1, 0.12, 1, 0.95, 0, 0.95]), beamMaterial), "window beam", 4);
+    windowLightRecords.push({ panelMaterial, patchMaterial, beamMaterial, light: Math.max(0, num(win.light, 1)) });
+  }
+  function applyWindowLights() {
+    if (!windowLightRecords.length) return;
+    // In de editor altijd als overdag; in de game volgt het de dag en nacht.
+    const day = mode === "game" ? Math.max(0, Math.min(1, daylightLevel)) : 1;
+    for (const record of windowLightRecords) {
+      const strength = record.light * (0.2 + 0.8 * day);
+      record.patchMaterial.color.copy(windowNightColor).lerp(windowDayColor, day);
+      record.beamMaterial.color.copy(record.patchMaterial.color);
+      record.patchMaterial.opacity = Math.min(1, 0.45 * strength);
+      record.beamMaterial.opacity = Math.min(0.4, 0.09 * strength);
+      record.panelMaterial.color.setScalar(Math.min(1, 0.3 + 0.7 * Math.min(1, strength)));
+      if (day < 1) record.panelMaterial.color.lerp(windowNightColor, (1 - day) * 0.5);
+      if (!record.panelMaterial.map) record.panelMaterial.color.multiply(new THREE.Color("#dbeaff"));
+    }
+    requestRender("window-light");
   }
 
   // Kevin 23-11: de vloer van een 🏠 Binnen-deelgebied: één plat vlak in de vorm van het gebied, met een terreintextuur
@@ -19997,6 +20129,7 @@ function resolveChunkDebugCenter(policy) {
   function setWorld(nextWorld, options = {}) {
     // 🛣️ De Weg-punten op de hoogte van het terrein zetten zodra dat geladen is.
     if (mode === "editor" && roadEditorState) setTimeout(buildRoadEditorOverlay, 1500);
+    if (mode === "editor" && wallEditorState) setTimeout(function () { buildRoadEditorOverlay("wall"); }, 1500);
     playerPathClient?.invalidate();
     worldBuildGeneration += 1;
     // In game mode is de server (via game.js) eigenaar van de spelerpositie.
@@ -20259,6 +20392,11 @@ function resolveChunkDebugCenter(policy) {
       for (const child of Array.from(roadEditorOverlay.children)) disposeObject(child);
       roadEditorOverlay = null;
     }
+    if (wallEditorOverlay) {
+      scene.remove(wallEditorOverlay);
+      for (const child of Array.from(wallEditorOverlay.children)) disposeObject(child);
+      wallEditorOverlay = null;
+    }
     if (routeEditorOverlay) {
       scene.remove(routeEditorOverlay);
       for (const child of Array.from(routeEditorOverlay.children)) disposeObject(child);
@@ -20520,6 +20658,7 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function applyLightLevels() {
+    applyWindowLights();
     for (const light of ambientLights) light.intensity = num(light.userData.baseIntensity, 0) * (indoorCfg ? indoorCfg.light : daylightLevel);
     for (const light of directionalLights) light.intensity = num(light.userData.baseIntensity, light.intensity) * daylightLevel * (indoorCfg ? indoorCfg.sun : 1);
   }

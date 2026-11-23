@@ -3,11 +3,13 @@
 // Toetsen zoals in Blender: F = punt/lijn erbij of vastmaken, G/R/T = schuiven/draaien/schalen, Del = weg,
 // Ctrl+C/V = kopiëren/plakken, Ctrl+D = dupliceren, Ctrl+A = alles, Ctrl+J = andere Wegen erbij.
 // Wijzigingen staan meteen in beeld; opslaan (met Ctrl+Z) loopt op de achtergrond, één tegelijk.
-import { areaRoadLinks } from "../shared/area-soorten.js?v=20261123-muur1";
-import { roadAddPoint, roadClip, roadConnect, roadDelete, roadDuplicate, roadHasLink, roadMerge, roadParts, roadPaste, roadSplitLink } from "../shared/road-network.js?v=20261108-roads5";
+// Kevin 23-11 (2): hetzelfde gereedschap bewerkt ook een 🧱 Muur (deps.channel "wall", eigen toNet/toBody): de soort per
+// lijn (muur, deur, raam, open) is het derde getal van een lijn en gaat mee bij alles (setLinkKind zet hem).
+import { areaRoadLinks } from "../shared/area-soorten.js?v=20261123-muur2";
+import { roadAddPoint, roadClip, roadConnect, roadDelete, roadDuplicate, roadHasLink, roadMerge, roadParts, roadPaste, roadSplitLink } from "../shared/road-network.js?v=20261123-muur2";
 
-const toNet = (body) => ({ points: (body?.pointsMm || []).map((p) => ({ x: p[0] / 1000, z: p[1] / 1000 })), links: areaRoadLinks(body) });
-const toBody = (body, net) => {
+const toRoadNet = (body) => ({ points: (body?.pointsMm || []).map((p) => ({ x: p[0] / 1000, z: p[1] / 1000 })), links: areaRoadLinks(body) });
+const toRoadBody = (body, net) => {
   const next = Object.assign({}, body, { pointsMm: net.points.map((p) => [Math.round(p.x * 1000), Math.round(p.z * 1000)]), links: net.links.map((link) => link.slice()) });
   delete next.settings;
   return next;
@@ -18,6 +20,11 @@ const centerOf = (points) => ({ x: points.reduce((s, p) => s + p.x, 0) / points.
 // deps: runtime(), roadDocs() (actieve Weg-documenten, gekozen eerst), isActive(), select(docKey), save(doc, body, label),
 // setStatus(text, kind), groundAt(clientX, clientY), lastPointer(), suppressClick(), canvasTarget(event), entityAtPointer(), archive(docKey).
 export function createRoadEditor(deps) {
+  const channel = deps.channel || "road";
+  const name = deps.label || "Weg";
+  const icon = deps.icon || "🛣️";
+  const toNet = deps.toNet || toRoadNet;
+  const toBody = deps.toBody || toRoadBody;
   let net = null;
   let netKey = null;
   let netRevision = null;
@@ -35,7 +42,7 @@ export function createRoadEditor(deps) {
   const roadDoc = () => deps.roadDocs()[0] || null;
   const active = () => Boolean(net && deps.isActive());
   const runtime = () => deps.runtime();
-  const pick = (x, y, options) => runtime()?.pickRoadEditor?.(x, y, 14, options) || null;
+  const pick = (x, y, options) => runtime()?.pickRoadEditor?.(x, y, 14, Object.assign({ channel }, options || {})) || null;
   const mouseGround = () => { const p = deps.lastPointer(); return p ? deps.groundAt(p.clientX, p.clientY) : null; };
 
   function sync() {
@@ -58,16 +65,17 @@ export function createRoadEditor(deps) {
     const now = { rt: runtime(), shown, selPoints, selLinks, on: active() };
     if (last && Object.keys(now).every((key) => now[key] === last[key])) return;
     last = now;
-    now.rt?.setRoadEditorOverlay?.(shown ? { points: shown.points, links: shown.links, selectedPoints: selPoints, selectedLinks: selLinks, active: now.on } : null);
+    now.rt?.setRoadEditorOverlay?.(shown ? { points: shown.points, links: shown.links, selectedPoints: selPoints, selectedLinks: selLinks, active: now.on } : null, channel);
   }
 
   function summary(prefix) {
     if (!net) return;
     const parts = roadParts(net);
     const others = deps.roadDocs().length - 1;
-    const text = (prefix ? "🛣️ " + prefix + " · " : "🛣️ Weg · ") + net.points.length + " punten, " + net.links.length + (net.links.length === 1 ? " lijn" : " lijnen")
+    const text = (prefix ? icon + " " + prefix + " · " : icon + " " + name + " · ") + net.points.length + " punten, " + net.links.length + (net.links.length === 1 ? " lijn" : " lijnen")
       + (selPoints.length ? " · " + selPoints.length + " punt(en) gekozen" : "") + (selLinks.length ? " · " + selLinks.length + " lijn(en) gekozen" : "")
       + (parts > 1 ? " · ⚠️ " + parts + " losse delen: kies een punt van elk deel en druk F" : "")
+      + (channel === "wall" && selLinks.length ? " · Muur, Deur, Raam of Open: kaart, onder ⚙️ meer" : "")
       + (others > 0 ? " · Er " + (others === 1 ? "is nog 1 andere Weg" : "zijn nog " + others + " andere Wegen") + ": Ctrl+J voegt ze hierbij" : "");
     deps.setStatus(text, "");
   }
@@ -85,7 +93,7 @@ export function createRoadEditor(deps) {
         dirty = false;
         const doc = roadDoc();
         if (!doc) break;
-        try { await deps.save(doc, toBody(doc.body, net), "Weg · " + pendingLabel); } catch { failed = true; break; }
+        try { await deps.save(doc, toBody(doc.body, net), name + " · " + pendingLabel); } catch { failed = true; break; }
         netRevision = roadDoc()?.revision ?? netRevision;
       }
     } finally {
@@ -95,7 +103,7 @@ export function createRoadEditor(deps) {
   }
 
   function commit(next, label, select = null) {
-    if (next.points.length < 2) { deps.setStatus("Een Weg heeft minstens 2 punten. De hele Weg weghalen kan in de Bibliotheek.", "error"); return false; }
+    if (next.points.length < 2) { deps.setStatus("Een " + name + " heeft minstens 2 punten. De hele " + name + " weghalen kan in de Bibliotheek.", "error"); return false; }
     net = next;
     if (select) { selPoints = select.points || []; selLinks = select.links || []; }
     dirty = true;
@@ -169,9 +177,11 @@ export function createRoadEditor(deps) {
         next = merged.net;
         select = { points: [merged.index], links: [] };
         label = "vastgeklikt aan een punt";
-      } else if (hit?.kind === "link" && !next.links[hit.index].includes(moved)) {
-        const [a, b] = next.links[hit.index];
-        next = { points: next.points, links: next.links.filter((_, k) => k !== hit.index).concat([[a, moved], [moved, b]]) };
+      } else if (hit?.kind === "link" && !next.links[hit.index].slice(0, 2).includes(moved)) {
+        const link = next.links[hit.index];
+        const [a, b] = link;
+        const keep = (p, q) => (link.length > 2 ? [p, q, link[2]] : [p, q]);
+        next = { points: next.points, links: next.links.filter((_, k) => k !== hit.index).concat([keep(a, moved), keep(moved, b)]) };
         select = { points: [moved], links: [] };
         label = "vastgeklikt op een lijn";
       }
@@ -235,7 +245,7 @@ export function createRoadEditor(deps) {
       if (roadHasLink(net, from, hit.index)) { selPoints = [hit.index]; render(); deps.setStatus("Die zitten al aan elkaar vast.", ""); return true; }
       return commit(roadConnect(net, [from, hit.index]).net, "lijn naar een bestaand punt", { points: [hit.index], links: [] });
     }
-    if (hit?.kind === "link" && from !== null && !net.links[hit.index].includes(from)) {
+    if (hit?.kind === "link" && from !== null && !net.links[hit.index].slice(0, 2).includes(from)) {
       // Lijn naar een bestaande lijn: daar komt een punt in (T-splitsing).
       const split = roadSplitLink(net, hit.index, ground);
       return commit(roadConnect(split.net, [from, split.index]).net, "T-splitsing gemaakt", { points: [split.index], links: [] });
@@ -271,6 +281,7 @@ export function createRoadEditor(deps) {
 
   async function joinOthers() {
     const [main, ...others] = deps.roadDocs();
+    if (channel !== "road") return;
     if (!main || !others.length) { deps.setStatus("Er is maar één Weg.", ""); return; }
     let joined = net;
     for (const doc of others) {
@@ -330,7 +341,7 @@ export function createRoadEditor(deps) {
       if (key === "a") { selPoints = net.points.map((_, i) => i); selLinks = []; render(); hint(); return consume(); }
       if (key === "c") {
         clipboard = roadClip(net, sessionIndices());
-        deps.setStatus(clipboard ? "🛣️ " + clipboard.points.length + " punt(en) gekopieerd. Ctrl+V plakt bij de muis." : "Kies eerst wat je wilt kopiëren.", clipboard ? "" : "error");
+        deps.setStatus(clipboard ? icon + " " + clipboard.points.length + " punt(en) gekopieerd. Ctrl+V plakt bij de muis." : "Kies eerst wat je wilt kopiëren.", clipboard ? "" : "error");
         return consume();
       }
       if (key === "v") { paste(); return consume(); }
@@ -413,5 +424,13 @@ export function createRoadEditor(deps) {
     return false;
   }
 
-  return { sync, render, hint, handleKeyDown, handlePointerDown, handlePointerMove, handlePointerUp, isEditing: () => Boolean(session || placement) };
+  // 🧱 Muur: de gekozen lijnen worden Muur, Deur, Raam of Open (knoppen op de kaart, onder ⚙️ meer). Ctrl+Z werkt.
+  function setLinkKind(kind, label) {
+    if (!net || !deps.linkWithKind) return false;
+    if (!selLinks.length) { deps.setStatus("Kies eerst een of meer lijnen van de muur in de 3D-view (klik op een lijn, Shift+klik voor meer).", "error"); return false; }
+    const links = net.links.map((link, k) => (selLinks.includes(k) ? deps.linkWithKind(link, kind) : link));
+    return commit({ points: net.points, links }, selLinks.length + (selLinks.length === 1 ? " lijn " : " lijnen ") + (label || kind), { points: [], links: selLinks });
+  }
+
+  return { sync, render, hint, handleKeyDown, handlePointerDown, handlePointerMove, handlePointerUp, setLinkKind, isEditing: () => Boolean(session || placement) };
 }

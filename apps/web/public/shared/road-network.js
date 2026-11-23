@@ -207,15 +207,19 @@ export function planRoadRoute(graph, start, goal, options = {}) {
 
 const linkKey = (a, b) => Math.min(a, b) + ":" + Math.max(a, b);
 
+// Kevin 23-11: een lijn mag een derde waarde hebben (de soort muur bij een 🧱 Muur); die gaat overal mee.
+const relink = (link, a, b) => (link.length > 2 ? [a, b, link[2]] : [a, b]);
+
 function cleanLinks(links) {
   const seen = new Set();
   const out = [];
-  for (const [a, b] of links) {
+  for (const link of links) {
+    const [a, b] = link;
     if (a === b) continue;
     const key = linkKey(a, b);
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push([a, b]);
+    out.push(relink(link, a, b));
   }
   return out;
 }
@@ -253,14 +257,14 @@ export function roadDelete(net, pointIndices = [], linkIndices = []) {
   const points = [];
   net.points.forEach((point, i) => { if (dropPoints.has(i)) remap[i] = -1; else { remap[i] = points.length; points.push(point); } });
   const links = net.links.filter((link, k) => !dropLinks.has(k) && !dropPoints.has(link[0]) && !dropPoints.has(link[1]))
-    .map(([a, b]) => [remap[a], remap[b]]);
+    .map((link) => relink(link, remap[link[0]], remap[link[1]]));
   return { points, links: cleanLinks(links), remap };
 }
 
 // Punt "from" opgaan in punt "into" (zijn lijnen gaan mee). Geeft { net, index } met het nieuwe nummer van "into".
 export function roadMerge(net, from, into) {
   if (from === into) return { net, index: into };
-  const links = net.links.map(([a, b]) => [a === from ? into : a, b === from ? into : b]);
+  const links = net.links.map((link) => relink(link, link[0] === from ? into : link[0], link[1] === from ? into : link[1]));
   const result = roadDelete({ points: net.points, links }, [from]);
   return { net: { points: result.points, links: result.links }, index: result.remap[into] };
 }
@@ -270,7 +274,7 @@ export function roadSplitLink(net, linkIndex, point) {
   const link = net.links[linkIndex];
   if (!link) return { net, index: null };
   const index = net.points.length;
-  const links = net.links.filter((_, k) => k !== linkIndex).concat([[link[0], index], [index, link[1]]]);
+  const links = net.links.filter((_, k) => k !== linkIndex).concat([relink(link, link[0], index), relink(link, index, link[1])]);
   return { net: { points: net.points.concat([{ x: point.x, z: point.z }]), links }, index };
 }
 
@@ -283,7 +287,7 @@ export function roadDuplicate(net, pointIndices, offset = { x: 0, z: 0 }) {
     map.set(i, points.length);
     points.push({ x: net.points[i].x + offset.x, z: net.points[i].z + offset.z });
   }
-  const links = net.links.concat(net.links.filter(([a, b]) => map.has(a) && map.has(b)).map(([a, b]) => [map.get(a), map.get(b)]));
+  const links = net.links.concat(net.links.filter(([a, b]) => map.has(a) && map.has(b)).map((link) => relink(link, map.get(link[0]), map.get(link[1]))));
   return { net: { points, links }, indices: [...map.values()] };
 }
 
@@ -295,13 +299,13 @@ export function roadClip(net, pointIndices) {
   const cz = list.reduce((sum, i) => sum + net.points[i].z, 0) / list.length;
   const map = new Map(list.map((i, k) => [i, k]));
   return { points: list.map((i) => ({ x: net.points[i].x - cx, z: net.points[i].z - cz })),
-    links: net.links.filter(([a, b]) => map.has(a) && map.has(b)).map(([a, b]) => [map.get(a), map.get(b)]) };
+    links: net.links.filter(([a, b]) => map.has(a) && map.has(b)).map((link) => relink(link, map.get(link[0]), map.get(link[1]))) };
 }
 
 export function roadPaste(net, clip, at) {
   const base = net.points.length;
   const points = net.points.concat(clip.points.map((p) => ({ x: p.x + at.x, z: p.z + at.z })));
-  const links = net.links.concat(clip.links.map(([a, b]) => [a + base, b + base]));
+  const links = net.links.concat(clip.links.map((link) => relink(link, link[0] + base, link[1] + base)));
   return { net: { points, links }, indices: clip.points.map((_, k) => base + k) };
 }
 

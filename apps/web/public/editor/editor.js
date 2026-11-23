@@ -1,6 +1,6 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261123-binnentab3";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261123-muur2";
 import { edgeBetweenPoints, editClosedEdges } from "./walkable-edge-tools.js?v=20261031-randen1";
-import { createTerrainEditor } from "./terrain-editor.js?v=20261123-muur1";
+import { createTerrainEditor } from "./terrain-editor.js?v=20261123-muur2";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261106-perf1";
 import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20261106-perf1";
 import {
@@ -11,14 +11,14 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261106-perf1";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261106-perf1";
-import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261123-binnentab1";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261123-muur2";
 import { createAssetPicker } from "./mini-asset-picker.js?v=20261106-thumbs150";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
 import { createDocDrop, docKeyFromRuntimeId, docSideFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261122-doorgang1";
-import { createRoadEditor } from "./road-editor.js?v=20261123-muur1";
+import { createRoadEditor } from "./road-editor.js?v=20261123-muur2";
 import { createRouteEditor } from "./route-editor.js?v=20261116-herstel1";
-import { AREA_EDITOR_PREFIX, AREA_SOORTEN, AREA_SOORT_ORDER, areaBodyFromNodePatch, areaCirclePointsMm, areaNodeValues, areaSoort } from "../shared/area-soorten.js?v=20261123-muur1";
-import { editWallEdges, wallEdgeKinds } from "../shared/walls.js?v=20261123-muur1";
+import { AREA_EDITOR_PREFIX, AREA_SOORTEN, AREA_SOORT_ORDER, areaBodyFromNodePatch, areaCirclePointsMm, areaNodeValues, areaSoort } from "../shared/area-soorten.js?v=20261123-muur2";
+import { WALL_EDGE_KEYS, wallLinkWithKind, wallNetLinks } from "../shared/walls.js?v=20261123-muur2";
 import { INDOOR_ZONE, inIndoorZone } from "../shared/indoor-zone.js?v=20261123-binnentab1";
 import { removeVisualObjects, visualModelsForRelation, visualObjectRelations } from "./visual-object-relations.js?v=20261106-perf1";
 import { FIELD_HELP_STATUSES, createSemanticFieldHelpRegistry, formatSemanticFieldHelp, semanticFieldHelpEntry } from "./semantic-field-help.js?v=20261012-semantic-help1";
@@ -930,6 +930,7 @@ const docBench = createDocBench({
     updateDocPendingBadge();
     // 🛣️ De Weg staat niet in de 3D-wereld zelf (alleen de punten en lijnen erover): niet de hele wereld opnieuw laden.
     if (roadSaving || routeSaving) roadEditor.sync(); else { refreshViewportForDocs(); roadEditor.sync(); }
+    wallEditor.sync();
     routeEditor.sync();
     if (state.editorMode === "workbench") renderWorkbenchLibrary(workbenchContext());
     if (state.editorMode === "settings" && el.settingsMenuPanel) docBench.renderSettingsMenu(el.settingsMenuPanel, renderSettingsCardOnly);
@@ -956,6 +957,53 @@ const roadEditor = createRoadEditor({
   canvasTarget: function (event) { return terrainCanvasTarget(event); },
   entityAtPointer: function () { return runtimeEntityIdAtLastPointer(); }
 });
+
+// Kevin 23-11 (2): 🧱 Muur is een net zoals de Weg (punten en lijnen, T-splitsing, kruising), met hetzelfde gereedschap.
+// Alleen de gekozen muur is te bewerken (elke muur houdt zijn eigen hoogte en textuur). De soort per lijn is het derde getal.
+const wallNetFromBody = function (body) {
+  const points = (body?.pointsMm || []).map(function (p) { return { x: p[0] / 1000, z: p[1] / 1000 }; });
+  return { points: points, links: wallNetLinks(points.length, body?.links, body?.settings || {}) };
+};
+const wallBodyFromNet = function (body, net) {
+  const next = Object.assign({}, body, {
+    pointsMm: net.points.map(function (p) { return [Math.round(p.x * 1000), Math.round(p.z * 1000)]; }),
+    links: net.links.map(function (link) { return link.slice(); })
+  });
+  // De oude randlijsten (ring) zijn nu de soort per lijn.
+  if (next.settings) {
+    next.settings = Object.assign({}, next.settings);
+    for (const key of Object.values(WALL_EDGE_KEYS)) delete next.settings[key];
+    if (!Object.keys(next.settings).length) delete next.settings;
+  }
+  return next;
+};
+function wallAreaDocs() {
+  if (!docBench.workspace) return [];
+  const doc = docBench.doc(docBench.selectedDocKey);
+  return doc && doc.kind === "area" && !doc.archived && areaSoort(doc.body) === "muur" ? [doc] : [];
+}
+const wallEditor = createRoadEditor({
+  channel: "wall",
+  label: "Muur",
+  icon: "🧱",
+  toNet: wallNetFromBody,
+  toBody: wallBodyFromNet,
+  linkWithKind: function (link, kind) { return wallLinkWithKind(link, kind); },
+  runtime: function () { return runtime; },
+  roadDocs: wallAreaDocs,
+  isActive: function () { return wallAreaDocs().length > 0 && state.selectedNodeIds.length === 0; },
+  select: function (docKey) { selectAreaDoc(docKey); },
+  save: function (doc, body, label) { return docBench.saveDoc("area", doc, body, label); },
+  archive: function () { return false; },
+  setStatus: function (message, kind) { setStatus(message, kind); },
+  groundAt: function (clientX, clientY) { return terrainGroundPointFromClient(clientX, clientY); },
+  lastPointer: function () { return terrainLastPointer; },
+  suppressClick: function () { suppressNextViewportRuntimeClick(); },
+  canvasTarget: function (event) { return terrainCanvasTarget(event); },
+  entityAtPointer: function () { return runtimeEntityIdAtLastPointer(); }
+});
+// Knoppen Muur/Deur/Raam/Open op de kaart van de muur (onder ⚙️ meer).
+docBench.onWallEdgeKind = function (kind, label) { return wallEditor.setLinkKind(kind, label); };
 
 // Werkbank Fase 10 (Kevin 16-11): de route van een NPC (Loopt een route) of een vliegend model (Vliegt: een route),
 // te tekenen in de 3D-view zoals de Weg (route-editor.js). Een route verandert de editorwereld niet: niet alles opnieuw laden.
@@ -1224,6 +1272,11 @@ function selectAreaDoc(docKey, options = {}) {
   if (def?.road) {
     roadEditor.render();
     roadEditor.hint();
+    return;
+  }
+  if (def?.wall) {
+    wallEditor.sync();
+    wallEditor.hint();
     return;
   }
   setStatus((def ? def.icon + " " + def.label : "Vlak") + " gekozen. Sleep punten; G/R/T = hele vlak; F = punt erbij; Del = punt weg.", "");
@@ -3005,6 +3058,8 @@ function selectedTerrainNode() {
   const areaNode = selectedAreaDocNode();
   // 🛣️ De Weg heeft een eigen gereedschap (road-editor.js), niet het puntengereedschap van de vlakken.
   if (areaNode && isRoadAreaNode(areaNode)) return null;
+  // 🧱 De Muur ook (Kevin 23-11 (2): een net zoals de Weg).
+  if (areaNode && isWallAreaNode(areaNode)) return null;
   if (areaNode) return TERRAIN_TOOL_NODE_TYPES.has(areaNode.type) ? areaNode : null;
   if (state.viewportMarqueeSelection || state.selectedNodeIds.length !== 1) return null;
   const node = nodeById(state.selectedNodeId);
@@ -3498,7 +3553,7 @@ function terrainNodeCapabilities(node) {
     allowScale: nodeType === "surface_layer",
     allowDelete: polygonEditable,
     // Loopvlak: randen dicht (onzichtbare muur) of open zetten. Kevin 23-11: 🧱 Muur: per rand Muur, Deur, Raam of Open.
-    allowEdges: walkableSurface || isWallAreaNode(node)
+    allowEdges: walkableSurface
   };
 }
 
@@ -3533,7 +3588,6 @@ function terrainSelectionText(node, capabilities) {
   if (state.terrainTool.mode === "extrude") return title + " - Extruding point | " + shortcutSummary;
   if (state.terrainTool.mode === "scale") return title + " - Scaling " + channel + " texture | " + shortcutSummary;
   if (state.terrainTool.mode === "delete") return title + " - Delete selected points | " + shortcutSummary;
-  if (state.terrainTool.mode === "edges" && isWallAreaNode(node)) return "🧱 Muur - Randen: kies een lijn of twee aangrenzende punten, dan Muur, Deur, Raam of Open. Oranje = muur, groen = deur, blauw = raam, grijs = open. Gekozen: " + state.terrainTool.selectedEdgeIndices.length;
   if (state.terrainTool.mode === "edges") return "Loopvlak - Randen: kies een lijn of twee aangrenzende punten. Multi = meerdere lijnen. Groen = open, rood = dicht. Gekozen: " + state.terrainTool.selectedEdgeIndices.length;
   return base + " | Select center to move/rotate/scale the whole shape" + (node.type === "walkable_surface" ? ", use Z for height" : "");
 }
@@ -4460,9 +4514,7 @@ function terrainOverlayState() {
     points: points,
     groundY: groundY,
     color: accentColorForNodeDef(state.nodeTypes[node.type]),
-    closedEdges: node.type === "walkable_surface" && Array.isArray(node.values?.closedEdges) ? node.values.closedEdges.slice() : [],
-    // Kevin 23-11: 🧱 Muur: per rand muur, deur, raam of open (kleur per rand in de 3D-view).
-    wallEdges: isWallAreaNode(node) ? wallEdgeKinds(points.length, node.values || {}) : null
+    closedEdges: node.type === "walkable_surface" && Array.isArray(node.values?.closedEdges) ? node.values.closedEdges.slice() : []
   };
   if (state.terrainTool.draggingHandleRole === "point" && state.terrainTool.dragStartPoints) {
     previewPoints = terrainPreviewMovedPoints(
@@ -4587,6 +4639,7 @@ function pushTerrainOverlay(overlay, includeMarkers = true) {
 
 function syncTerrainToolPanel(includeMarkers = true) {
   roadEditor.render();
+  wallEditor.sync();
   const summary = terrainSelectedNodeSummary();
   const node = summary?.node || null;
   const capabilities = summary?.capabilities || null;
@@ -5215,18 +5268,7 @@ function appendTerrainTransformActions(parent, node) {
         terrainFinishWithRender();
       }
     }));
-    if (state.terrainTool.mode === "edges" && isWallAreaNode(node)) {
-      for (const choice of [
-        { label: "🧱 Muur", kind: "wall", title: "Gekozen randen worden een dichte muur" },
-        { label: "🚪 Deur", kind: "door", title: "Gekozen randen worden een deur: open tot de deurhoogte, de muur loopt erboven door" },
-        { label: "🪟 Raam", kind: "window", title: "Gekozen randen krijgen een raam: dicht, met een gat van 'Raam vanaf' tot 'Raam tot'" },
-        { label: "Open", kind: "open", title: "Gekozen randen zonder muur: hier loop je zo door" }
-      ]) parent.appendChild(transformActionButton(choice.label, {
-        title: choice.title,
-        disabled: state.terrainTool.edgeEditBusy || !state.terrainTool.selectedEdgeIndices.length,
-        onClick: function () { void terrainApplyWallEdges(node, choice.kind, choice.label); }
-      }));
-    } else if (state.terrainTool.mode === "edges") {
+    if (state.terrainTool.mode === "edges") {
       for (const choice of [
         { label: "Open", action: "open", className: "ok", title: "Gekozen randen groen: hier kun je doorheen lopen" },
         { label: "Dicht", action: "close", className: "danger", title: "Gekozen randen rood: hier kun je niet doorheen lopen" },
@@ -6108,6 +6150,7 @@ async function boot() {
     // De Weg zit niet in de gewone werelddata. Vul zijn eigen overlay meteen
     // zodra de documenten er zijn, dus ook na een verse pagina/serverstart.
     roadEditor.sync();
+    wallEditor.sync();
     routeEditor.sync();
     if (state.editorMode === "workbench") renderWorkbench();
     if (state.editorMode === "settings") void renderSettingsTab();
@@ -32456,24 +32499,6 @@ function isWallAreaNode(node) {
   return areaSoort(docBench.doc(node.docKey)?.body) === "muur";
 }
 
-// Kevin 23-11: 🧱 Muur: de gekozen randen worden Muur, Deur, Raam of Open (lijsten in de instellingen, Ctrl+Z werkt).
-async function terrainApplyWallEdges(node, kind, label) {
-  const tool = state.terrainTool;
-  if (tool.edgeEditBusy || !tool.selectedEdgeIndices.length) return false;
-  const currentNode = areaDocNodeById(node.id) || node;
-  const patch = editWallEdges(terrainNodePoints(currentNode).length, currentNode.values || {}, tool.selectedEdgeIndices, kind);
-  tool.edgeEditBusy = true;
-  terrainFinishWithRender();
-  try {
-    const ok = await patchValues(node.id, patch, { historyLabel: "Randen: " + label });
-    if (ok) setStatus("Randen: " + label + ". Oranje = muur, groen = deur, blauw = raam, grijs = open.", "success");
-    return Boolean(ok);
-  } finally {
-    tool.edgeEditBusy = false;
-    terrainFinishWithRender();
-  }
-}
-
 async function terrainApplyEdges(node, action) {
   const tool = state.terrainTool;
   if (tool.edgeEditBusy || !tool.selectedEdgeIndices.length) return false;
@@ -33041,6 +33066,7 @@ function handleTerrainPointerDown(event) {
   terrainRememberPointer(event);
   // Kevin 16-11: bezig met een route (NPC, vijand of vlieger geselecteerd)? Dan is de hoofdweg even niet aan te klikken.
   const routeBusy = Boolean(routeTarget());
+  if (!routeBusy && wallEditor.handlePointerDown(event)) return;
   if (!routeBusy && roadEditor.handlePointerDown(event)) return;
   if (routeEditor.handlePointerDown(event)) return;
   if (handleScatterPointerDown(event)) return;
@@ -33580,6 +33606,7 @@ function handleTerrainPointerMove(event) {
     if (runtime && typeof runtime.previewTransformAt === "function") runtime.previewTransformAt(event.clientX, event.clientY);
     return;
   }
+  if (wallEditor.handlePointerMove(event)) return;
   if (roadEditor.handlePointerMove(event)) return;
   if (routeEditor.handlePointerMove(event)) return;
   if (handleScatterPointerMove(event)) return;
@@ -33635,6 +33662,7 @@ function handleTerrainPointerUp(event) {
     if (runtime && typeof runtime.previewTransformAt === "function") runtime.previewTransformAt(event.clientX, event.clientY);
     return;
   }
+  if (wallEditor.handlePointerUp(event)) return;
   if (roadEditor.handlePointerUp(event)) return;
   if (routeEditor.handlePointerUp(event)) return;
   if (handleScatterPointerUp(event)) return;
@@ -33765,6 +33793,7 @@ function scatterKeyboardOwnsShortcuts(scatterNode, event) {
 function handleEditorKeyDown(event) {
   const meta = event.ctrlKey || event.metaKey;
   if (isEditableTarget(event.target)) return;
+  if (wallEditor.handleKeyDown(event)) return;
   if (roadEditor.handleKeyDown(event)) return;
   if (routeEditor.handleKeyDown(event)) return;
   const shortcutLabel = viewportShortcutDebugLabel(event);
