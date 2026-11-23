@@ -278,6 +278,26 @@ export function roadSplitLink(net, linkIndex, point) {
   return { net: { points: net.points.concat([{ x: point.x, z: point.z }]), links }, index };
 }
 
+// Kevin 23-11 (4): een deur of raam (lijn met soort) van een vaste breedte midden op de plek "at" in een lijn zetten.
+// De lijn wordt drie stukken: zoals hij was, de opening, zoals hij was. Geeft { net, link } of null als hij niet past.
+export function roadInsertOpening(net, linkIndex, at, width, kind) {
+  const link = net.links[linkIndex];
+  const p = link && net.points[link[0]];
+  const q = link && net.points[link[1]];
+  if (!p || !q || !(width > 0)) return null;
+  const dx = q.x - p.x, dz = q.z - p.z;
+  const length = Math.hypot(dx, dz);
+  const margin = 0.05;
+  const half = width / 2;
+  if (length < width + 2 * margin) return null;
+  const ux = dx / length, uz = dz / length;
+  const along = Math.max(margin + half, Math.min(length - margin - half, (at.x - p.x) * ux + (at.z - p.z) * uz));
+  const i = net.points.length;
+  const points = net.points.concat([{ x: p.x + ux * (along - half), z: p.z + uz * (along - half) }, { x: p.x + ux * (along + half), z: p.z + uz * (along + half) }]);
+  const links = net.links.filter((_, k) => k !== linkIndex).concat([relink(link, link[0], i), kind ? [i, i + 1, kind] : [i, i + 1], relink(link, i + 1, link[1])]);
+  return { net: { points, links }, link: links.length - 2 };
+}
+
 // Kopie van punten + de lijnen tussen die punten, verschoven met offset. Geeft { net, indices } (de nieuwe punten).
 export function roadDuplicate(net, pointIndices, offset = { x: 0, z: 0 }) {
   const map = new Map();

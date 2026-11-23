@@ -6,7 +6,7 @@ import { areaBodyFromNodePatch, areaNodeValues } from "../src/shared/authoring/k
 import { compileAreaShapes } from "../src/server/authoring/area-compiler.js";
 import { applyCanonicalBuild } from "../src/server/authoring/runtime-overlay.js";
 import { editWallEdges, wallBlockers, wallEdgeKinds, wallFromAreaValues, wallNetLinks, wallPieces, wallWindows } from "../apps/web/public/shared/walls.js";
-import { roadDelete, roadSplitLink } from "../apps/web/public/shared/road-network.js";
+import { roadDelete, roadInsertOpening, roadSplitLink } from "../apps/web/public/shared/road-network.js";
 import { isPointBlockedByBlocker, createWalkabilityIndex } from "../apps/web/public/shared/movement-kernel.js";
 
 // Kamer van 4 x 4 m. Rand 0 = voorkant (z = 0), rand 1 = rechts, rand 2 = achter, rand 3 = links.
@@ -97,6 +97,16 @@ test("muur als net: T-splitsing, soort per lijn, geldig en het raam schijnt naar
   assert.equal(wallFromAreaValues("muur.huis", areaNodeValues(tall, "muur.huis")).textureFit, "height");
   assert.equal(wall.textureFit, "tile", "standaard overal herhalen");
   assert.equal(validateDocument("area", Object.assign({}, body, { settings: { wallTextureFit: "raar" } })).ok, false);
+  // Bovenkant-textuur gaat mee naar de muur (leeg = donker bij hele hoogte, in de runtime).
+  assert.equal(wallFromAreaValues("muur.huis", areaNodeValues(Object.assign({}, body, { settings: { wallTopTextureAssetId: "steen" } }), "muur.huis")).topTextureAssetId, "steen");
+  assert.equal(wall.topTextureAssetId, null);
+  // Ctrl+V van een gekopieerd raam: midden op de plek in de lijn, even breed; te korte lijn = niets.
+  const line = { points: [{ x: 0, z: 0 }, { x: 10, z: 0 }], links: [[0, 1]] };
+  const put = roadInsertOpening(line, 0, { x: 3, z: 1 }, 1.2, 2);
+  assert.deepEqual(put.net.links, [[0, 2], [2, 3, 2], [3, 1]]);
+  assert.deepEqual(put.net.points.slice(2), [{ x: 2.4, z: 0 }, { x: 3.6, z: 0 }]);
+  assert.equal(put.link, 1);
+  assert.equal(roadInsertOpening(line, 0, { x: 3, z: 0 }, 20, 2), null);
   // Een oude muur zonder lijnen is een gesloten ring.
   assert.deepEqual(wallNetLinks(4, undefined, { openEdges: [3] }), [[0, 1], [1, 2], [2, 3], [3, 0, 3]]);
 });

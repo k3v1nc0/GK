@@ -32,7 +32,7 @@ import { createPlayerPathClient } from "./player-path-client.js?v=20261108-roads
 import { createTerrainLayer, seedTerrainChunk, seedTerrainPaint } from "./terrain-render.js?v=20261123-fix3";
 import { createWaterLayer } from "./water-render.js?v=20261030-terrein6";
 import { createSkyLayer } from "./sky-render.js?v=20261120-sky2";
-import { wallPieces, wallWindows } from "./walls.js?v=20261123-muur3";
+import { wallPieces, wallWindows } from "./walls.js?v=20261123-muur4";
 import { INDOOR_ZONE } from "./indoor-zone.js?v=20261123-binnentab1";
 export {
   effectiveGroundBounds,
@@ -15805,24 +15805,43 @@ function resolveChunkDebugCenter(policy) {
     else record.waiters.push(apply);
   }
 
-  function wallGeometry(wall, groundY) {
+  // Een kopie van een (gedeelde) muur-textuur met eigen herhaling, één keer per plaatje en instelling.
+  const wallTextureVariants = new Map();
+  function wallTextureVariant(texture, key, setup) {
+    const id = texture.uuid + "|" + key;
+    let variant = wallTextureVariants.get(id);
+    if (!variant) {
+      variant = texture.clone();
+      variant.offset.set(0, 0);
+      setup(variant, texture.image);
+      variant.needsUpdate = true;
+      wallTextureVariants.set(id, variant);
+    }
+    return variant;
+  }
+  function imageAspect(image) {
+    return image?.width > 0 && image?.height > 0 ? image.width / image.height : 1;
+  }
+
+  function wallGeometry(wall, groundY, topFit = false) {
     const positions = [];
     const normals = [];
     const uvs = [];
-    const indices = [];
+    const sideIndices = [];
+    const topIndices = [];
     const meters = Math.max(0.1, num(wall.textureMeters, 2));
     // Kevin 23-11 (2): "Hele hoogte": het plaatje één keer over de hele muurhoogte, links-rechts herhalen. u blijft dan in
-    // meters; addWalls deelt hem door de breedte van één plaatje (hoogte x verhouding) zodra het plaatje geladen is.
+    // meters; de textuur-kopie van addWalls deelt hem door de breedte van één plaatje (hoogte x verhouding).
     const fitHeight = wall.textureFit === "height";
     const wallHeight = Math.max(0.2, num(wall.height, 3));
     const across = fitHeight ? 1 : 1 / meters;
     const vOf = function (y) { return fitHeight ? Math.min(0.998, Math.max(0.002, y / wallHeight)) : y / meters; };
-    const quad = function (p0, p1, p2, p3, normal, u1, v0, v1) {
+    const quad = function (list, p0, p1, p2, p3, normal, u1, v0, v1) {
       const base = positions.length / 3;
       positions.push(p0[0], p0[1], p0[2], p1[0], p1[1], p1[2], p2[0], p2[1], p2[2], p3[0], p3[1], p3[2]);
       for (let k = 0; k < 4; k += 1) normals.push(normal[0], normal[1], normal[2]);
       uvs.push(0, v0, u1, v0, u1, v1, 0, v1);
-      indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+      list.push(base, base + 1, base + 2, base, base + 2, base + 3);
     };
     for (const piece of wallPieces(wall)) {
       const dx = piece.bx - piece.ax;
@@ -15845,19 +15864,25 @@ function resolveChunkDebugCenter(policy) {
       const v0 = vOf(piece.from);
       const v1 = vOf(piece.to);
       const t = piece.thickness * across;
-      quad(A0, B0, B1, A1, [-uz, 0, ux], u, v0, v1);
-      quad(C0, D0, D1, C1, [uz, 0, -ux], u, v0, v1);
-      quad(A1, B1, C1, D1, [0, 1, 0], u, 0, t);
-      quad(D0, A0, A1, D1, [-ux, 0, -uz], t, v0, v1);
-      quad(B0, C0, C1, B1, [ux, 0, uz], t, v0, v1);
-      if (piece.from > 0) quad(D0, C0, B0, A0, [0, -1, 0], u, 0, t);
+      // Kevin 23-11 (3): boven- en onderkant apart (groep 1): eigen bovenkant-textuur (één keer over de dikte, langs
+      // herhalen) of, bij Hele hoogte zonder bovenkant-textuur, donker. Geen smal reepje van de zijkant meer.
+      const topU = topFit ? length / Math.max(0.05, piece.thickness) : u;
+      const topV = topFit ? 1 : t;
+      quad(sideIndices, A0, B0, B1, A1, [-uz, 0, ux], u, v0, v1);
+      quad(sideIndices, C0, D0, D1, C1, [uz, 0, -ux], u, v0, v1);
+      quad(topIndices, A1, B1, C1, D1, [0, 1, 0], topU, 0, topV);
+      quad(sideIndices, D0, A0, A1, D1, [-ux, 0, -uz], t, v0, v1);
+      quad(sideIndices, B0, C0, C1, B1, [ux, 0, uz], t, v0, v1);
+      if (piece.from > 0) quad(topIndices, D0, C0, B0, A0, [0, -1, 0], topU, 0, topV);
     }
-    if (!indices.length) return null;
+    if (!sideIndices.length) return null;
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
     geometry.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
     geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
-    geometry.setIndex(indices);
+    geometry.setIndex(sideIndices.concat(topIndices));
+    geometry.addGroup(0, sideIndices.length, 0);
+    geometry.addGroup(sideIndices.length, topIndices.length, 1);
     geometry.computeBoundingSphere();
     return geometry;
   }
@@ -15867,10 +15892,19 @@ function resolveChunkDebugCenter(policy) {
     const groundY = num(worldData?.ground?.y, 0);
     const shadow = staticPropShadowOptions();
     for (const wall of walls) {
-      const geometry = wallGeometry(wall, groundY);
+      const fitHeight = wall.textureFit === "height";
+      const wallHeight = Math.max(0.2, num(wall.height, 3));
+      const topAsset = wall.topTextureAssetId ? assetById(worldData, wall.topTextureAssetId) : null;
+      const geometry = wallGeometry(wall, groundY, Boolean(topAsset));
       if (!geometry) continue;
-      const material = new THREE.MeshStandardMaterial({ color: new THREE.Color(colorOrDefault(wall.color, "#ffffff")), roughness: 0.92, metalness: 0 });
-      const mesh = new THREE.Mesh(geometry, material);
+      const color = new THREE.Color(colorOrDefault(wall.color, "#ffffff"));
+      const material = new THREE.MeshStandardMaterial({ color, roughness: 0.92, metalness: 0 });
+      // Bovenkant: eigen textuur, of donker bij Hele hoogte; anders gewoon hetzelfde materiaal als de zijkant.
+      let topMaterial = material;
+      if (topAsset) topMaterial = new THREE.MeshStandardMaterial({ color: color.clone(), roughness: 0.92, metalness: 0 });
+      else if (fitHeight) topMaterial = new THREE.MeshStandardMaterial({ color: new THREE.Color("#141414"), roughness: 1, metalness: 0 });
+      const materials = topMaterial === material ? material : [material, topMaterial];
+      const mesh = new THREE.Mesh(geometry, materials);
       mesh.name = "wall " + String(wall.id || "");
       mesh.castShadow = shadow.castShadow;
       mesh.receiveShadow = shadow.receiveShadow;
@@ -15879,18 +15913,24 @@ function resolveChunkDebugCenter(policy) {
       if (mode === "editor") mesh.userData.entityId = wall.id;
       const asset = wall.textureAssetId ? assetById(worldData, wall.textureAssetId) : null;
       if (asset) withWallTexture(asset, function (texture) {
-        if (mesh.material !== material) return;
-        const image = texture.image;
-        if (wall.textureFit === "height" && image?.width > 0 && image?.height > 0 && !geometry.userData.fitDone) {
-          // Eén plaatje is zo breed als de muur hoog is maal de verhouding van het plaatje (niets uitgerekt).
-          const scale = 1 / (Math.max(0.2, num(wall.height, 3)) * (image.width / image.height));
-          const uv = geometry.getAttribute("uv");
-          for (let index = 0; index < uv.count; index += 1) uv.setX(index, uv.getX(index) * scale);
-          uv.needsUpdate = true;
-          geometry.userData.fitDone = true;
-        }
-        material.map = texture;
+        if (mesh.material !== materials) return;
+        // Hele hoogte: één plaatje is zo breed als de muur hoog is maal de verhouding van het plaatje (niets uitgerekt).
+        material.map = fitHeight ? wallTextureVariant(texture, "fit:" + wallHeight.toFixed(3), function (variant, image) {
+          variant.wrapS = THREE.RepeatWrapping;
+          variant.wrapT = THREE.ClampToEdgeWrapping;
+          variant.repeat.set(1 / (wallHeight * imageAspect(image)), 1);
+        }) : texture;
         material.needsUpdate = true;
+        requestRender("wall-texture");
+      });
+      if (topAsset) withWallTexture(topAsset, function (texture) {
+        if (mesh.material !== materials) return;
+        topMaterial.map = wallTextureVariant(texture, "top", function (variant, image) {
+          variant.wrapS = THREE.RepeatWrapping;
+          variant.wrapT = THREE.ClampToEdgeWrapping;
+          variant.repeat.set(1 / imageAspect(image), 1);
+        });
+        topMaterial.needsUpdate = true;
         requestRender("wall-texture");
       });
       content.add(mesh);
@@ -15926,6 +15966,64 @@ function resolveChunkDebugCenter(policy) {
     windowGlowTexture = new THREE.CanvasTexture(canvas);
     windowGlowTexture.colorSpace = THREE.SRGBColorSpace;
     return windowGlowTexture;
+  }
+  // Kevin 23-11 (3): de vorm van het licht uit de PNG. Klein plaatje (96x96): alles wat doorzichtig is en de rand raakt
+  // is "naast het raam" (geen licht); de rest is het raam. Heeft het raam doorzichtig glas (tussen de spijlen), dan
+  // geven de spijlen een zachte schaduw. Eén keer per plaatje, op de processor; daarna gewoon een textuur.
+  const windowLightMasks = new Map();
+  function windowLightMask(texture) {
+    if (windowLightMasks.has(texture.uuid)) return windowLightMasks.get(texture.uuid);
+    let mask = null;
+    try {
+      const size = 96;
+      const canvas = document.createElement("canvas");
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(texture.image, 0, 0, size, size);
+      const data = ctx.getImageData(0, 0, size, size).data;
+      const clear = function (index) { return data[index * 4 + 3] <= 40; };
+      const outside = new Uint8Array(size * size);
+      const stack = [];
+      const visit = function (x, y) {
+        const index = y * size + x;
+        if (outside[index] || !clear(index)) return;
+        outside[index] = 1;
+        stack.push(index);
+      };
+      for (let k = 0; k < size; k += 1) { visit(k, 0); visit(k, size - 1); visit(0, k); visit(size - 1, k); }
+      while (stack.length) {
+        const index = stack.pop();
+        const x = index % size;
+        const y = (index - x) / size;
+        if (x > 0) visit(x - 1, y);
+        if (x < size - 1) visit(x + 1, y);
+        if (y > 0) visit(x, y - 1);
+        if (y < size - 1) visit(x, y + 1);
+      }
+      let inside = 0;
+      let glass = 0;
+      for (let index = 0; index < outside.length; index += 1) {
+        if (outside[index]) continue;
+        inside += 1;
+        if (clear(index)) glass += 1;
+      }
+      const seeThrough = inside > 0 && glass / inside > 0.15;
+      const out = ctx.createImageData(size, size);
+      for (let index = 0; index < outside.length; index += 1) {
+        const value = outside[index] ? 0 : (seeThrough && !clear(index) ? 0.3 : 1);
+        out.data[index * 4] = out.data[index * 4 + 1] = out.data[index * 4 + 2] = Math.round(255 * value);
+        out.data[index * 4 + 3] = 255;
+      }
+      ctx.putImageData(out, 0, 0);
+      mask = new THREE.CanvasTexture(canvas);
+      mask.wrapS = THREE.ClampToEdgeWrapping;
+      mask.wrapT = THREE.ClampToEdgeWrapping;
+    } catch (error) {
+      mask = null;
+    }
+    windowLightMasks.set(texture.uuid, mask);
+    return mask;
   }
   function addWallWindow(worldData, wall, win, groundY) {
     const baseY = groundY + num(win.baseY, 0);
@@ -15978,30 +16076,13 @@ function resolveChunkDebugCenter(policy) {
     const panel = mark(new THREE.Mesh(new THREE.PlaneGeometry(width, height), panelMaterial), "window", 2, true);
     panel.position.set(win.x + win.nx * 0.012, baseY + (win.sill + win.top) / 2, win.z + win.nz * 0.012);
     panel.rotation.y = yaw;
-    const asset = wall.windowTextureAssetId ? assetById(worldData, wall.windowTextureAssetId) : null;
-    if (asset) withWallTexture(asset, function (texture) {
-      if (panel.material !== panelMaterial) return;
-      // Eén kopie per plaatje zonder herhalen: het raam is één plaatje over het hele vlak (de muur herhaalt wel).
-      let single = texture.userData.gkWindowSingle;
-      if (!single) {
-        single = texture.clone();
-        single.wrapS = THREE.ClampToEdgeWrapping;
-        single.wrapT = THREE.ClampToEdgeWrapping;
-        single.repeat.set(1, 1);
-        single.offset.set(0, 0);
-        single.needsUpdate = true;
-        texture.userData.gkWindowSingle = single;
-      }
-      panelMaterial.uniforms.map.value = single;
-      panelMaterial.uniforms.hasMap.value = 1;
-      requestRender("window-texture");
-    });
     // Zonnevlek op de vloer: van "Raam vanaf" tot iets verder dan "Raam tot" de kamer in (zon schuin van boven), iets breder.
     const near = Math.max(0.15, win.sill * 0.9);
     const far = near + Math.max(0.6, height * 1.25);
     const spread = 0.12 * (far - near);
+    // Langs de muur in dezelfde richting als de x-as van het raamvlak, zodat links en rechts van de PNG kloppen.
     const corner = function (along, inward) {
-      return [win.x + win.ux * along + win.nx * inward, win.z + win.uz * along + win.nz * inward];
+      return [win.x + win.nz * along + win.nx * inward, win.z - win.nx * along + win.nz * inward];
     };
     const floorY = baseY + 0.03;
     const quad = function (points, uvs) {
@@ -16014,9 +16095,53 @@ function resolveChunkDebugCenter(policy) {
     };
     const n0 = corner(-width / 2, near); const n1 = corner(width / 2, near);
     const f1 = corner(width / 2 + spread, far); const f0 = corner(-width / 2 - spread, far);
-    const patchMaterial = new THREE.MeshBasicMaterial({ map: windowGlowGradient(), color: new THREE.Color("#fff1c9"), transparent: true, opacity: 0.5,
-      blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+    // De vlek: zonder raam-PNG zachte randen; met PNG de vorm van het raam (windowLightMask). u loopt net als het raam
+    // van links naar rechts, v van de onderkant van het raam (dichtbij) naar de bovenkant (ver weg).
+    const patchMaterial = new THREE.ShaderMaterial({
+      uniforms: { map: { value: null }, hasMap: { value: 0 }, color: { value: new THREE.Color("#fff1c9") }, opacity: { value: 0.5 } },
+      vertexShader: "varying vec2 vUv;\nvoid main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
+      fragmentShader: [
+        "uniform sampler2D map; uniform float hasMap; uniform vec3 color; uniform float opacity;",
+        "varying vec2 vUv;",
+        "void main() {",
+        "  float edge = min(vUv.x, 1.0 - vUv.x);",
+        "  float shape; float fade;",
+        "  if (hasMap > 0.5) {",
+        "    shape = texture2D(map, vUv).r * clamp(edge / 0.03, 0.0, 1.0);",
+        "    fade = mix(1.0, 0.6, vUv.y);",
+        "  } else {",
+        "    float side = clamp(edge / 0.18, 0.0, 1.0);",
+        "    shape = side * side;",
+        "    fade = clamp(vUv.y / 0.12, 0.0, 1.0) * pow(1.0 - vUv.y, 1.2);",
+        "  }",
+        "  float alpha = clamp(opacity * shape * fade, 0.0, 1.0);",
+        "  if (alpha < 0.004) discard;",
+        "  gl_FragColor = vec4(color, alpha);",
+        "  #include <colorspace_fragment>",
+        "}"
+      ].join("\n"),
+      transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide,
+      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2
+    });
     mark(new THREE.Mesh(quad([n0[0], floorY, n0[1], n1[0], floorY, n1[1], f1[0], floorY, f1[1], f0[0], floorY, f0[1]], [0, 0, 1, 0, 1, 1, 0, 1]), patchMaterial), "window light", 3);
+    const asset = wall.windowTextureAssetId ? assetById(worldData, wall.windowTextureAssetId) : null;
+    if (asset) withWallTexture(asset, function (texture) {
+      if (panel.material !== panelMaterial) return;
+      // Eén kopie per plaatje zonder herhalen: het raam is één plaatje over het hele vlak (de muur herhaalt wel).
+      panelMaterial.uniforms.map.value = wallTextureVariant(texture, "single", function (variant) {
+        variant.wrapS = THREE.ClampToEdgeWrapping;
+        variant.wrapT = THREE.ClampToEdgeWrapping;
+        variant.repeat.set(1, 1);
+      });
+      panelMaterial.uniforms.hasMap.value = 1;
+      // Kevin 23-11 (3): de zonnevlek krijgt de vorm van jouw raam (uit de doorzichtigheid van de PNG).
+      const mask = windowLightMask(texture);
+      if (mask) {
+        patchMaterial.uniforms.map.value = mask;
+        patchMaterial.uniforms.hasMap.value = 1;
+      }
+      requestRender("window-texture");
+    });
     // Lichtbundel: van de bovenkant van het raam naar het verre eind van de vlek (heel vaag, alleen zichtbaar van opzij).
     const w0 = corner(-width / 2, 0.02); const w1 = corner(width / 2, 0.02);
     const topY = baseY + win.top;
@@ -16031,13 +16156,14 @@ function resolveChunkDebugCenter(policy) {
     const day = mode === "game" ? Math.max(0, Math.min(1, daylightLevel)) : 1;
     for (const record of windowLightRecords) {
       const strength = record.light * (0.2 + 0.8 * day);
-      record.patchMaterial.color.copy(windowNightColor).lerp(windowDayColor, day);
-      record.beamMaterial.color.copy(record.patchMaterial.color);
-      record.patchMaterial.opacity = Math.min(1, 0.45 * strength);
+      const color = record.patchMaterial.uniforms.color.value;
+      color.copy(windowNightColor).lerp(windowDayColor, day);
+      record.beamMaterial.color.copy(color);
+      record.patchMaterial.uniforms.opacity.value = Math.min(1, 0.45 * strength);
       record.beamMaterial.opacity = Math.min(0.4, 0.09 * strength);
       // Het plaatje zelf: overdag zoals het is, 's nachts donkerder. De gloed volgt Raamlicht en de dag.
       record.panelMaterial.uniforms.tint.value.setScalar(0.35 + 0.65 * day);
-      record.panelMaterial.uniforms.glowColor.value.copy(record.patchMaterial.color);
+      record.panelMaterial.uniforms.glowColor.value.copy(color);
       record.panelMaterial.uniforms.glow.value = Math.min(1.5, 0.8 * strength);
     }
     requestRender("window-light");

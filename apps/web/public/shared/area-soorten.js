@@ -3,7 +3,7 @@
 // verhuisd pad, bos of blokkade er precies hetzelfde uitziet. De instellingen per soort staan in "settings";
 // hun regels (type, min, max, keuzes) komen uit de oude nodedefinitie, de naam/icoon/hulp staat hier.
 import { NODE_TYPES } from "./node-types.js?v=20261106-perf1";
-import { WALL_DEFAULTS, WALL_EDGE_KEYS, wallNetLinks } from "./walls.js?v=20261123-muur3";
+import { WALL_DEFAULTS, WALL_EDGE_KEYS, wallNetLinks } from "./walls.js?v=20261123-muur4";
 
 // Zelfde vorm als help() in src/shared/authoring/kinds/ui.js (dit bestand draait ook in de browser).
 const help = (waarvoor, goed, probleem) => Object.freeze({ waarvoor, goed, probleem });
@@ -26,6 +26,9 @@ const WALL_FIELDS = [
   { key: "wallTextureFit", spec: { type: "select", label: "Textuur passen", icon: "🔁", default: "tile", more: false,
     options: [{ value: "tile", label: "Overal herhalen", icon: "🔁" }, { value: "height", label: "Hele hoogte, links-rechts herhalen", icon: "↕️" }],
     help: help("Hoe het plaatje op de muur komt.", "Overal herhalen: bakstenen of tegels (grootte = Textuurmaat). Hele hoogte: een plaatje van een hele muur (met banieren, ramen) past één keer van vloer tot bovenkant en herhaalt alleen naar links en rechts, zonder uitrekken.", "Plaatje te vaak boven elkaar → kies Hele hoogte.") } },
+  // Kevin 23-11 (3): de bovenkant van de muur apart (bij Hele hoogte geen reepje van de zijkant). Leeg + Hele hoogte = donker.
+  { key: "wallTopTextureAssetId", spec: { type: "asset", label: "Bovenkant-textuur", icon: "⬛", default: null, more: false, assetTypes: ["texture", "image"],
+    help: help("Het plaatje op de bovenkant van de muur (en onder de deur- en raambogen).", "Past één keer over de dikte en herhaalt langs de muur. Leeg: bij Hele hoogte donker, anders dezelfde textuur als de muur.", "Bovenkant ziet er raar uit → sleep een stenen textuur hierop, of laat leeg voor donker.") } },
   wallNumber("wallTextureMeters", "Textuurmaat (m)", "📐", 0.1, 50, WALL_DEFAULTS.textureMeters, 0.1, [0.25, 10], true,
     "Hoeveel meter muur één keer de textuur is (bij Overal herhalen).", "1 tot 3 m. Bakstenen: 1 m, grote stenen: 3 m.", "Stenen te groot → kleiner getal. Te klein en druk → groter."),
   wallNumber("doorHeight", "Deurhoogte (m)", "🚪", 0.5, 50, WALL_DEFAULTS.doorHeight, 0.1, [1.5, 5], true,

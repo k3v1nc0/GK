@@ -1,6 +1,6 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261123-muur3";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261123-muur4";
 import { edgeBetweenPoints, editClosedEdges } from "./walkable-edge-tools.js?v=20261031-randen1";
-import { createTerrainEditor } from "./terrain-editor.js?v=20261123-muur3";
+import { createTerrainEditor } from "./terrain-editor.js?v=20261123-muur4";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261106-perf1";
 import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20261106-perf1";
 import {
@@ -11,14 +11,14 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261106-perf1";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261106-perf1";
-import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261123-muur3";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261123-muur4";
 import { createAssetPicker } from "./mini-asset-picker.js?v=20261106-thumbs150";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
 import { createDocDrop, docKeyFromRuntimeId, docSideFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261122-doorgang1";
-import { createRoadEditor } from "./road-editor.js?v=20261123-muur3";
+import { createRoadEditor } from "./road-editor.js?v=20261123-muur4";
 import { createRouteEditor } from "./route-editor.js?v=20261116-herstel1";
-import { AREA_EDITOR_PREFIX, AREA_SOORTEN, AREA_SOORT_ORDER, areaBodyFromNodePatch, areaCirclePointsMm, areaNodeValues, areaSoort } from "../shared/area-soorten.js?v=20261123-muur3";
-import { WALL_EDGE_KEYS, wallLinkWithKind, wallNetLinks } from "../shared/walls.js?v=20261123-muur3";
+import { AREA_EDITOR_PREFIX, AREA_SOORTEN, AREA_SOORT_ORDER, areaBodyFromNodePatch, areaCirclePointsMm, areaNodeValues, areaSoort } from "../shared/area-soorten.js?v=20261123-muur4";
+import { WALL_EDGE_KEYS, wallLinkWithKind, wallNetLinks } from "../shared/walls.js?v=20261123-muur4";
 import { INDOOR_ZONE, inIndoorZone } from "../shared/indoor-zone.js?v=20261123-binnentab1";
 import { removeVisualObjects, visualModelsForRelation, visualObjectRelations } from "./visual-object-relations.js?v=20261106-perf1";
 import { FIELD_HELP_STATUSES, createSemanticFieldHelpRegistry, formatSemanticFieldHelp, semanticFieldHelpEntry } from "./semantic-field-help.js?v=20261012-semantic-help1";
@@ -6354,6 +6354,9 @@ async function boot() {
   renderUnsaved();
   void refreshViewport({ force: true }).then(function () {
     restoreResumeCameraAfterWorldLoad();
+    // Kevin 23-11 (2): stond de camera bij het verversen in de Binnen-zone, dan meteen weer de tab Binnen (de tab Werkbank
+    // houdt zijn eigen, buiten-camera).
+    syncIndoorViewWithCamera();
     return refreshValidation();
   });
 }
@@ -26033,7 +26036,10 @@ function currentEditorResumePayload() {
       questTimelineSelectedQuestId: state.questTimelineSelectedQuestId,
       questTimelineSelectedStepId: state.questTimelineSelectedStepId,
       questTimelineSelectedDialogueId: state.questTimelineSelectedDialogueId,
-      questTimelineSelectedEntryId: state.questTimelineSelectedEntryId
+      questTimelineSelectedEntryId: state.questTimelineSelectedEntryId,
+      // Kevin 23-11 (2): elke tab zijn eigen camera, ook na verversen (Werkbank = buiten, 🏠 Binnen = in de zone).
+      outsideViewState: state.outsideViewState,
+      indoorViewState: state.indoorViewState
     },
     drafts: {
       documents: typeof docBench.resumeState === "function" ? docBench.resumeState() : null,
@@ -26078,6 +26084,9 @@ function applyEditorResumeState(resume) {
   state.storedCurrentGroupId = stringOrNull(ui.currentGroupId) || state.storedCurrentGroupId;
   state.currentGroupId = state.storedCurrentGroupId;
   if (typeof ui.authoringOverviewActive === "boolean") state.authoringOverviewActive = ui.authoringOverviewActive;
+  const viewSpot = function (value) { return value && Number.isFinite(Number(value.x)) && Number.isFinite(Number(value.z)) ? { x: Number(value.x), z: Number(value.z) } : null; };
+  state.outsideViewState = viewSpot(ui.outsideViewState) || state.outsideViewState;
+  state.indoorViewState = viewSpot(ui.indoorViewState) || state.indoorViewState;
   state.selectedNodeId = stringOrNull(ui.selectedNodeId);
   state.selectedNodeIds = Array.isArray(ui.selectedNodeIds) ? ui.selectedNodeIds.filter(function (id) { return typeof id === "string"; }).slice(0, 500) : [];
   state.selectedEdgeIds = Array.isArray(ui.selectedEdgeIds) ? ui.selectedEdgeIds.filter(function (id) { return typeof id === "string"; }).slice(0, 500) : [];

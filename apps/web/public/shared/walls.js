@@ -76,6 +76,7 @@ export function wallFromAreaValues(id, values = {}) {
     doorHeight: clamp(num(values.doorHeight, WALL_DEFAULTS.doorHeight), 0.5, height),
     windowSill: clamp(num(values.windowSill, WALL_DEFAULTS.windowSill), 0, height),
     windowTop: clamp(num(values.windowTop, WALL_DEFAULTS.windowTop), 0, height),
+    topTextureAssetId: values.wallTopTextureAssetId || null,
     windowTextureAssetId: values.windowTextureAssetId || null,
     windowLight: clamp(num(values.windowLight, WALL_DEFAULTS.windowLight), 0, 3),
     links: wallNetLinks(points.length, values.links, values).map((link) => ({ a: link[0], b: link[1], kind: wallLinkKind(link) }))

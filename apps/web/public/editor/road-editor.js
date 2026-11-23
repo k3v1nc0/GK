@@ -5,8 +5,8 @@
 // Wijzigingen staan meteen in beeld; opslaan (met Ctrl+Z) loopt op de achtergrond, één tegelijk.
 // Kevin 23-11 (2): hetzelfde gereedschap bewerkt ook een 🧱 Muur (deps.channel "wall", eigen toNet/toBody): de soort per
 // lijn (muur, deur, raam, open) is het derde getal van een lijn en gaat mee bij alles (setLinkKind zet hem).
-import { areaRoadLinks } from "../shared/area-soorten.js?v=20261123-muur3";
-import { roadAddPoint, roadClip, roadConnect, roadDelete, roadDuplicate, roadHasLink, roadMerge, roadParts, roadPaste, roadSplitLink } from "../shared/road-network.js?v=20261123-muur2";
+import { areaRoadLinks } from "../shared/area-soorten.js?v=20261123-muur4";
+import { roadAddPoint, roadClip, roadConnect, roadDelete, roadDuplicate, roadHasLink, roadInsertOpening, roadMerge, roadParts, roadPaste, roadSplitLink } from "../shared/road-network.js?v=20261123-muur4";
 
 const toRoadNet = (body) => ({ points: (body?.pointsMm || []).map((p) => ({ x: p[0] / 1000, z: p[1] / 1000 })), links: areaRoadLinks(body) });
 const toRoadBody = (body, net) => {
@@ -75,7 +75,7 @@ export function createRoadEditor(deps) {
     const text = (prefix ? icon + " " + prefix + " · " : icon + " " + name + " · ") + net.points.length + " punten, " + net.links.length + (net.links.length === 1 ? " lijn" : " lijnen")
       + (selPoints.length ? " · " + selPoints.length + " punt(en) gekozen" : "") + (selLinks.length ? " · " + selLinks.length + " lijn(en) gekozen" : "")
       + (parts > 1 ? " · ⚠️ " + parts + " losse delen: kies een punt van elk deel en druk F" : "")
-      + (channel === "wall" && selLinks.length ? " · Muur, Deur, Raam of Open: kaart, onder ⚙️ meer" : "")
+      + (channel === "wall" && selLinks.length ? " · Muur, Deur, Raam of Open: kaart, onder ⚙️ meer · Ctrl+C op een deur/raam, dan Ctrl+V op een muur = dezelfde erin" : "")
       + (others > 0 ? " · Er " + (others === 1 ? "is nog 1 andere Weg" : "zijn nog " + others + " andere Wegen") + ": Ctrl+J voegt ze hierbij" : "");
     deps.setStatus(text, "");
   }
@@ -227,7 +227,10 @@ export function createRoadEditor(deps) {
     const pending = placement;
     placement = null;
     if (pending.kind === "split") {
-      const k = pending.linkIndex;
+      // Kevin 23-11 (4): klik je op een (andere) lijn, dan komt het punt daar; de twee helften blijven gekozen, zodat
+      // je meteen weer F kunt drukken voor het volgende punt (niet eerst de muur opnieuw aanklikken).
+      const under = pick(clientX, clientY);
+      const k = under?.kind === "link" ? under.index : pending.linkIndex;
       const link = net.links[k];
       if (!link) { hint(); return false; }
       const [a, b] = link;
@@ -236,7 +239,8 @@ export function createRoadEditor(deps) {
       const t = Math.max(0.05, Math.min(0.95, ((ground.x - p.x) * dx + (ground.z - p.z) * dz) / length2));
       const at = { x: p.x + dx * t, z: p.z + dz * t };
       const split = roadSplitLink(net, k, at);
-      return commit(split.net, "punt in de lijn gezet", { points: [split.index], links: [] });
+      const count = split.net.links.length;
+      return commit(split.net, "punt in de lijn gezet (F = nog een punt)", { points: [], links: [count - 2, count - 1] });
     }
     const from = Number.isInteger(pending.from) && net.points[pending.from] ? pending.from : null;
     const hit = pick(clientX, clientY, { exclude: from === null ? [] : [from] });
@@ -271,8 +275,31 @@ export function createRoadEditor(deps) {
     if (!startSession("move", null, null, base)) { net = base; render(); }
   }
 
+  // Kevin 23-11 (4): een gekopieerde deur, raam of opening (één lijn met soort) zet Ctrl+V midden op de muurlijn onder de
+  // muis, even breed als het origineel. Zo krijgen alle ramen dezelfde breedte zonder punten te mikken.
+  const OPENING_NAMES = { 1: "deur", 2: "raam", 3: "opening" };
+  function openingOf(clip) {
+    if (channel !== "wall" || !clip || clip.points.length !== 2 || clip.links.length !== 1) return null;
+    const kind = clip.links[0][2];
+    if (!OPENING_NAMES[kind]) return null;
+    const [a, b] = clip.points;
+    return { kind, name: OPENING_NAMES[kind], width: Math.hypot(b.x - a.x, b.z - a.z) };
+  }
+  const meters = (value) => value.toFixed(2).replace(".", ",") + " m";
+
   function paste() {
     if (!clipboard) { deps.setStatus("Nog niets gekopieerd (Ctrl+C).", ""); return; }
+    const opening = openingOf(clipboard);
+    if (opening) {
+      const p = deps.lastPointer();
+      const hit = p ? pick(p.clientX, p.clientY) : null;
+      const ground = mouseGround();
+      if (hit?.kind !== "link" || !ground) { deps.setStatus("Wijs met de muis een muurlijn aan en druk Ctrl+V: daar komt het " + opening.name + " van " + meters(opening.width) + ".", "error"); return; }
+      const result = roadInsertOpening(net, hit.index, ground, opening.width, opening.kind);
+      if (!result) { deps.setStatus("Deze lijn is te kort voor een " + opening.name + " van " + meters(opening.width) + ".", "error"); return; }
+      commit(result.net, opening.name + " van " + meters(opening.width) + " in de muur gezet (Ctrl+V = nog een)", { points: [], links: [result.link] });
+      return;
+    }
     const ground = mouseGround();
     if (!ground) { deps.setStatus("Geen grond onder de muis.", "error"); return; }
     const pasted = roadPaste(net, clipboard, ground);
@@ -341,7 +368,9 @@ export function createRoadEditor(deps) {
       if (key === "a") { selPoints = net.points.map((_, i) => i); selLinks = []; render(); hint(); return consume(); }
       if (key === "c") {
         clipboard = roadClip(net, sessionIndices());
-        deps.setStatus(clipboard ? icon + " " + clipboard.points.length + " punt(en) gekopieerd. Ctrl+V plakt bij de muis." : "Kies eerst wat je wilt kopiëren.", clipboard ? "" : "error");
+        const opening = openingOf(clipboard);
+        if (opening) deps.setStatus(icon + " " + opening.name[0].toUpperCase() + opening.name.slice(1) + " van " + meters(opening.width) + " gekopieerd. Wijs een muurlijn aan en druk Ctrl+V: daar komt hetzelfde " + opening.name + ".", "");
+        else deps.setStatus(clipboard ? icon + " " + clipboard.points.length + " punt(en) gekopieerd. Ctrl+V plakt bij de muis." : "Kies eerst wat je wilt kopiëren.", clipboard ? "" : "error");
         return consume();
       }
       if (key === "v") { paste(); return consume(); }

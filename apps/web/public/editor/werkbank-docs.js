@@ -7,7 +7,7 @@ import { convertShape } from "./werkbank-world.js?v=20261122-doorgang1";
 import { renderUsers } from "./werkbank-users.js?v=20261115-fase10";
 import { computeDamage, rollLoot } from "../shared/combat-math.js";
 import { cleanXpCurve, xpCostAt, xpTotals } from "../shared/level-math.js";
-import { areaCenterMm, areaCirclePointsMm, areaRectPointsMm, areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261123-muur3";
+import { areaCenterMm, areaCirclePointsMm, areaRectPointsMm, areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261123-muur4";
 import { QUEST_START_MODES, hasOwnSteps, objectiveText, questGraphIssues, questStartIssues, questStartMode, requirementText, stepsFromSimple } from "../shared/quest-graph.js?v=20261110-fase5";
 import { openQuestBuilder } from "./quest-builder.js?v=20261110-fase5";
 

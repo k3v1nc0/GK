@@ -1072,7 +1072,7 @@ function withGame(world, source, options) {
     // 5-11: plaatjes in het startvenster van quests.
     .concat(quests.map((quest) => quest?.imageAssetId))
     // Kevin 23-11: de textuur van een 🧱 Muur en van zijn ramen.
-    .concat((world.walls || []).flatMap((wall) => [wall?.textureAssetId, wall?.windowTextureAssetId]))
+    .concat((world.walls || []).flatMap((wall) => [wall?.textureAssetId, wall?.topTextureAssetId, wall?.windowTextureAssetId]))
     .concat((player.classes || []).flatMap((entry) => entry.models || [])).filter(Boolean)));
   const known = new Map((world.assets || []).map((asset) => [asset.id, asset]));
   // Paden van thumbnails kunnen na een import/migratie wijzigen zonder dat de
