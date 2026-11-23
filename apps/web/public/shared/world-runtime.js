@@ -29,11 +29,12 @@ import {
 } from "./movement-kernel.js";
 import { terrainHeightAt } from "./terrain.js";
 import { createPlayerPathClient } from "./player-path-client.js?v=20261108-roads9";
-import { createTerrainLayer, seedTerrainChunk, seedTerrainPaint } from "./terrain-render.js?v=20261123-fix3";
+import { createTerrainLayer, seedTerrainChunk, seedTerrainPaint } from "./terrain-render.js?v=20261123-muur6";
 import { createWaterLayer } from "./water-render.js?v=20261030-terrein6";
 import { createSkyLayer } from "./sky-render.js?v=20261120-sky2";
 import { wallPieces, wallWindows } from "./walls.js?v=20261123-muur4";
 import { INDOOR_ZONE } from "./indoor-zone.js?v=20261123-binnentab1";
+import { createSrgbTextureLoader } from "./srgb-texture-loader.js?v=20261123-muur6";
 export {
   effectiveGroundBounds,
   effectiveWorldGroundBounds,
@@ -4732,7 +4733,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   // De lokale Three.js-installatie bevat de JS-decoder, maar geen WASM-bestand.
   dracoLoader.setDecoderConfig({ type: "js" });
   loader.setDRACOLoader(dracoLoader);
-  const textureLoader = new THREE.TextureLoader();
+  const textureLoader = createSrgbTextureLoader();
   const modelCache = new Map();
   const entityRoots = new Map();
   const solids = [];
@@ -4783,7 +4784,6 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let daylightLevel = 1;
   // Kevin 23-11 (2): ramen op muren (addWallWindow); hun licht volgt dag en nacht.
   const windowLightRecords = [];
-  let windowGlowTexture = null;
   const windowDayColor = new THREE.Color("#fff1c9");
   const windowNightColor = new THREE.Color("#8fb0ff");
   // Binnenruimtes (22-11): zie setIndoor. indoorOutside = achtergrond en mist van buiten, om terug te zetten.
@@ -15944,29 +15944,6 @@ function resolveChunkDebugCenter(policy) {
   // Kevin 23-11 (2): een raam op een Raam-lijn. Geen gat naar het zwart buiten en geen echte lamp (te zwaar voor de oude
   // laptop): een gloeiend vlak met de raam-textuur, een zachte zonnevlek op de vloer en een vage lichtbundel ertussen.
   // Alleen doorzichtige vlakken; overdag fel en warm, 's nachts zwak en blauw (applyWindowLights bij dag en nacht).
-  function windowGlowGradient() {
-    if (windowGlowTexture) return windowGlowTexture;
-    const canvas = document.createElement("canvas");
-    canvas.width = 64;
-    canvas.height = 64;
-    const ctx = canvas.getContext("2d");
-    const image = ctx.createImageData(64, 64);
-    for (let y = 0; y < 64; y += 1) {
-      for (let x = 0; x < 64; x += 1) {
-        // Zachte zijkanten (u) en naar het eind toe vager (v = 0 bij de muur, 1 ver weg).
-        const u = (x + 0.5) / 64; const v = (y + 0.5) / 64;
-        const side = Math.min(1, Math.min(u, 1 - u) / 0.18);
-        const fade = Math.min(1, v / 0.12) * Math.pow(1 - v, 1.2);
-        const value = Math.round(255 * side * side * fade);
-        const index = (y * 64 + x) * 4;
-        image.data[index] = 255; image.data[index + 1] = 255; image.data[index + 2] = 255; image.data[index + 3] = value;
-      }
-    }
-    ctx.putImageData(image, 0, 0);
-    windowGlowTexture = new THREE.CanvasTexture(canvas);
-    windowGlowTexture.colorSpace = THREE.SRGBColorSpace;
-    return windowGlowTexture;
-  }
   // Kevin 23-11 (3): de vorm van het licht uit de PNG. Klein plaatje (96x96): alles wat doorzichtig is en de rand raakt
   // is "naast het raam" (geen licht); de rest is het raam. Heeft het raam doorzichtig glas (tussen de spijlen), dan
   // geven de spijlen een zachte schaduw. Eén keer per plaatje, op de processor; daarna gewoon een textuur.
@@ -16017,6 +15994,8 @@ function resolveChunkDebugCenter(policy) {
       }
       ctx.putImageData(out, 0, 0);
       mask = new THREE.CanvasTexture(canvas);
+      // Een omgedraaid ingelezen plaatje (flipY uit) staat ook omgedraaid op het canvas.
+      mask.flipY = texture.flipY !== false;
       mask.wrapS = THREE.ClampToEdgeWrapping;
       mask.wrapT = THREE.ClampToEdgeWrapping;
     } catch (error) {
@@ -16084,7 +16063,8 @@ function resolveChunkDebugCenter(policy) {
     const corner = function (along, inward) {
       return [win.x + win.nz * along + win.nx * inward, win.z - win.nx * along + win.nz * inward];
     };
-    const floorY = baseY + 0.03;
+    // 6 cm boven de voet van de muur: de vloer ligt 2 cm hoger dan de grond, met 3 cm flikkerde de vlek tijdens het lopen.
+    const floorY = baseY + 0.06;
     const quad = function (points, uvs) {
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
@@ -16121,9 +16101,81 @@ function resolveChunkDebugCenter(policy) {
         "}"
       ].join("\n"),
       transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide,
-      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2
+      polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4
     });
     mark(new THREE.Mesh(quad([n0[0], floorY, n0[1], n1[0], floorY, n1[1], f1[0], floorY, f1[1], f0[0], floorY, f0[1]], [0, 0, 1, 0, 1, 1, 0, 1]), patchMaterial), "window light", 3);
+    // Kevin 23-11 (3): lichtbundels (god rays) in de vorm van het raam. Goedkoop: 8 doorzichtige plakjes tussen het raam
+    // en de vlek op de vloer, elk met dezelfde raamvorm, samen één mesh (één tekenbeurt). Van opzij gezien vervagen de
+    // plakjes, zodat je geen losse lijnen ziet. Geen echte volumetrische belichting (te zwaar voor de oude laptop).
+    const SLICES = 8;
+    const wallAt = function (u, v) {
+      const p = corner((u - 0.5) * width, 0.02);
+      return [p[0], baseY + win.sill + v * height, p[1]];
+    };
+    const floorAt = function (u, v) {
+      const p = corner((u - 0.5) * (width + 2 * spread * v), near + v * (far - near));
+      return [p[0], floorY, p[1]];
+    };
+    const beamPositions = [];
+    const beamNormals = [];
+    const beamUvs = [];
+    const beamSlice = [];
+    const beamIndex = [];
+    for (let k = 0; k < SLICES; k += 1) {
+      const t = 0.08 + 0.84 * (k + 0.5) / SLICES;
+      const at = function (u, v) {
+        const a = wallAt(u, v); const b = floorAt(u, v);
+        return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+      };
+      const c = [at(0, 0), at(1, 0), at(1, 1), at(0, 1)];
+      const e1 = [c[1][0] - c[0][0], c[1][1] - c[0][1], c[1][2] - c[0][2]];
+      const e2 = [c[3][0] - c[0][0], c[3][1] - c[0][1], c[3][2] - c[0][2]];
+      const n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+      const nl = Math.hypot(n[0], n[1], n[2]) || 1;
+      const base = beamPositions.length / 3;
+      for (const point of c) {
+        beamPositions.push(point[0], point[1], point[2]);
+        beamNormals.push(n[0] / nl, n[1] / nl, n[2] / nl);
+        beamSlice.push(t);
+      }
+      beamUvs.push(0, 0, 1, 0, 1, 1, 0, 1);
+      beamIndex.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    }
+    const beamGeometry = new THREE.BufferGeometry();
+    beamGeometry.setAttribute("position", new THREE.Float32BufferAttribute(beamPositions, 3));
+    beamGeometry.setAttribute("normal", new THREE.Float32BufferAttribute(beamNormals, 3));
+    beamGeometry.setAttribute("uv", new THREE.Float32BufferAttribute(beamUvs, 2));
+    beamGeometry.setAttribute("slice", new THREE.Float32BufferAttribute(beamSlice, 1));
+    beamGeometry.setIndex(beamIndex);
+    beamGeometry.computeBoundingSphere();
+    const beamMaterial = new THREE.ShaderMaterial({
+      uniforms: { map: { value: null }, hasMap: { value: 0 }, color: { value: new THREE.Color("#fff1c9") }, opacity: { value: 0.035 } },
+      vertexShader: [
+        "attribute float slice;",
+        "varying vec2 vUv; varying float vSlice; varying float vFacing;",
+        "void main() {",
+        "  vUv = uv; vSlice = slice;",
+        "  vec4 mv = modelViewMatrix * vec4(position, 1.0);",
+        "  vFacing = abs(dot(normalize(normalMatrix * normal), normalize(-mv.xyz)));",
+        "  gl_Position = projectionMatrix * mv;",
+        "}"
+      ].join("\n"),
+      fragmentShader: [
+        "uniform sampler2D map; uniform float hasMap; uniform vec3 color; uniform float opacity;",
+        "varying vec2 vUv; varying float vSlice; varying float vFacing;",
+        "void main() {",
+        "  float edge = min(vUv.x, 1.0 - vUv.x);",
+        "  float shape = hasMap > 0.5 ? texture2D(map, vUv).r * clamp(edge / 0.03, 0.0, 1.0)",
+        "    : pow(clamp(edge / 0.18, 0.0, 1.0), 2.0) * clamp(min(vUv.y, 1.0 - vUv.y) / 0.15, 0.0, 1.0);",
+        "  float alpha = opacity * shape * (1.0 - 0.6 * vSlice) * smoothstep(0.05, 0.45, vFacing);",
+        "  if (alpha < 0.002) discard;",
+        "  gl_FragColor = vec4(color, alpha);",
+        "  #include <colorspace_fragment>",
+        "}"
+      ].join("\n"),
+      transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide
+    });
+    mark(new THREE.Mesh(beamGeometry, beamMaterial), "window beam", 4);
     const asset = wall.windowTextureAssetId ? assetById(worldData, wall.windowTextureAssetId) : null;
     if (asset) withWallTexture(asset, function (texture) {
       if (panel.material !== panelMaterial) return;
@@ -16137,17 +16189,13 @@ function resolveChunkDebugCenter(policy) {
       // Kevin 23-11 (3): de zonnevlek krijgt de vorm van jouw raam (uit de doorzichtigheid van de PNG).
       const mask = windowLightMask(texture);
       if (mask) {
-        patchMaterial.uniforms.map.value = mask;
-        patchMaterial.uniforms.hasMap.value = 1;
+        for (const material of [patchMaterial, beamMaterial]) {
+          material.uniforms.map.value = mask;
+          material.uniforms.hasMap.value = 1;
+        }
       }
       requestRender("window-texture");
     });
-    // Lichtbundel: van de bovenkant van het raam naar het verre eind van de vlek (heel vaag, alleen zichtbaar van opzij).
-    const w0 = corner(-width / 2, 0.02); const w1 = corner(width / 2, 0.02);
-    const topY = baseY + win.top;
-    const beamMaterial = new THREE.MeshBasicMaterial({ map: windowGlowGradient(), color: new THREE.Color("#fff1c9"), transparent: true, opacity: 0.1,
-      blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide });
-    mark(new THREE.Mesh(quad([w0[0], topY, w0[1], w1[0], topY, w1[1], f1[0], floorY, f1[1], f0[0], floorY, f0[1]], [0, 0.12, 1, 0.12, 1, 0.95, 0, 0.95]), beamMaterial), "window beam", 4);
     windowLightRecords.push({ panelMaterial, patchMaterial, beamMaterial, light: Math.max(0, num(win.light, 1)) });
   }
   function applyWindowLights() {
@@ -16158,9 +16206,9 @@ function resolveChunkDebugCenter(policy) {
       const strength = record.light * (0.2 + 0.8 * day);
       const color = record.patchMaterial.uniforms.color.value;
       color.copy(windowNightColor).lerp(windowDayColor, day);
-      record.beamMaterial.color.copy(color);
+      record.beamMaterial.uniforms.color.value.copy(color);
       record.patchMaterial.uniforms.opacity.value = Math.min(1, 0.45 * strength);
-      record.beamMaterial.opacity = Math.min(0.4, 0.09 * strength);
+      record.beamMaterial.uniforms.opacity.value = Math.min(0.12, 0.035 * strength);
       // Het plaatje zelf: overdag zoals het is, 's nachts donkerder. De gloed volgt Raamlicht en de dag.
       record.panelMaterial.uniforms.tint.value.setScalar(0.35 + 0.65 * day);
       record.panelMaterial.uniforms.glowColor.value.copy(color);

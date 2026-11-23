@@ -13,6 +13,7 @@ import {
   terrainHeightAt, raycastTerrain, parseTerrainChunkKey, createPaintfield, terrainPaintFromPng
 } from "./terrain.js";
 import { decodePng } from "./png.js";
+import { createSrgbTextureLoader } from "./srgb-texture-loader.js?v=20261123-muur6";
 
 const SIZE = TERRAIN_CHUNK_METERS;
 const decoded = new Map();
@@ -230,7 +231,8 @@ export function createTerrainLayer(options = {}) {
   const paintRevisions = new Map();
   const splatTextures = new Map();
   const layerTextures = new Map();
-  const textureLoader = new THREE.TextureLoader();
+  // Kevin 23-11: png, jpg en webp allemaal als sRGB (eigen kleurprofiel omgerekend), zie srgb-texture-loader.js.
+  const textureLoader = createSrgbTextureLoader();
   const paintFarRadius = mode === "game" ? nearRadius : Infinity;
   let paintRefs = {};
   let paintTextures = {};
