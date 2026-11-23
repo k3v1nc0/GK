@@ -15,7 +15,7 @@ import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261123-muur
 import { createAssetPicker } from "./mini-asset-picker.js?v=20261106-thumbs150";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
 import { createDocDrop, docKeyFromRuntimeId, docSideFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261122-doorgang1";
-import { createRoadEditor } from "./road-editor.js?v=20261123-muur4";
+import { createRoadEditor } from "./road-editor.js?v=20261123-muur5";
 import { createRouteEditor } from "./route-editor.js?v=20261116-herstel1";
 import { AREA_EDITOR_PREFIX, AREA_SOORTEN, AREA_SOORT_ORDER, areaBodyFromNodePatch, areaCirclePointsMm, areaNodeValues, areaSoort } from "../shared/area-soorten.js?v=20261123-muur4";
 import { WALL_EDGE_KEYS, wallLinkWithKind, wallNetLinks } from "../shared/walls.js?v=20261123-muur4";

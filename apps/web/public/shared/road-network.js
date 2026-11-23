@@ -278,24 +278,58 @@ export function roadSplitLink(net, linkIndex, point) {
   return { net: { points: net.points.concat([{ x: point.x, z: point.z }]), links }, index };
 }
 
-// Kevin 23-11 (4): een deur of raam (lijn met soort) van een vaste breedte midden op de plek "at" in een lijn zetten.
-// De lijn wordt drie stukken: zoals hij was, de opening, zoals hij was. Geeft { net, link } of null als hij niet past.
-export function roadInsertOpening(net, linkIndex, at, width, kind) {
+// Kevin 23-11 (4): een gekopieerd stuk muur (een rechte rij punten, bijv. één raam-lijn) in een bestaande lijn zetten,
+// midden op de plek "at", met dezelfde maten en soorten. roadChainOrder geeft de volgorde van de punten, of null als
+// het geen rechte rij is (dan gewoon los plakken).
+export function roadChainOrder(clip) {
+  const n = clip?.points?.length || 0;
+  if (n < 2 || clip.links.length !== n - 1) return null;
+  const near = clip.points.map(() => []);
+  for (const [a, b] of clip.links) { if (!near[a] || !near[b] || a === b) return null; near[a].push(b); near[b].push(a); }
+  if (near.some((list) => list.length > 2)) return null;
+  const first = near.findIndex((list) => list.length === 1);
+  if (first < 0) return null;
+  const order = [first];
+  while (order.length < n) {
+    const next = near[order[order.length - 1]].find((i) => !order.includes(i));
+    if (next === undefined) return null;
+    order.push(next);
+  }
+  const p = clip.points[order[0]], q = clip.points[order[n - 1]];
+  const length = Math.hypot(q.x - p.x, q.z - p.z);
+  if (length < 0.01) return null;
+  const off = (r) => Math.abs((r.x - p.x) * (q.z - p.z) - (r.z - p.z) * (q.x - p.x)) / length;
+  return clip.points.every((r) => off(r) <= 0.02 + 0.03 * length) ? order : null;
+}
+
+export function roadInsertChain(net, linkIndex, at, clip, order = roadChainOrder(clip)) {
   const link = net.links[linkIndex];
   const p = link && net.points[link[0]];
   const q = link && net.points[link[1]];
-  if (!p || !q || !(width > 0)) return null;
+  if (!p || !q || !order) return null;
   const dx = q.x - p.x, dz = q.z - p.z;
   const length = Math.hypot(dx, dz);
+  const ux = dx / (length || 1), uz = dz / (length || 1);
+  // Zelfde kant op als de lijn (als het kan), afstanden langs de rij.
+  const first = clip.points[order[0]], last = clip.points[order[order.length - 1]];
+  const list = (last.x - first.x) * ux + (last.z - first.z) * uz < 0 ? order.slice().reverse() : order;
+  const along = [0];
+  for (let k = 1; k < list.length; k += 1) {
+    const a = clip.points[list[k - 1]], b = clip.points[list[k]];
+    along.push(along[k - 1] + Math.hypot(b.x - a.x, b.z - a.z));
+  }
+  const total = along[along.length - 1];
   const margin = 0.05;
-  const half = width / 2;
-  if (length < width + 2 * margin) return null;
-  const ux = dx / length, uz = dz / length;
-  const along = Math.max(margin + half, Math.min(length - margin - half, (at.x - p.x) * ux + (at.z - p.z) * uz));
-  const i = net.points.length;
-  const points = net.points.concat([{ x: p.x + ux * (along - half), z: p.z + uz * (along - half) }, { x: p.x + ux * (along + half), z: p.z + uz * (along + half) }]);
-  const links = net.links.filter((_, k) => k !== linkIndex).concat([relink(link, link[0], i), kind ? [i, i + 1, kind] : [i, i + 1], relink(link, i + 1, link[1])]);
-  return { net: { points, links }, link: links.length - 2 };
+  if (!(total > 0) || length < total + 2 * margin) return null;
+  const middle = at ? (at.x - p.x) * ux + (at.z - p.z) * uz : length / 2;
+  const start = Math.max(margin, Math.min(length - margin - total, middle - total / 2));
+  const base = net.points.length;
+  const slot = new Map(list.map((i, k) => [i, base + k]));
+  const points = net.points.concat(along.map((d) => ({ x: p.x + ux * (start + d), z: p.z + uz * (start + d) })));
+  const kept = net.links.filter((_, k) => k !== linkIndex);
+  const chain = clip.links.map((piece) => relink(piece, slot.get(piece[0]), slot.get(piece[1])));
+  const links = kept.concat([relink(link, link[0], base)], chain, [relink(link, base + list.length - 1, link[1])]);
+  return { net: { points, links }, links: chain.map((_, k) => kept.length + 1 + k) };
 }
 
 // Kopie van punten + de lijnen tussen die punten, verschoven met offset. Geeft { net, indices } (de nieuwe punten).

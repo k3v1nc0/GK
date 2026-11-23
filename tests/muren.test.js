@@ -6,7 +6,7 @@ import { areaBodyFromNodePatch, areaNodeValues } from "../src/shared/authoring/k
 import { compileAreaShapes } from "../src/server/authoring/area-compiler.js";
 import { applyCanonicalBuild } from "../src/server/authoring/runtime-overlay.js";
 import { editWallEdges, wallBlockers, wallEdgeKinds, wallFromAreaValues, wallNetLinks, wallPieces, wallWindows } from "../apps/web/public/shared/walls.js";
-import { roadDelete, roadInsertOpening, roadSplitLink } from "../apps/web/public/shared/road-network.js";
+import { roadChainOrder, roadDelete, roadInsertChain, roadSplitLink } from "../apps/web/public/shared/road-network.js";
 import { isPointBlockedByBlocker, createWalkabilityIndex } from "../apps/web/public/shared/movement-kernel.js";
 
 // Kamer van 4 x 4 m. Rand 0 = voorkant (z = 0), rand 1 = rechts, rand 2 = achter, rand 3 = links.
@@ -100,13 +100,18 @@ test("muur als net: T-splitsing, soort per lijn, geldig en het raam schijnt naar
   // Bovenkant-textuur gaat mee naar de muur (leeg = donker bij hele hoogte, in de runtime).
   assert.equal(wallFromAreaValues("muur.huis", areaNodeValues(Object.assign({}, body, { settings: { wallTopTextureAssetId: "steen" } }), "muur.huis")).topTextureAssetId, "steen");
   assert.equal(wall.topTextureAssetId, null);
-  // Ctrl+V van een gekopieerd raam: midden op de plek in de lijn, even breed; te korte lijn = niets.
+  // Ctrl+V van een gekopieerd raam: in de lijn, midden op de plek, even breed; schuine kopie wordt recht; te kort = niets.
   const line = { points: [{ x: 0, z: 0 }, { x: 10, z: 0 }], links: [[0, 1]] };
-  const put = roadInsertOpening(line, 0, { x: 3, z: 1 }, 1.2, 2);
+  const raam = { points: [{ x: 0, z: 0 }, { x: 0.6, z: 1.04 }], links: [[0, 1, 2]] };
+  const put = roadInsertChain(line, 0, { x: 3, z: 1 }, raam);
   assert.deepEqual(put.net.links, [[0, 2], [2, 3, 2], [3, 1]]);
-  assert.deepEqual(put.net.points.slice(2), [{ x: 2.4, z: 0 }, { x: 3.6, z: 0 }]);
-  assert.equal(put.link, 1);
-  assert.equal(roadInsertOpening(line, 0, { x: 3, z: 0 }, 20, 2), null);
+  assert.ok(Math.abs(put.net.points[2].x - 2.4) < 0.01 && Math.abs(put.net.points[3].x - 3.6) < 0.01 && put.net.points[3].z === 0);
+  assert.deepEqual(put.links, [1]);
+  // Twee helften (muur + raam) in een rij gaan ook; een L-vorm niet.
+  const rij = { points: [{ x: 0, z: 0 }, { x: 1, z: 0 }, { x: 2, z: 0 }], links: [[0, 1], [1, 2, 2]] };
+  assert.equal(roadInsertChain(line, 0, { x: 5, z: 0 }, rij).net.links.length, 4);
+  assert.equal(roadChainOrder({ points: [{ x: 0, z: 0 }, { x: 1, z: 0 }, { x: 1, z: 1 }], links: [[0, 1], [1, 2]] }), null);
+  assert.equal(roadInsertChain(line, 0, { x: 3, z: 0 }, { points: [{ x: 0, z: 0 }, { x: 20, z: 0 }], links: [[0, 1, 2]] }), null);
   // Een oude muur zonder lijnen is een gesloten ring.
   assert.deepEqual(wallNetLinks(4, undefined, { openEdges: [3] }), [[0, 1], [1, 2], [2, 3], [3, 0, 3]]);
 });
