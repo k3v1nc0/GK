@@ -15814,6 +15814,9 @@ function resolveChunkDebugCenter(policy) {
     // anders een klein plat pijltje op de grond: zonder model midden in de deur, met model vóór het model (aan de kant
     // waar je aankomt en waar je erin loopt), anders valt hij eronder weg.
     const doorwayArrowMesh = entity.doorwayArrow ? addDoorwayArrow(root, entity.doorwayArrow, entity.doorwayArrowBig === true) : null;
+    // Kevin 23-11 (9): in de game staat op de plek van het pijl-vlak uit de editor een onzichtbaar vlak (zelfde maat en
+    // draaiing). Het klikvak van de doorgang meet dit vlak: klikken of tikken daar is als op de deur klikken.
+    if (mode === "game" && entity.doorwayArrow && !entity.modelAssetId) addDoorwayClickPlane(root);
     if (!useEditorModelPlaceholders(worldData, options) && entity.modelAssetId && assetById(worldData, entity.modelAssetId)?.sourcePath) {
       loadModelInto(root, entity.modelAssetId, worldData, doorwayArrowMesh ? function (clone) { placeDoorwayArrowInFront(root, clone, doorwayArrowMesh); } : null, {
         castShadow: options.castShadow !== undefined ? options.castShadow : true,
@@ -16522,6 +16525,22 @@ function resolveChunkDebugCenter(policy) {
     const resources = { geometry, material };
     doorwayArrowShared.set(key, resources);
     return resources;
+  }
+
+  let doorwayClickMaterial = null;
+  function addDoorwayClickPlane(root) {
+    if (!doorwayClickMaterial) doorwayClickMaterial = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, transparent: true, opacity: 0 });
+    const mesh = new THREE.Mesh(doorwayArrowResources("green").geometry, doorwayClickMaterial);
+    mesh.name = "doorway-click-plane";
+    // Niet getekend (eigen laag), wel gemeten voor het klikvak en de plek van de naam.
+    mesh.layers.set(6);
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.raycast = function () {};
+    mesh.userData.runtimeAlive = true;
+    mesh.userData.runtimeResourcesShared = true;
+    root.add(mesh);
+    return mesh;
   }
 
   function addDoorwayArrow(root, color, big = true) {
@@ -18024,9 +18043,9 @@ function resolveChunkDebugCenter(policy) {
     // Kevin 23-11 (9): een doorgang is in de game vaak alleen een plat pijltje op de grond; het klikvak is minstens zo
     // groot als een deur, zodat je er met muis of vinger makkelijk op tikt (en er dan heen loopt).
     if (target?.targetKind === "doorway" || target?.entityKind === "doorway") {
-      spec.width = Math.max(spec.width, 1.4);
-      spec.depth = Math.max(spec.depth, 1.4);
-      if (spec.height < 2.4) { spec.height = 2.4; spec.centerY = Math.max(spec.centerY, 1.2); }
+      spec.width = Math.max(spec.width, 1.6);
+      spec.depth = Math.max(spec.depth, 1.0);
+      if (spec.height < 2.2) { spec.height = 2.2; spec.centerY = Math.max(spec.centerY, 1.1); }
     }
     return spec;
   }
