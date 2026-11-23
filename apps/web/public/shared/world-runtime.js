@@ -16070,16 +16070,40 @@ function resolveChunkDebugCenter(policy) {
     panel.position.set(win.x + win.nx * 0.012, baseY + (win.sill + win.top) / 2, win.z + win.nz * 0.012);
     panel.rotation.y = yaw;
     panel.receiveShadow = staticPropShadowOptions().receiveShadow;
-    // Zonnevlek op de vloer: van "Raam vanaf" tot iets verder dan "Raam tot" de kamer in (zon schuin van boven), iets breder.
-    const near = Math.max(0.15, win.sill * 0.9);
-    const far = near + Math.max(0.6, height * 1.25);
-    const spread = 0.12 * (far - near);
+    // Kevin 23-11 (4): het zonlicht valt evenwijdig en schuin (42° van boven) door het raam naar binnen. De vlek is het raam
+    // langs die richting op de vloer gezet; de lichtbundel is de ruimte daartussen (één blok, zie hieronder).
+    const SUN_TILT = 42 * Math.PI / 180;
+    const tanTilt = Math.tan(SUN_TILT);
     // Langs de muur in dezelfde richting als de x-as van het raamvlak, zodat links en rechts van de PNG kloppen.
     const corner = function (along, inward) {
       return [win.x + win.nz * along + win.nx * inward, win.z - win.nx * along + win.nz * inward];
     };
-    // 6 cm boven de voet van de muur: de vloer ligt 2 cm hoger dan de grond, met 3 cm flikkerde de vlek tijdens het lopen.
-    const floorY = baseY + 0.06;
+    // De vlek ligt 5 cm boven de hoogste vloer eronder (binnenvloer of terrein op 5 plekken), niet op de voet van de muur:
+    // lag de vloer daar een paar cm hoger, dan zakte de vlek erin en flikkerde hij tijdens het lopen.
+    let surface = baseY;
+    const floors = Array.isArray(worldData?.indoorFloors) ? worldData.indoorFloors : [];
+    const nearIn = win.sill / tanTilt;
+    const farIn = win.top / tanTilt;
+    const probes = [corner(0, (nearIn + farIn) / 2), corner(-width / 2, nearIn), corner(width / 2, nearIn), corner(-width / 2, farIn), corner(width / 2, farIn)];
+    for (const probe of probes) {
+      surface = Math.max(surface, groundY + terrainLift(probe[0], probe[1]));
+      for (const floor of floors) {
+        if (Array.isArray(floor?.outline) && floor.outline.length >= 3 && pointInOutline(floor.outline, probe[0], probe[1])) {
+          surface = Math.max(surface, groundY + num(floor.y, 0) + 0.02);
+        }
+      }
+    }
+    const floorY = surface + 0.05;
+    const lightDir = new THREE.Vector3(win.nx * Math.cos(SUN_TILT), -Math.sin(SUN_TILT), win.nz * Math.cos(SUN_TILT));
+    // Een punt van het raam (u links-rechts, v onder-boven), 3 cm de kamer in, en waar dat licht op de vloer valt.
+    const windowPoint = function (u, v) {
+      const p = corner((u - 0.5) * width, 0.03);
+      return new THREE.Vector3(p[0], baseY + win.sill + v * height, p[1]);
+    };
+    const floorPoint = function (u, v) {
+      const w = windowPoint(u, v);
+      return w.addScaledVector(lightDir, Math.max(0.05, (w.y - floorY) / Math.sin(SUN_TILT)));
+    };
     const quad = function (points, uvs) {
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
@@ -16088,8 +16112,7 @@ function resolveChunkDebugCenter(policy) {
       geometry.computeBoundingSphere();
       return geometry;
     };
-    const n0 = corner(-width / 2, near); const n1 = corner(width / 2, near);
-    const f1 = corner(width / 2 + spread, far); const f0 = corner(-width / 2 - spread, far);
+    const n0 = floorPoint(0, 0); const n1 = floorPoint(1, 0); const f1 = floorPoint(1, 1); const f0 = floorPoint(0, 1);
     // De vlek: zonder raam-PNG zachte randen; met PNG de vorm van het raam (windowLightMask). u loopt net als het raam
     // van links naar rechts, v van de onderkant van het raam (dichtbij) naar de bovenkant (ver weg).
     const patchMaterial = new THREE.ShaderMaterial({
@@ -16118,78 +16141,79 @@ function resolveChunkDebugCenter(policy) {
       transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide,
       polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4
     });
-    mark(new THREE.Mesh(quad([n0[0], floorY, n0[1], n1[0], floorY, n1[1], f1[0], floorY, f1[1], f0[0], floorY, f0[1]], [0, 0, 1, 0, 1, 1, 0, 1]), patchMaterial), "window light", 3);
-    // Kevin 23-11 (3): lichtbundels (god rays) in de vorm van het raam. Goedkoop: 8 doorzichtige plakjes tussen het raam
-    // en de vlek op de vloer, elk met dezelfde raamvorm, samen één mesh (één tekenbeurt). Van opzij gezien vervagen de
-    // plakjes, zodat je geen losse lijnen ziet. Geen echte volumetrische belichting (te zwaar voor de oude laptop).
-    const SLICES = 8;
-    const wallAt = function (u, v) {
-      const p = corner((u - 0.5) * width, 0.02);
-      return [p[0], baseY + win.sill + v * height, p[1]];
-    };
-    const floorAt = function (u, v) {
-      const p = corner((u - 0.5) * (width + 2 * spread * v), near + v * (far - near));
-      return [p[0], floorY, p[1]];
-    };
+    mark(new THREE.Mesh(quad([n0.x, floorY, n0.z, n1.x, floorY, n1.z, f1.x, floorY, f1.z, f0.x, floorY, f0.z], [0, 0, 1, 0, 1, 1, 0, 1]), patchMaterial), "window light", 3);
+    // Kevin 23-11 (4): de lichtbundel als één zachte waas (geen losse plakjes meer). Eén blok van het raam tot de vlek; per
+    // pixel rekent de shader uit hoe ver je kijkstraal door de bundel gaat en telt op 8 plekken de raamvorm op. Zo wordt
+    // hij vanzelf zacht aan de randen en dikker waar je er schuin doorheen kijkt. Alleen de achterkant van het blok wordt
+    // getekend (elke pixel één keer), ook als de camera in de bundel staat.
+    const w00 = windowPoint(0, 0);
+    const axisU = windowPoint(1, 0).sub(w00);
+    const axisV = new THREE.Vector3(0, height, 0);
+    const toBeam = new THREE.Matrix3().set(axisU.x, axisV.x, lightDir.x, axisU.y, axisV.y, lightDir.y, axisU.z, axisV.z, lightDir.z).invert();
+    const corners = [windowPoint(0, 0), windowPoint(1, 0), windowPoint(1, 1), windowPoint(0, 1), n0.clone(), n1.clone(), f1.clone(), f0.clone()];
+    for (let k = 4; k < 8; k += 1) corners[k].y = floorY;
+    const center = corners.reduce(function (sum, point) { return sum.add(point); }, new THREE.Vector3()).multiplyScalar(1 / 8);
     const beamPositions = [];
-    const beamNormals = [];
-    const beamUvs = [];
-    const beamSlice = [];
     const beamIndex = [];
-    for (let k = 0; k < SLICES; k += 1) {
-      const t = 0.08 + 0.84 * (k + 0.5) / SLICES;
-      const at = function (u, v) {
-        const a = wallAt(u, v); const b = floorAt(u, v);
-        return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
-      };
-      const c = [at(0, 0), at(1, 0), at(1, 1), at(0, 1)];
-      const e1 = [c[1][0] - c[0][0], c[1][1] - c[0][1], c[1][2] - c[0][2]];
-      const e2 = [c[3][0] - c[0][0], c[3][1] - c[0][1], c[3][2] - c[0][2]];
-      const n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
-      const nl = Math.hypot(n[0], n[1], n[2]) || 1;
+    for (const face of [[0, 1, 2, 3], [4, 5, 6, 7], [0, 3, 7, 4], [1, 2, 6, 5], [0, 1, 5, 4], [3, 2, 6, 7]]) {
+      const [p0, p1, p2, p3] = face.map(function (k) { return corners[k]; });
+      const normal = new THREE.Vector3().subVectors(p1, p0).cross(new THREE.Vector3().subVectors(p3, p0));
+      const mid = new THREE.Vector3().add(p0).add(p1).add(p2).add(p3).multiplyScalar(0.25);
+      const outward = normal.dot(mid.sub(center)) > 0;
       const base = beamPositions.length / 3;
-      for (const point of c) {
-        beamPositions.push(point[0], point[1], point[2]);
-        beamNormals.push(n[0] / nl, n[1] / nl, n[2] / nl);
-        beamSlice.push(t);
-      }
-      beamUvs.push(0, 0, 1, 0, 1, 1, 0, 1);
+      for (const point of outward ? [p0, p1, p2, p3] : [p0, p3, p2, p1]) beamPositions.push(point.x, point.y, point.z);
       beamIndex.push(base, base + 1, base + 2, base, base + 2, base + 3);
     }
     const beamGeometry = new THREE.BufferGeometry();
     beamGeometry.setAttribute("position", new THREE.Float32BufferAttribute(beamPositions, 3));
-    beamGeometry.setAttribute("normal", new THREE.Float32BufferAttribute(beamNormals, 3));
-    beamGeometry.setAttribute("uv", new THREE.Float32BufferAttribute(beamUvs, 2));
-    beamGeometry.setAttribute("slice", new THREE.Float32BufferAttribute(beamSlice, 1));
     beamGeometry.setIndex(beamIndex);
     beamGeometry.computeBoundingSphere();
     const beamMaterial = new THREE.ShaderMaterial({
-      uniforms: { map: { value: null }, hasMap: { value: 0 }, color: { value: new THREE.Color("#fff1c9") }, opacity: { value: 0.035 } },
-      vertexShader: [
-        "attribute float slice;",
-        "varying vec2 vUv; varying float vSlice; varying float vFacing;",
-        "void main() {",
-        "  vUv = uv; vSlice = slice;",
-        "  vec4 mv = modelViewMatrix * vec4(position, 1.0);",
-        "  vFacing = abs(dot(normalize(normalMatrix * normal), normalize(-mv.xyz)));",
-        "  gl_Position = projectionMatrix * mv;",
-        "}"
-      ].join("\n"),
+      uniforms: {
+        map: { value: null }, hasMap: { value: 0 }, color: { value: new THREE.Color("#fff1c9") }, opacity: { value: 0.35 },
+        beamOrigin: { value: w00.clone() }, beamInverse: { value: toBeam }, beamFloorY: { value: floorY },
+        beamLength: { value: Math.max(0.1, (w00.y + height - floorY) / Math.sin(SUN_TILT)) }
+      },
+      vertexShader: "varying vec3 vWorld;\nvoid main() { vec4 world = modelMatrix * vec4(position, 1.0); vWorld = world.xyz; gl_Position = projectionMatrix * viewMatrix * world; }",
       fragmentShader: [
         "uniform sampler2D map; uniform float hasMap; uniform vec3 color; uniform float opacity;",
-        "varying vec2 vUv; varying float vSlice; varying float vFacing;",
+        "uniform vec3 beamOrigin; uniform mat3 beamInverse; uniform float beamFloorY; uniform float beamLength;",
+        "varying vec3 vWorld;",
+        "void slab(float o, float d, float lo, float hi, inout float t0, inout float t1) {",
+        "  if (abs(d) < 1e-5) { if (o < lo || o > hi) t1 = -1.0; return; }",
+        "  float a = (lo - o) / d; float b = (hi - o) / d;",
+        "  t0 = max(t0, min(a, b)); t1 = min(t1, max(a, b));",
+        "}",
         "void main() {",
-        "  float edge = min(vUv.x, 1.0 - vUv.x);",
-        "  float shape = hasMap > 0.5 ? texture2D(map, vUv).r * clamp(edge / 0.03, 0.0, 1.0)",
-        "    : pow(clamp(edge / 0.18, 0.0, 1.0), 2.0) * clamp(min(vUv.y, 1.0 - vUv.y) / 0.15, 0.0, 1.0);",
-        "  float streak = 0.45 + 0.55 * (0.5 + 0.5 * sin(vUv.x * 23.0 + 0.7)) * (0.5 + 0.5 * sin(vUv.x * 57.0 + 1.9));",
-        "  float alpha = opacity * shape * streak * (1.0 - 0.6 * vSlice) * smoothstep(0.03, 0.3, vFacing);",
+        "  vec3 ray = vWorld - cameraPosition;",
+        "  float tEnd = length(ray);",
+        "  ray /= tEnd;",
+        "  vec3 o = beamInverse * (cameraPosition - beamOrigin);",
+        "  vec3 d = beamInverse * ray;",
+        "  float t0 = 0.0; float t1 = tEnd;",
+        "  slab(o.x, d.x, 0.0, 1.0, t0, t1);",
+        "  slab(o.y, d.y, 0.0, 1.0, t0, t1);",
+        "  slab(o.z, d.z, 0.0, 1e6, t0, t1);",
+        "  slab(cameraPosition.y, ray.y, beamFloorY, 1e6, t0, t1);",
+        "  if (t1 <= t0) discard;",
+        "  float jitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));",
+        "  float stepLen = (t1 - t0) / 8.0;",
+        "  float sum = 0.0;",
+        "  for (int i = 0; i < 8; i++) {",
+        "    vec3 q = o + d * (t0 + (float(i) + jitter) * stepLen);",
+        "    float edge = min(q.x, 1.0 - q.x);",
+        "    float shape = hasMap > 0.5 ? texture2D(map, q.xy).r * clamp(edge / 0.05, 0.0, 1.0)",
+        "      : clamp(edge / 0.15, 0.0, 1.0) * clamp(min(q.y, 1.0 - q.y) / 0.15, 0.0, 1.0);",
+        "    float streak = 0.6 + 0.4 * (0.5 + 0.5 * sin(q.x * 23.0 + 0.7)) * (0.5 + 0.5 * sin(q.x * 57.0 + 1.9));",
+        "    sum += shape * streak * (1.0 - 0.65 * clamp(q.z / beamLength, 0.0, 1.0));",
+        "  }",
+        "  float alpha = 1.0 - exp(-sum * stepLen * opacity);",
         "  if (alpha < 0.002) discard;",
         "  gl_FragColor = vec4(color, alpha);",
         "  #include <colorspace_fragment>",
         "}"
       ].join("\n"),
-      transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide
+      transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.BackSide
     });
     const beam = mark(new THREE.Mesh(beamGeometry, beamMaterial), "window beam", 4);
     beam.visible = num(win.rays, 1) > 0;
@@ -16226,7 +16250,7 @@ function resolveChunkDebugCenter(policy) {
       color.copy(windowNightColor).lerp(windowDayColor, day);
       record.beamMaterial.uniforms.color.value.copy(color);
       record.patchMaterial.uniforms.opacity.value = Math.min(1, 0.45 * strength);
-      record.beamMaterial.uniforms.opacity.value = Math.min(0.6, 0.15 * strength * record.rays);
+      record.beamMaterial.uniforms.opacity.value = Math.min(1.5, 0.35 * strength * record.rays);
       // Het plaatje zelf krijgt het licht van de wereld (net als de muur); de gloed volgt Raamlicht en de dag.
       record.panelUniforms.gkGlowColor.value.copy(color);
       record.panelUniforms.gkGlow.value = Math.min(1.5, 0.8 * strength);
