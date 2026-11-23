@@ -75,7 +75,7 @@ export function createRoadEditor(deps) {
     const text = (prefix ? icon + " " + prefix + " · " : icon + " " + name + " · ") + net.points.length + " punten, " + net.links.length + (net.links.length === 1 ? " lijn" : " lijnen")
       + (selPoints.length ? " · " + selPoints.length + " punt(en) gekozen" : "") + (selLinks.length ? " · " + selLinks.length + " lijn(en) gekozen" : "")
       + (parts > 1 ? " · ⚠️ " + parts + " losse delen: kies een punt van elk deel en druk F" : "")
-      + (channel === "wall" && selLinks.length ? " · Muur, Deur, Raam of Open: kaart, onder ⚙️ meer · Ctrl+C op een deur/raam, dan Ctrl+V op een muur = dezelfde erin" : "")
+      + (channel === "wall" && selLinks.length ? " · Muur, Deur, Raam of Open: kaart, onder ⚙️ meer · Ctrl+C op een deur/raam, dan Ctrl+V op een muur = dezelfde erin · G G = punt langs de lijn" : "")
       + (others > 0 ? " · Er " + (others === 1 ? "is nog 1 andere Weg" : "zijn nog " + others + " andere Wegen") + ": Ctrl+J voegt ze hierbij" : "");
     deps.setStatus(text, "");
   }
@@ -129,11 +129,39 @@ export function createRoadEditor(deps) {
     const ground = start || mouseGround();
     if (!ground) { deps.setStatus("Geen grond onder de muis.", "error"); return false; }
     const center = centerOf(indices.map((i) => net.points[i]));
-    session = { kind, pointerId, indices, startNet: net, baseNet: base || net, start: ground, center, axis: null, preview: net,
+    session = { kind, pointerId, indices, startNet: net, baseNet: base || net, start: ground, center, axis: null, slide: null, preview: net,
       startAngle: Math.atan2(ground.z - center.z, ground.x - center.x), startDistance: Math.max(0.01, Math.hypot(ground.x - center.x, ground.z - center.z)) };
-    deps.setStatus({ move: "Schuiven", rotate: "Draaien", scale: "Schalen" }[kind] + ": beweeg de muis. Klik of Enter = klaar, Esc = terug" + (kind === "move" ? ", X/Y = as vast" : "") + ".", "");
+    deps.setStatus({ move: "Schuiven", rotate: "Draaien", scale: "Schalen" }[kind] + ": beweeg de muis. Klik of Enter = klaar, Esc = terug" + (kind === "move" ? ", X/Y = as vast, nog een keer G = langs de lijn" : "") + ".", "");
     render();
     return true;
+  }
+
+  // Kevin 23-11 (8): GG zoals in Blender: de gekozen punten schuiven alleen langs hun lijn, zodat de muur recht blijft.
+  // Richting: de gekozen lijn, anders de lijn tussen de twee buren van het punt (of de enige lijn eraan).
+  // Grens: niet voorbij (en niet op) een buurpunt dat op die lijn ligt.
+  function slideAxis(indices) {
+    const { points, links } = session.startNet;
+    const chosen = new Set(indices);
+    const dirOf = (a, b) => { const p = points[a], q = points[b]; const l = Math.hypot(q.x - p.x, q.z - p.z); return l > 0.001 ? { ux: (q.x - p.x) / l, uz: (q.z - p.z) / l } : null; };
+    let dir = null;
+    const own = selLinks.map((k) => links[k]).find((link) => link && chosen.has(link[0]) && chosen.has(link[1]))
+      || links.find((link) => chosen.has(link[0]) && chosen.has(link[1]));
+    if (own) dir = dirOf(own[0], own[1]);
+    if (!dir) {
+      const near = links.filter((link) => chosen.has(link[0]) !== chosen.has(link[1])).map((link) => (chosen.has(link[0]) ? link[1] : link[0]));
+      dir = near.length === 2 ? dirOf(near[0], near[1]) : near.length ? dirOf(indices[0], near[0]) : null;
+    }
+    if (!dir) return null;
+    let min = -Infinity, max = Infinity;
+    for (const link of links) {
+      if (chosen.has(link[0]) === chosen.has(link[1])) continue;
+      const i = chosen.has(link[0]) ? link[0] : link[1];
+      const j = i === link[0] ? link[1] : link[0];
+      const d = (points[j].x - points[i].x) * dir.ux + (points[j].z - points[i].z) * dir.uz;
+      if (d > 0.05) max = Math.min(max, d - 0.05);
+      else if (d < -0.05) min = Math.max(min, d + 0.05);
+    }
+    return { ux: dir.ux, uz: dir.uz, min, max };
   }
 
   function updateSession(clientX, clientY) {
@@ -142,7 +170,12 @@ export function createRoadEditor(deps) {
     if (!ground) return;
     const { startNet, indices, center, start } = session;
     const points = startNet.points.slice();
-    if (session.kind === "move") {
+    if (session.kind === "move" && session.slide) {
+      // GG: langs de lijn, niet voorbij de buurpunten.
+      const { ux, uz, min, max } = session.slide;
+      const shift = Math.max(min, Math.min(max, (ground.x - start.x) * ux + (ground.z - start.z) * uz));
+      for (const i of indices) points[i] = { x: startNet.points[i].x + ux * shift, z: startNet.points[i].z + uz * shift };
+    } else if (session.kind === "move") {
       const dx = session.axis === "y" ? 0 : ground.x - start.x;
       const dz = session.axis === "x" ? 0 : ground.z - start.z;
       for (const i of indices) points[i] = { x: startNet.points[i].x + dx, z: startNet.points[i].z + dz };
@@ -168,9 +201,9 @@ export function createRoadEditor(deps) {
     session = null;
     let next = done.preview;
     let select = { points: selPoints, links: selLinks };
-    let label = { move: "geschoven", rotate: "gedraaid", scale: "geschaald" }[done.kind];
+    let label = done.slide ? "langs de lijn geschoven" : { move: "geschoven", rotate: "gedraaid", scale: "geschaald" }[done.kind];
     // Eén punt op een ander punt laten vallen = één punt (knooppunt); op een lijn = punt in die lijn (T-splitsing).
-    if (done.kind === "move" && done.indices.length === 1 && Number.isFinite(clientX)) {
+    if (done.kind === "move" && !done.slide && done.indices.length === 1 && Number.isFinite(clientX)) {
       const moved = done.indices[0];
       const hit = pick(clientX, clientY, { exclude: [moved] });
       if (hit?.kind === "point") {
@@ -237,7 +270,9 @@ export function createRoadEditor(deps) {
       const [a, b] = link;
       const p = net.points[a], q = net.points[b];
       const dx = q.x - p.x, dz = q.z - p.z, length2 = dx * dx + dz * dz || 1;
-      const t = Math.max(0.05, Math.min(0.95, ((ground.x - p.x) * dx + (ground.z - p.z) * dz) / length2));
+      let t = Math.max(0.05, Math.min(0.95, ((ground.x - p.x) * dx + (ground.z - p.z) * dz) / length2));
+      // Kevin 23-11 (8): wijs je in de buurt van het midden (25 cm), dan komt het punt precies in het midden.
+      if (Math.abs(t - 0.5) * Math.sqrt(length2) <= 0.25) t = 0.5;
       const at = { x: p.x + dx * t, z: p.z + dz * t };
       const split = roadSplitLink(net, k, at);
       const count = split.net.links.length;
@@ -355,7 +390,17 @@ export function createRoadEditor(deps) {
     if (session) {
       if (event.key === "Escape") { cancelSession(); return consume(); }
       if (event.key === "Enter") { const p = deps.lastPointer(); confirmSession(p?.clientX, p?.clientY); return consume(); }
+      if (!meta && key === "g" && session.kind === "move") {
+        session.slide = session.slide ? null : slideAxis(session.indices);
+        session.axis = null;
+        if (session.slide) deps.setStatus("Langs de lijn schuiven (GG): beweeg de muis. Klik of Enter = klaar, G = weer vrij, Esc = terug.", "");
+        else deps.setStatus("Schuiven: beweeg de muis. Klik of Enter = klaar, Esc = terug, X/Y = as vast, G = langs de lijn.", "");
+        const p = deps.lastPointer();
+        if (p) updateSession(p.clientX, p.clientY);
+        return consume();
+      }
       if (!meta && (key === "x" || key === "y") && session.kind === "move") {
+        session.slide = null;
         session.axis = session.axis === key ? null : key;
         const p = deps.lastPointer();
         if (p) updateSession(p.clientX, p.clientY);
@@ -387,7 +432,9 @@ export function createRoadEditor(deps) {
     if (meta && !event.altKey) {
       if (key === "a") { selPoints = net.points.map((_, i) => i); selLinks = []; render(); hint(); return consume(); }
       if (key === "c") {
-        clipboard = roadClip(net, sessionIndices());
+        // Muur met gekozen lijnen: alleen die lijnen kopiëren (een los gekozen punt erbij maakt er geen "los stuk" van).
+        const linkPoints = channel === "wall" && selLinks.length ? [...new Set(selLinks.flatMap((k) => (net.links[k] || []).slice(0, 2)))] : null;
+        clipboard = roadClip(net, linkPoints || sessionIndices());
         const chain = chainOf(clipboard);
         if (chain) deps.setStatus(icon + " " + chain.name[0].toUpperCase() + chain.name.slice(1) + " van " + meters(chain.width) + " gekopieerd. Wijs een muurlijn aan (of klik hem) en druk Ctrl+V: het komt in die lijn.", "");
         else deps.setStatus(clipboard ? icon + " " + clipboard.points.length + " punt(en) gekopieerd. Ctrl+V plakt bij de muis." : "Kies eerst wat je wilt kopiëren.", clipboard ? "" : "error");

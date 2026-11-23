@@ -9862,16 +9862,19 @@ function resolveChunkDebugCenter(policy) {
       const d = Math.hypot(s.x - clientX, s.y - clientY);
       if (d <= radiusPx && (!best || d < best.d)) best = { kind: "point", index: i, d };
     });
-    if (best) return { kind: best.kind, index: best.index };
+    let bestLink = null;
     (Array.isArray(data.links) ? data.links : []).forEach(([a, b], k) => {
       const p = screen[a], q = screen[b];
       if (!p || !q) return;
       const dx = q.x - p.x, dy = q.y - p.y, length2 = dx * dx + dy * dy;
       const t = length2 > 0 ? Math.max(0, Math.min(1, ((clientX - p.x) * dx + (clientY - p.y) * dy) / length2)) : 0;
       const d = Math.hypot(p.x + dx * t - clientX, p.y + dy * t - clientY);
-      if (d <= radiusPx * 0.7 && (!best || d < best.d)) best = { kind: "link", index: k, d };
+      if (d <= radiusPx * 0.7 && (!bestLink || d < bestLink.d)) bestLink = { kind: "link", index: k, d };
     });
-    return best ? { kind: best.kind, index: best.index } : null;
+    // Kevin 23-11 (8): een korte lijn (een raam, ver weg) is op het scherm maar een paar pixels; dan won altijd het punt en
+    // kon je de lijn bijna niet kiezen. Het punt wint nu alleen als je er echt op klikt (7 px) of er dichterbij bent.
+    if (best && (!bestLink || best.d <= Math.max(radiusPx * 0.5, bestLink.d + 3))) return { kind: best.kind, index: best.index };
+    return bestLink ? { kind: bestLink.kind, index: bestLink.index } : null;
   }
 
   // Werkbank Fase 10 (Kevin 16-11): de route van een NPC of vlieger. state = { points: [{ x, z, h? }] (h = hoogte boven de grond,
