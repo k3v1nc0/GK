@@ -10,7 +10,7 @@ export function nextPlayerRouteWaypoint(route, position, arrivalRadius = 0.15) {
   return route[0] || null;
 }
 
-export function createPlayerPathClient(makeWorker = () => new Worker(new URL("./player-navigation-worker.js?v=20261108-roads9", import.meta.url), { type: "module" })) {
+export function createPlayerPathClient(makeWorker = () => new Worker(new URL("./player-navigation-worker.js?v=20261123-deur1", import.meta.url), { type: "module" })) {
   let worker = null, pending = null, contextKey = null, nextId = 0;
   function cancel() {
     if (!pending) return;

@@ -172,3 +172,15 @@ test("routewerker hergebruikt wereldgegevens en annuleert oude klikken", async (
   client.destroy();
   assert.equal(workers[1].terminated, true);
 });
+
+test("Kevin 23-11: model met mesh-grens (kasteel) is geen grote cirkel voor de padzoeker", () => {
+  const index = buildWalkabilityIndex({ ground });
+  // Kasteel van 10 x 6 m (mesh-grens), maar met een grote straal van 12 m (zoals het model-bolletje).
+  const points = [{ x: -5, z: 0 }, { x: 5, z: 0 }, { x: 5, z: 6 }, { x: -5, z: 6 }];
+  const castle = { id: "castle::solid", x: 0, z: 3, radius: 12, points, minX: -5, maxX: 5, minZ: 0, maxZ: 6, enabled: true };
+  // Van 3 m voor de voordeur naar de deur (kant A op de muur), met aankomen binnen 1,6 m.
+  const route = findPlayerPath({ x: 0, y: 0, z: -3 }, { x: 0, z: -0.2 }, { index, radius: 0.4, solids: [castle], arrivalRadius: 1.6 });
+  assert.equal(route.ok, true, "er is een pad naar de voordeur");
+  const end = route.points[route.points.length - 1];
+  assert.ok(end.z <= -0.4 + 0.001, "eindpunt buiten de muur");
+});

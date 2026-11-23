@@ -28,7 +28,7 @@ import {
   ensureEdgeField
 } from "./movement-kernel.js";
 import { terrainHeightAt } from "./terrain.js";
-import { createPlayerPathClient } from "./player-path-client.js?v=20261108-roads9";
+import { createPlayerPathClient } from "./player-path-client.js?v=20261123-deur1";
 import { createTerrainLayer, seedTerrainChunk, seedTerrainPaint } from "./terrain-render.js?v=20261123-muur7";
 import { createWaterLayer } from "./water-render.js?v=20261030-terrein6";
 import { createSkyLayer } from "./sky-render.js?v=20261120-sky2";

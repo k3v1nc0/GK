@@ -85,7 +85,9 @@ export function createPlayerNavigator(options = {}) {
     if (checks >= checkLimit) throw budgetExceeded;
     checks += 1;
     const nearby = local(to.x, to.z);
-    for (const solid of nearby.solids) if (Math.hypot(to.x - solid.x, to.z - solid.z) < solid.radius + radius) return false;
+    // Kevin 23-11: een model met een mesh-grens (points, bijv. het kasteel) is geen cirkel; dat regelt de botsing hieronder.
+    // Anders was de hele straal rond het kasteel (ook de voordeur) "geblokkeerd" en vond klikken/E geen pad.
+    for (const solid of nearby.solids) if (!(solid.points?.length >= 3) && Math.hypot(to.x - solid.x, to.z - solid.z) < solid.radius + radius) return false;
     return resolveMovementCandidateInto(scratch, from.x, from.y, from.z, to.x, to.y, to.z, nearby.index, ground, nearby.solids, radius)
       && Math.hypot(scratch.x - to.x, scratch.z - to.z) < 0.00001;
   }
@@ -153,6 +155,7 @@ export function createPlayerNavigator(options = {}) {
       if (destinations.length) break;
     }
     if (!destinations.length) for (const solid of local(goal.x, goal.z).solids) {
+      if (solid.points?.length >= 3) continue;
       if (Math.hypot(solid.x - goal.x, solid.z - goal.z) > solid.radius + radius) continue;
       const angle = Math.atan2(origin.z - solid.z, origin.x - solid.x);
       for (let i = 0; i < 16; i += 1) addDestination(point(solid.x + Math.cos(angle + i * Math.PI / 8) * (solid.radius + radius + 0.05), solid.z + Math.sin(angle + i * Math.PI / 8) * (solid.radius + radius + 0.05)));
