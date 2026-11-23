@@ -217,6 +217,8 @@ export function liftWorldOntoTerrain(world, heightfield) {
     interactables: (world.interactables || []).map(liftPoint),
     portals: Array.isArray(world.portals) ? world.portals.map(liftPoint) : world.portals,
     doorways: Array.isArray(world.doorways) ? world.doorways.map((door) => Object.assign({}, door, { a: liftPoint(door.a), b: liftPoint(door.b) })) : world.doorways,
+    // Kevin 23-11: muren staan op het terrein (elk punt op de hoogte van de grond daar).
+    walls: Array.isArray(world.walls) ? world.walls.map((wall) => Object.assign({}, wall, { points: (wall.points || []).map(liftPoint) })) : world.walls,
     spawn,
     zones,
     zonePackage: liftPackage(world.zonePackage),
@@ -863,9 +865,10 @@ function withGame(world, source, options) {
       rotationY: portal.rotationY, unlockMeters: portal.unlockMeters, interactMeters: portal.interactMeters, arriveMeters: portal.arriveMeters, startUnlocked: portal.startUnlocked === true,
       respawnHere: portal.respawnHere !== false }, portal.flagId ? { flag: { id: portal.flagId, on: portal.flagOn !== false } } : {}));
   }
-  // Doorgangen (22-11): twee kanten (A en B), elk met een eigen model. Kevin 23-11: zonder model staat er (in de editor
-  // en in de game) een rechtop staand vlak met een pijl: groen = je kunt hier door; rood en omgekeerd = kant B van een
-  // doorgang die maar één kant op gaat (hier kom je alleen aan). De server zet je van de ene kant naar de andere.
+  // Doorgangen (22-11): twee kanten (A en B), elk met een eigen model. Kevin 23-11: altijd een pijl: groen = je kunt hier
+  // door; rood en omgekeerd = kant B van een doorgang die maar één kant op gaat (hier kom je alleen aan). In de editor
+  // zonder model een groot rechtop vlak (alleen van voren te zien = de kant waar je aankomt), anders een klein plat
+  // pijltje op de grond. De server zet je van de ene kant naar de andere.
   const doorways = [];
   for (const door of game?.doorways || []) {
     for (const side of ["a", "b"]) {
@@ -873,7 +876,8 @@ function withGame(world, source, options) {
       const entityId = editor ? EDITOR_DOC_PREFIX + "doorway:" + door.doorwayId + (side === "b" ? "#b" : "") : "doorway_entity." + door.doorwayId + "." + side;
       entities.push(Object.assign(modelEntity({ id: entityId, label: door.displayName + (editor ? (side === "a" ? " (A)" : " (B)") : ""), modelAssetId: end.modelAssetId, x: end.x, y: end.y, z: end.z,
         rotationY: end.rotationY, scale: end.scale, flagId: editor ? null : door.flagId, flagOn: door.flagOn }),
-      end.modelAssetId ? {} : { doorwayArrow: side === "b" && door.oneWay === true ? "red" : "green" }));
+      // Kevin 23-11: de pijl blijft ook bij een model (klein en plat); het grote vlak alleen in de editor zonder model.
+      { doorwayArrow: side === "b" && door.oneWay === true ? "red" : "green", doorwayArrowBig: editor && !end.modelAssetId }));
       if (!editor && door.flagId) flagGates.push({ entityId, npcId: null, flagId: door.flagId, on: door.flagOn !== false });
     }
     doorways.push(Object.assign({ id: door.doorwayId, displayName: door.displayName, useMode: door.useMode, useMeters: door.useMeters, arriveMeters: door.arriveMeters,
@@ -1065,6 +1069,8 @@ function withGame(world, source, options) {
     .concat(currencyList.map((currency) => currency.iconAssetId))
     // 5-11: plaatjes in het startvenster van quests.
     .concat(quests.map((quest) => quest?.imageAssetId))
+    // Kevin 23-11: de textuur van een 🧱 Muur.
+    .concat((world.walls || []).map((wall) => wall?.textureAssetId))
     .concat((player.classes || []).flatMap((entry) => entry.models || [])).filter(Boolean)));
   const known = new Map((world.assets || []).map((asset) => [asset.id, asset]));
   // Paden van thumbnails kunnen na een import/migratie wijzigen zonder dat de

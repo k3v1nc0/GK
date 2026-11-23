@@ -4473,7 +4473,8 @@ export function createGkHud(api) {
     if (action === "node04:start_dialogue" || action === "node05:focus_service") return "talk";
     if (target?.entityKind === "pickup" || action === "pickup") return "pickup";
     if (target?.entityKind === "resource" || action === "gather") return "gather";
-    if (action === "travel" || action === "portal_map") return "travel";
+    // Kevin 23-11: E/F werkt ook bij een doorgang (🚪), net als bij een portal.
+    if (action === "travel" || action === "portal_map" || action === "door_use_target") return "travel";
     // Werkbank Fase 10 (10b): een model met een verhaal (E = lezen).
     if (action === "lore_read") return "read";
     return "";

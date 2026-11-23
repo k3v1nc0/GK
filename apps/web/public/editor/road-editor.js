@@ -3,7 +3,7 @@
 // Toetsen zoals in Blender: F = punt/lijn erbij of vastmaken, G/R/T = schuiven/draaien/schalen, Del = weg,
 // Ctrl+C/V = kopiëren/plakken, Ctrl+D = dupliceren, Ctrl+A = alles, Ctrl+J = andere Wegen erbij.
 // Wijzigingen staan meteen in beeld; opslaan (met Ctrl+Z) loopt op de achtergrond, één tegelijk.
-import { areaRoadLinks } from "../shared/area-soorten.js?v=20261108-roads7";
+import { areaRoadLinks } from "../shared/area-soorten.js?v=20261123-muur1";
 import { roadAddPoint, roadClip, roadConnect, roadDelete, roadDuplicate, roadHasLink, roadMerge, roadParts, roadPaste, roadSplitLink } from "../shared/road-network.js?v=20261108-roads5";
 
 const toNet = (body) => ({ points: (body?.pointsMm || []).map((p) => ({ x: p[0] / 1000, z: p[1] / 1000 })), links: areaRoadLinks(body) });

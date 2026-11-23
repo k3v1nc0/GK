@@ -212,6 +212,8 @@ export function createTerrainLayer(options = {}) {
   let loading = 0;
   let bakeAll = false;
   let needsUpdate = true;
+  // Kevin 23-11: binnen (🏠) alleen de grond-vakken van het binnen-gebied; de rest wordt niet gebouwd. null = alles.
+  let clip = null;
   let centerKey = "";
   let centerX = 0;
   let centerZ = 0;
@@ -513,8 +515,11 @@ export function createTerrainLayer(options = {}) {
     const rx1 = bakeAll ? range.x1 : Math.min(range.x1, ccx + viewRadius);
     const rz0 = bakeAll ? range.z0 : Math.max(range.z0, ccz - viewRadius);
     const rz1 = bakeAll ? range.z1 : Math.min(range.z1, ccz + viewRadius);
+    const clipOn = Boolean(clip && !bakeAll && ccx >= clip.x0 && ccx <= clip.x1 && ccz >= clip.z0 && ccz <= clip.z1);
     for (let cz = rz0; cz <= rz1; cz += 1) {
+      if (clipOn && (cz < clip.z0 || cz > clip.z1)) continue;
       for (let cx = rx0; cx <= rx1; cx += 1) {
+        if (clipOn && (cx < clip.x0 || cx > clip.x1)) continue;
         const distance = Math.max(Math.abs(cx - ccx), Math.abs(cz - ccz));
         const chunkKey = cx + ":" + cz;
         wanted.push({ key: chunkKey, cx, cz, distance, lod: !bakeAll && distance <= nearRadius ? 0 : 1 });
@@ -525,7 +530,7 @@ export function createTerrainLayer(options = {}) {
       if (wantedKeys.has(recordKey)) continue;
       const record = records.get(recordKey);
       const distance = Math.max(Math.abs(record.cx - ccx), Math.abs(record.cz - ccz));
-      if (bakeAll || distance > viewRadius + 1 || record.cx < range.x0 || record.cx > range.x1 || record.cz < range.z0 || record.cz > range.z1) {
+      if (bakeAll || clipOn || distance > viewRadius + 1 || record.cx < range.x0 || record.cx > range.x1 || record.cz < range.z0 || record.cz > range.z1) {
         disposeRecord(recordKey);
       }
     }
@@ -982,6 +987,18 @@ export function createTerrainLayer(options = {}) {
     if (group.parent) group.parent.remove(group);
   }
 
+  // bounds in meters { minX, maxX, minZ, maxZ } of null. Werkt alleen zolang het midden (de speler) erin staat.
+  function setClip(bounds) {
+    const next = bounds ? {
+      x0: Math.floor(Number(bounds.minX) / SIZE), x1: Math.floor(Number(bounds.maxX) / SIZE),
+      z0: Math.floor(Number(bounds.minZ) / SIZE), z1: Math.floor(Number(bounds.maxZ) / SIZE)
+    } : null;
+    if (next && ![next.x0, next.x1, next.z0, next.z1].every(Number.isFinite)) return;
+    if (JSON.stringify(next) === JSON.stringify(clip)) return;
+    clip = next;
+    needsUpdate = true;
+  }
+
   return {
     heightfield,
     group,
@@ -993,6 +1010,7 @@ export function createTerrainLayer(options = {}) {
     setWorld,
     refreshMaterial,
     update,
+    setClip,
     markChanged,
     discardEdits,
     dirtyChunks,

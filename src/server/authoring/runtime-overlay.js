@@ -3,6 +3,8 @@
 import { colliderToBlocker } from "./world-compiler.js";
 import { areaShapeReadModels } from "../publish-service.js";
 import { AREA_EDITOR_PREFIX, AREA_RUNTIME_ID_FIELD } from "../../shared/authoring/kinds/area.js";
+import { wallBlockers, wallFromAreaValues } from "../../../apps/web/public/shared/walls.js";
+import { areaOutlineMeters } from "../../../apps/web/public/shared/spatial.js";
 
 export const CANONICAL_SPAWN_PREFIX = "canonical.";
 
@@ -191,7 +193,40 @@ export function applyCanonicalBuild(world, serverBuild, options = {}) {
   }
   if (world.zonePackage?.zoneId) next.zonePackage = withCanonicalPickups(world.zonePackage, pickups, removedLegacy, options);
   withAreaShapes(next, data, options);
+  // Kevin 23-11: uit een deelgebied met 🏠 Binnen loop je niet zomaar weg (alleen via een doorgang). Niet in de editor.
+  const indoorBlockers = options.editor ? [] : indoorEdgeBlockers(data.world?.areas);
+  if (indoorBlockers.length) {
+    const collision = next.collision || {};
+    next.collision = Object.assign({}, collision, { blockers: (Array.isArray(collision.blockers) ? collision.blockers : []).concat(indoorBlockers) });
+  }
   return next;
+}
+
+// Langs elke rand van een 🏠 Binnen-deelgebied een dichte strook van 60 cm (half binnen, half buiten), iets langer
+// aan beide kanten zodat de hoeken dicht zijn. Een doorgang zet je over de rand heen; lopen kan er niet doorheen.
+const INDOOR_EDGE_HALF_M = 0.3;
+export function indoorEdgeBlockers(areas) {
+  const out = [];
+  for (const area of Array.isArray(areas) ? areas : []) {
+    if (area?.indoor !== true) continue;
+    const outline = areaOutlineMeters(area);
+    if (!outline || outline.length < 3) continue;
+    for (let i = 0; i < outline.length; i += 1) {
+      const [ax, az] = outline[i];
+      const [bx, bz] = outline[(i + 1) % outline.length];
+      const length = Math.hypot(bx - ax, bz - az);
+      if (length < 0.001) continue;
+      const ux = (bx - ax) / length; const uz = (bz - az) / length;
+      const h = INDOOR_EDGE_HALF_M;
+      const nx = -uz * h; const nz = ux * h;
+      const sx = ax - ux * h; const sz = az - uz * h; const ex = bx + ux * h; const ez = bz + uz * h;
+      out.push({
+        id: "indoor." + area.areaId + "::rand" + i, label: area.displayName || area.areaId, shapeType: "polygon", reason: "indoor",
+        points: [{ x: sx + nx, z: sz + nz }, { x: ex + nx, z: ez + nz }, { x: ex - nx, z: ez - nz }, { x: sx - nx, z: sz - nz }]
+      });
+    }
+  }
+  return out;
 }
 
 function uniqueById(list) {
@@ -219,7 +254,9 @@ function withAreaShapes(next, data, options) {
   // 🛣️ Weg: alleen lijnen voor de routezoeker (terrain.roads, één stukje per lijn). Niets te zien in de game;
   // de editor tekent de punten en lijnen zelf (road-editor.js).
   const roads = shapes.filter((shape) => shape.soort === "pad");
-  const records = shapes.filter((shape) => shape.soort !== "pad").map((shape) => {
+  // Kevin 23-11: 🧱 Muur: zichtbaar (world.walls, de game en editor bouwen de blokken) en dicht (gewone blockers).
+  const walls = shapes.filter((shape) => shape.soort === "muur").map((shape) => wallFromAreaValues(idOf(shape), shape.values));
+  const records = shapes.filter((shape) => shape.soort !== "pad" && shape.soort !== "muur").map((shape) => {
     const id = idOf(shape);
     return { id, nodeType: shape.nodeType, values: Object.assign({}, shape.values, { [AREA_RUNTIME_ID_FIELD[shape.soort]]: id }) };
   });
@@ -237,10 +274,11 @@ function withAreaShapes(next, data, options) {
     })
   });
   next.collision = Object.assign({}, collision, {
-    blockers: uniqueById(models.blockers.concat((collision.blockers || []).filter((blocker) => !gone("blocker_area", blocker.id)
+    blockers: uniqueById(models.blockers.concat(walls.flatMap(wallBlockers), (collision.blockers || []).filter((blocker) => !gone("blocker_area", blocker.id)
       && !(String(blocker.id || "").endsWith("::boundary") && gone("bounded_area_scatter", scatterOf(blocker.id)))))),
     walkableSurfaces: uniqueById(models.walkableSurfaces.concat((collision.walkableSurfaces || []).filter((surface) => !gone("walkable_surface", surface.id))))
   });
+  next.walls = walls;
   next.scatterAreas = uniqueById(models.scatterAreas.concat((next.scatterAreas || []).filter((area) => !gone("bounded_area_scatter", area.id))));
   next.entities = uniqueById(models.entities.concat((next.entities || []).filter((entity) => !(entity?.type === "scatter" && gone("bounded_area_scatter", scatterOf(entity.id))))));
   if (models.assets.length) next.assets = uniqueById((next.assets || []).concat(models.assets));

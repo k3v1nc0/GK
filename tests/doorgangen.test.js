@@ -80,3 +80,19 @@ test("Kevin 23-11: een heel deelgebied in één keer verven (vloer), en weer weg
   applyTerrainPaintOutline(pf, { outline, texture: "" });
   assert.equal(terrainPaintAt(pf, 15, 10)["terrain_texture:tex.vloer"] || 0, 0, "gum haalt de vloer weg");
 });
+
+test("Kevin 23-11: uit een 🏠 Binnen-gebied loop je niet weg (rand dicht), in de editor wel", async () => {
+  const { indoorEdgeBlockers, applyCanonicalBuild } = await import("../src/server/authoring/runtime-overlay.js");
+  const { createWalkabilityIndex, isPointBlockedByBlocker } = await import("../apps/web/public/shared/movement-kernel.js");
+  const area = { areaId: "huis", displayName: "Huis", indoor: true, shape: "box", minXMm: 0, maxXMm: 10000, minZMm: 0, maxZMm: 8000 };
+  const blockers = indoorEdgeBlockers([area, { areaId: "buiten", shape: "box", minXMm: 0, maxXMm: 1000, minZMm: 0, maxZMm: 1000 }]);
+  assert.equal(blockers.length, 4, "vier randen, alleen van het binnen-gebied");
+  const index = createWalkabilityIndex({ collision: { blockers } });
+  assert.equal(isPointBlockedByBlocker(index, 10, 4, 0.3), true, "tegen de rechterrand");
+  assert.equal(isPointBlockedByBlocker(index, 5, 0, 0.3), true, "tegen de voorrand");
+  assert.equal(isPointBlockedByBlocker(index, 5, 4, 0.3), false, "midden in de kamer");
+  const base = { gameProject: { zones: {} }, collision: { blockers: [] } };
+  const build = { data: { world: { areas: [area] } } };
+  assert.equal(applyCanonicalBuild(base, build).collision.blockers.filter((blocker) => blocker.reason === "indoor").length, 4);
+  assert.equal((applyCanonicalBuild(base, build, { editor: true }).collision?.blockers || []).length, 0, "editor: geen rand");
+});

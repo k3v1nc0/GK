@@ -2785,7 +2785,9 @@ export class MmoService {
     if (previous.current_zone_id !== state.current_zone_id && connection?.player) {
       this.syncPlayerProfileZone(connection.player, state.world_id, state.current_zone_id);
     }
-    if ((previous.current_region_id || null) !== (state.current_region_id || null) || (previous.current_area_id || null) !== (state.current_area_id || null)) {
+    // Ook bij een nieuwe build (bv. andere achtergrondkleur van 🏠 Binnen) opnieuw sturen, anders ziet de speler het pas na een ander deelgebied.
+    if ((previous.current_region_id || null) !== (state.current_region_id || null) || (previous.current_area_id || null) !== (state.current_area_id || null)
+      || (previous.spatial_build_id || null) !== (state.spatial_build_id || null)) {
       this.sendSpatialMembership(connection, state, state.world_id, true);
     }
     this.updatePrimaryPresenceFromState(state, connection);

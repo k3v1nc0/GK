@@ -1,4 +1,4 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261123-binnen2";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261123-fix3";
 import { nextPlayerRouteWaypoint } from "../shared/player-path-client.js?v=20261108-roads9";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20261106-perf1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
@@ -7,7 +7,7 @@ import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolatio
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createWorldSounds } from "./world-sounds.js?v=20261116-herstel1";
 import { createActorPresentation } from "./actor-presentation.js?v=20261116-herstel1";
-import { createGkHud } from "./hud/gk-hud.js?v=20261120-block-tags2";
+import { createGkHud } from "./hud/gk-hud.js?v=20261123-fix3";
 import { dayNightState, mixColor } from "../shared/day-night.js?v=20261115-fase10";
 import { node05ActionBody, node05OperationId } from "./node05-request.js?v=20261113-fase8d";
 import {

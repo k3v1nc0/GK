@@ -1,6 +1,6 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261123-binnen2";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261123-fix3";
 import { edgeBetweenPoints, editClosedEdges } from "./walkable-edge-tools.js?v=20261031-randen1";
-import { createTerrainEditor } from "./terrain-editor.js?v=20261123-binnen2";
+import { createTerrainEditor } from "./terrain-editor.js?v=20261123-muur1";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261106-perf1";
 import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20261106-perf1";
 import {
@@ -11,13 +11,14 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261106-perf1";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261106-perf1";
-import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261122-doorgang1";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261123-muur1";
 import { createAssetPicker } from "./mini-asset-picker.js?v=20261106-thumbs150";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
 import { createDocDrop, docKeyFromRuntimeId, docSideFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261122-doorgang1";
-import { createRoadEditor } from "./road-editor.js?v=20261108-roads7";
+import { createRoadEditor } from "./road-editor.js?v=20261123-muur1";
 import { createRouteEditor } from "./route-editor.js?v=20261116-herstel1";
-import { AREA_EDITOR_PREFIX, AREA_SOORTEN, AREA_SOORT_ORDER, areaBodyFromNodePatch, areaCirclePointsMm, areaNodeValues, areaSoort } from "../shared/area-soorten.js?v=20261108-roads7";
+import { AREA_EDITOR_PREFIX, AREA_SOORTEN, AREA_SOORT_ORDER, areaBodyFromNodePatch, areaCirclePointsMm, areaNodeValues, areaSoort } from "../shared/area-soorten.js?v=20261123-muur1";
+import { editWallEdges, wallEdgeKinds } from "../shared/walls.js?v=20261123-muur1";
 import { removeVisualObjects, visualModelsForRelation, visualObjectRelations } from "./visual-object-relations.js?v=20261106-perf1";
 import { FIELD_HELP_STATUSES, createSemanticFieldHelpRegistry, formatSemanticFieldHelp, semanticFieldHelpEntry } from "./semantic-field-help.js?v=20261012-semantic-help1";
 import {
@@ -3487,8 +3488,8 @@ function terrainNodeCapabilities(node) {
     allowGeoScale: polygonEditable,
     allowScale: nodeType === "surface_layer",
     allowDelete: polygonEditable,
-    // Loopvlak: randen dicht (onzichtbare muur) of open zetten.
-    allowEdges: walkableSurface
+    // Loopvlak: randen dicht (onzichtbare muur) of open zetten. Kevin 23-11: 🧱 Muur: per rand Muur, Deur, Raam of Open.
+    allowEdges: walkableSurface || isWallAreaNode(node)
   };
 }
 
@@ -3523,6 +3524,7 @@ function terrainSelectionText(node, capabilities) {
   if (state.terrainTool.mode === "extrude") return title + " - Extruding point | " + shortcutSummary;
   if (state.terrainTool.mode === "scale") return title + " - Scaling " + channel + " texture | " + shortcutSummary;
   if (state.terrainTool.mode === "delete") return title + " - Delete selected points | " + shortcutSummary;
+  if (state.terrainTool.mode === "edges" && isWallAreaNode(node)) return "🧱 Muur - Randen: kies een lijn of twee aangrenzende punten, dan Muur, Deur, Raam of Open. Oranje = muur, groen = deur, blauw = raam, grijs = open. Gekozen: " + state.terrainTool.selectedEdgeIndices.length;
   if (state.terrainTool.mode === "edges") return "Loopvlak - Randen: kies een lijn of twee aangrenzende punten. Multi = meerdere lijnen. Groen = open, rood = dicht. Gekozen: " + state.terrainTool.selectedEdgeIndices.length;
   return base + " | Select center to move/rotate/scale the whole shape" + (node.type === "walkable_surface" ? ", use Z for height" : "");
 }
@@ -4449,7 +4451,9 @@ function terrainOverlayState() {
     points: points,
     groundY: groundY,
     color: accentColorForNodeDef(state.nodeTypes[node.type]),
-    closedEdges: node.type === "walkable_surface" && Array.isArray(node.values?.closedEdges) ? node.values.closedEdges.slice() : []
+    closedEdges: node.type === "walkable_surface" && Array.isArray(node.values?.closedEdges) ? node.values.closedEdges.slice() : [],
+    // Kevin 23-11: 🧱 Muur: per rand muur, deur, raam of open (kleur per rand in de 3D-view).
+    wallEdges: isWallAreaNode(node) ? wallEdgeKinds(points.length, node.values || {}) : null
   };
   if (state.terrainTool.draggingHandleRole === "point" && state.terrainTool.dragStartPoints) {
     previewPoints = terrainPreviewMovedPoints(
@@ -5202,7 +5206,18 @@ function appendTerrainTransformActions(parent, node) {
         terrainFinishWithRender();
       }
     }));
-    if (state.terrainTool.mode === "edges") {
+    if (state.terrainTool.mode === "edges" && isWallAreaNode(node)) {
+      for (const choice of [
+        { label: "🧱 Muur", kind: "wall", title: "Gekozen randen worden een dichte muur" },
+        { label: "🚪 Deur", kind: "door", title: "Gekozen randen worden een deur: open tot de deurhoogte, de muur loopt erboven door" },
+        { label: "🪟 Raam", kind: "window", title: "Gekozen randen krijgen een raam: dicht, met een gat van 'Raam vanaf' tot 'Raam tot'" },
+        { label: "Open", kind: "open", title: "Gekozen randen zonder muur: hier loop je zo door" }
+      ]) parent.appendChild(transformActionButton(choice.label, {
+        title: choice.title,
+        disabled: state.terrainTool.edgeEditBusy || !state.terrainTool.selectedEdgeIndices.length,
+        onClick: function () { void terrainApplyWallEdges(node, choice.kind, choice.label); }
+      }));
+    } else if (state.terrainTool.mode === "edges") {
       for (const choice of [
         { label: "Open", action: "open", className: "ok", title: "Gekozen randen groen: hier kun je doorheen lopen" },
         { label: "Dicht", action: "close", className: "danger", title: "Gekozen randen rood: hier kun je niet doorheen lopen" },
@@ -32326,6 +32341,30 @@ function terrainSelectEdgePoint(node, pointIndex, event) {
   tool.selectedHandleRole = "point";
   setStatus(first === null ? "Kies nu het aangrenzende punt van de rand." : "Deze punten vormen geen rand. Kies een punt direct naast het laatst gekozen punt.", "");
   terrainFinishWithRender();
+}
+
+// Kevin 23-11: is dit vlak een 🧱 Muur? (een muur gebruikt het puntengereedschap van een deelgebied)
+function isWallAreaNode(node) {
+  if (!node?.areaDoc || !node.docKey || !docBench.workspace) return false;
+  return areaSoort(docBench.doc(node.docKey)?.body) === "muur";
+}
+
+// Kevin 23-11: 🧱 Muur: de gekozen randen worden Muur, Deur, Raam of Open (lijsten in de instellingen, Ctrl+Z werkt).
+async function terrainApplyWallEdges(node, kind, label) {
+  const tool = state.terrainTool;
+  if (tool.edgeEditBusy || !tool.selectedEdgeIndices.length) return false;
+  const currentNode = areaDocNodeById(node.id) || node;
+  const patch = editWallEdges(terrainNodePoints(currentNode).length, currentNode.values || {}, tool.selectedEdgeIndices, kind);
+  tool.edgeEditBusy = true;
+  terrainFinishWithRender();
+  try {
+    const ok = await patchValues(node.id, patch, { historyLabel: "Randen: " + label });
+    if (ok) setStatus("Randen: " + label + ". Oranje = muur, groen = deur, blauw = raam, grijs = open.", "success");
+    return Boolean(ok);
+  } finally {
+    tool.edgeEditBusy = false;
+    terrainFinishWithRender();
+  }
 }
 
 async function terrainApplyEdges(node, action) {

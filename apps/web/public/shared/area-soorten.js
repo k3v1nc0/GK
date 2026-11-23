@@ -3,11 +3,35 @@
 // verhuisd pad, bos of blokkade er precies hetzelfde uitziet. De instellingen per soort staan in "settings";
 // hun regels (type, min, max, keuzes) komen uit de oude nodedefinitie, de naam/icoon/hulp staat hier.
 import { NODE_TYPES } from "./node-types.js?v=20261106-perf1";
+import { WALL_DEFAULTS, WALL_EDGE_KEYS } from "./walls.js?v=20261123-muur1";
 
 // Zelfde vorm als help() in src/shared/authoring/kinds/ui.js (dit bestand draait ook in de browser).
 const help = (waarvoor, goed, probleem) => Object.freeze({ waarvoor, goed, probleem });
 
-export const AREA_SOORT_ORDER = Object.freeze(["begroeiing", "pad", "blokkade", "loopvlak", "deelgebied", "questgebied"]);
+export const AREA_SOORT_ORDER = Object.freeze(["begroeiing", "pad", "blokkade", "muur", "loopvlak", "deelgebied", "questgebied"]);
+
+// Kevin 23-11: de instellingen van een 🧱 Muur (geen oude node; hun regels staan hier).
+const wallNumber = (key, label, icon, min, max, def, step, range, more, waarvoor, goed, probleem) => ({ key, spec: { type: "number", label, icon, default: def,
+  min, max, step, range, more, help: help(waarvoor, goed, probleem) } });
+const WALL_FIELDS = [
+  wallNumber("wallHeight", "Hoogte (m)", "↕️", 0.2, 50, WALL_DEFAULTS.height, 0.1, [1, 10], false,
+    "Hoe hoog de muur is.", "2.5 tot 3 m voor een huis, 5 tot 10 m voor een zaal of kasteel.", "Muur staat in de weg van de camera → lager, of de camera steiler (kaart Deelgebied)."),
+  wallNumber("wallThickness", "Dikte (m)", "↔️", 0.05, 5, WALL_DEFAULTS.thickness, 0.05, [0.1, 1.5], false,
+    "Hoe dik de muur is.", "0.2 tot 0.4 m voor een huis, 1 m voor een kasteelmuur.", "Je loopt in een deur vast → dunner, of maak de deur breder."),
+  { key: "wallTextureAssetId", spec: { type: "asset", label: "Textuur", icon: "🖼️", default: null, more: false, assetTypes: ["texture", "image"],
+    help: help("Het plaatje op de muur (steen, hout, pleister).", "Sleep een textuur uit de Bibliotheek op dit vak. Leeg = een effen kleur.", "Muur is egaal → sleep een textuur hierop.") } },
+  { key: "wallColor", spec: { type: "color", label: "Kleur", icon: "🎨", default: "#ffffff", more: false,
+    help: help("De kleur van de muur. Met een textuur kleurt dit de textuur.", "Wit = de textuur zoals hij is. Zonder textuur een lichte kleur.", "Textuur te donker of te fel → kies een lichtere of donkerdere kleur.") } },
+  wallNumber("wallTextureMeters", "Textuurmaat (m)", "📐", 0.1, 50, WALL_DEFAULTS.textureMeters, 0.1, [0.25, 10], true,
+    "Hoeveel meter muur één keer de textuur is.", "1 tot 3 m. Bakstenen: 1 m, grote stenen: 3 m.", "Stenen te groot → kleiner getal. Te klein en druk → groter."),
+  wallNumber("doorHeight", "Deurhoogte (m)", "🚪", 0.5, 50, WALL_DEFAULTS.doorHeight, 0.1, [1.5, 5], true,
+    "Hoe hoog een Deur-rand open is; daarboven loopt de muur door.", "2.2 tot 2.6 m.", "Je ziet geen muur boven de deur → lager dan de muurhoogte."),
+  wallNumber("windowSill", "Raam vanaf (m)", "🪟", 0, 50, WALL_DEFAULTS.windowSill, 0.1, [0, 3], true,
+    "Hoe hoog boven de grond een Raam-rand begint.", "0.8 tot 1.2 m.", "Raam te laag → hoger."),
+  wallNumber("windowTop", "Raam tot (m)", "🪟", 0, 50, WALL_DEFAULTS.windowTop, 0.1, [1, 5], true,
+    "Tot hoe hoog een Raam-rand open is.", "2 tot 2.4 m, lager dan de muurhoogte.", "Raam loopt tot het plafond → lager.")
+];
+const EDGE_LIST_KEYS = new Set(["closedEdges"].concat(Object.values(WALL_EDGE_KEYS)));
 
 // geometry: velden van de oude node die de Area tool uit de punten afleidt (staan niet in settings).
 // main: de velden die in beeld staan (rest onder ⚙️ meer).
@@ -22,10 +46,14 @@ export const AREA_SOORTEN = Object.freeze({
   // In de game onzichtbaar, in de editor een oranje lijn. Oude textuur-instellingen worden genegeerd.
   pad: { label: "Weg", icon: "🛣️", nodeType: "surface_layer", closed: false, minPoints: 2, road: true, geometry: [], main: [] },
   blokkade: {
-    label: "Blokkade", icon: "🧱", nodeType: "blocker_area", closed: true, minPoints: 3,
+    label: "Blokkade", icon: "🚧", nodeType: "blocker_area", closed: true, minPoints: 3,
     geometry: ["blockerId", "label", "shapeType", "x", "z", "width", "depth", "radius", "points"],
     main: ["reason"]
   },
+  // Kevin 23-11: 🧱 Muur. Teken de kamer met punten rondom; langs elke rand staat een muur. Met Randen kies je per
+  // rand Muur, Deur, Raam of Open (walls.js). De game bouwt simpele blokken met botsing; Blender alleen voor decor.
+  muur: { label: "Muur", icon: "🧱", nodeType: "area_definition", closed: true, minPoints: 3, wall: true, geometry: [],
+    main: ["wallHeight", "wallThickness", "wallTextureAssetId", "wallColor"] },
   loopvlak: {
     label: "Loopvlak", icon: "🌉", nodeType: "walkable_surface", closed: true, minPoints: 3, height: true,
     geometry: ["surfaceId", "label", "x", "y", "z", "width", "depth", "rotationY", "points"],
@@ -173,6 +201,10 @@ function buildSettingSpecs() {
       if (!nodeField || def.geometry.includes(key)) continue;
       fields[key] = settingSpec(soort, key, nodeField);
     }
+    if (def.wall) {
+      for (const entry of WALL_FIELDS) fields[entry.key] = Object.assign({}, entry.spec);
+      for (const key of Object.values(WALL_EDGE_KEYS)) fields[key] = { type: "json", label: "Randen", icon: "🧱", default: null, more: true, help: help("Welke randen een deur, raam of open zijn.", "Zet ze met de knop Randen in de 3D-view.", "Verkeerde rand → kies hem opnieuw met Randen.") };
+    }
     out[soort] = { label: def.label, icon: def.icon, closed: def.closed, minPoints: def.minPoints, height: Boolean(def.height), fields };
   }
   return out;
@@ -202,7 +234,7 @@ export function areaSettingsIssues(soort, settings) {
     else if (spec.type === "asset" && (typeof value !== "string" || value.length > 160 || !ASSET.test(value))) issues.push(name + " is geen geldig asset.");
     else if (spec.type === "text" && (typeof value !== "string" || value.length > spec.maxLength)) issues.push(name + " is geen geldige tekst.");
     else if (spec.type === "assetList" && (!Array.isArray(value) || value.length > spec.maxItems || value.some((id) => typeof id !== "string" || !ASSET.test(id)))) issues.push(name + " moet een lijst modellen zijn.");
-    else if (key === "closedEdges") { if (!isEdgeList(value)) issues.push(name + " moet een lijst randnummers zijn."); }
+    else if (EDGE_LIST_KEYS.has(key)) { if (!isEdgeList(value)) issues.push(name + " moet een lijst randnummers zijn."); }
     else if (spec.type === "json" && (typeof value !== "object" || Array.isArray(value))) issues.push(name + " is ongeldig.");
   }
   return issues;
@@ -333,6 +365,16 @@ export function areaBodyFromNodePatch(body, patch) {
         if (edges.length) next.settings.closedEdges = edges; else delete next.settings.closedEdges;
         if (!Object.keys(next.settings).length) delete next.settings;
       }
+      // Muur (Kevin 23-11): deur-, raam- en open randen schuiven ook mee.
+      if (soort === "muur" && next.settings) {
+        next.settings = Object.assign({}, next.settings);
+        for (const edgeKey of Object.values(WALL_EDGE_KEYS)) {
+          if (!next.settings[edgeKey] || edgeKey in patch) continue;
+          const edges = remapClosedEdges(before, next.pointsMm, next.settings[edgeKey]);
+          if (edges.length) next.settings[edgeKey] = edges; else delete next.settings[edgeKey];
+        }
+        if (!Object.keys(next.settings).length) delete next.settings;
+      }
       if (soort === "deelgebied") {
         next.shape = "polygon";
         for (const field of ["minXMm", "maxXMm", "minZMm", "maxZMm", "centerXMm", "centerZMm", "radiusMm"]) delete next[field];
@@ -341,9 +383,9 @@ export function areaBodyFromNodePatch(body, patch) {
     }
     if (!specs[key]) continue;
     next.settings = Object.assign({}, next.settings || {});
-    if (value === null || value === undefined || (key === "closedEdges" && Array.isArray(value) && !value.length)) delete next.settings[key];
+    if (value === null || value === undefined || (EDGE_LIST_KEYS.has(key) && Array.isArray(value) && !value.length)) delete next.settings[key];
     else next.settings[key] = value;
-    if (key === "closedEdges" && !Object.keys(next.settings).length) delete next.settings;
+    if (EDGE_LIST_KEYS.has(key) && !Object.keys(next.settings).length) delete next.settings;
   }
   if (soort !== "deelgebied" && !next.shape) next.shape = "polygon";
   // Een weg heeft geen instellingen: oude textuur/kleur van een pad gaan bij de eerste wijziging weg.

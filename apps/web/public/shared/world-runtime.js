@@ -29,9 +29,10 @@ import {
 } from "./movement-kernel.js";
 import { terrainHeightAt } from "./terrain.js";
 import { createPlayerPathClient } from "./player-path-client.js?v=20261108-roads9";
-import { createTerrainLayer, seedTerrainChunk, seedTerrainPaint } from "./terrain-render.js?v=20261120-label-occlusion2";
+import { createTerrainLayer, seedTerrainChunk, seedTerrainPaint } from "./terrain-render.js?v=20261123-fix3";
 import { createWaterLayer } from "./water-render.js?v=20261030-terrein6";
 import { createSkyLayer } from "./sky-render.js?v=20261120-sky2";
+import { wallPieces } from "./walls.js?v=20261123-muur1";
 export {
   effectiveGroundBounds,
   effectiveWorldGroundBounds,
@@ -1537,6 +1538,23 @@ function chunkDistanceSort(a, b) {
   return chunkCoordSort(a, b);
 }
 
+// Kevin 23-11: binnen (🏠 deelgebied) laadt de game alleen de vakken van het binnen-gebied (plus een randje); de rest
+// van de wereld wordt niet geladen. Gezet door setIndoor, in meters { minX, maxX, minZ, maxZ }; null = alles.
+// Alleen zolang het midden (de speler) erin staat, zodat je na naar buiten gaan nooit zonder wereld staat.
+let indoorStreamingClip = null;
+function indoorClipChunkRange(policy, center) {
+  if (!indoorStreamingClip || !policy) return null;
+  const size = chunkSizeForPolicy(policy);
+  const range = {
+    x0: Math.floor(indoorStreamingClip.minX / size.width), x1: Math.floor(indoorStreamingClip.maxX / size.width),
+    z0: Math.floor(indoorStreamingClip.minZ / size.depth), z1: Math.floor(indoorStreamingClip.maxZ / size.depth)
+  };
+  return center && chunkInsideRange(range, center.x, center.z) ? range : null;
+}
+function chunkInsideRange(range, x, z) {
+  return x >= range.x0 && x <= range.x1 && z >= range.z0 && z <= range.z1;
+}
+
 export function buildChunkWindow(centerCoord, policy, mode = "editor") {
   const normalizedPolicy = policy?.chunkWorldWidth
     ? policy
@@ -1563,6 +1581,12 @@ export function buildChunkWindow(centerCoord, policy, mode = "editor") {
         chebyshev: chebyshev,
         distance: chunkDistanceFromCenter(coord, center)
       });
+    }
+  }
+  const indoorRange = mode === "game" ? indoorClipChunkRange(normalizedPolicy, center) : null;
+  if (indoorRange) {
+    for (let index = candidates.length - 1; index >= 0; index -= 1) {
+      if (!chunkInsideRange(indoorRange, candidates[index].x, candidates[index].z)) candidates.splice(index, 1);
     }
   }
   let clippedByMaxLoadedChunks = false;
@@ -2562,9 +2586,15 @@ export function computeStreamingCoverage(options = {}) {
   const presenceChunkDistance = presenceChunkCoord ? chebyshevChunkDistance(presenceChunkCoord, centerChunk) : null;
   const presenceChunkAccepted = Number.isFinite(presenceChunkDistance) ? presenceChunkDistance <= 1 : false;
   const heading = resolveCoverageHeading(options, mode);
-  const forwardChunkKeys = computeForwardChunkKeysFromHeading(heading, primary, policy, mode);
+  const indoorRange = mode === "game" ? indoorClipChunkRange(policy, centerChunk) : null;
+  const insideIndoor = function (key) {
+    if (!indoorRange) return true;
+    const coord = chunkCoordFromKey(key);
+    return Boolean(coord && chunkInsideRange(indoorRange, coord.x, coord.z));
+  };
+  const forwardChunkKeys = computeForwardChunkKeysFromHeading(heading, primary, policy, mode).filter(insideIndoor);
   const visibleSet = new Set(baseWindow.activeChunkKeys);
-  if (presenceChunkAccepted) visibleSet.add(presenceChunkKey);
+  if (presenceChunkAccepted && insideIndoor(presenceChunkKey)) visibleSet.add(presenceChunkKey);
   const preloadSet = new Set(baseWindow.preloadChunkKeys);
   for (const key of forwardChunkKeys) preloadSet.add(key);
   const desiredSet = new Set(baseWindow.loadedChunkKeys);
@@ -9478,13 +9508,14 @@ function resolveChunkDebugCenter(policy) {
       const x = Number(point?.x);
       const z = Number(point?.z);
       if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
-      const py = nodeType === "walkable_surface" ? num(point?.y, y) : y;
+      // Kevin 23-11: punten en lijnen liggen op de heuvels, net als het wegennet (niet op één platte hoogte).
+      const py = nodeType === "walkable_surface" ? num(point?.y, y) : roadOverlayY(x, z);
       points.push(new THREE.Vector3(x, py, z));
     }
     const extrudePreviewPoint = nextOverlay.draggingHandleRole === "extrude" && nextOverlay.previewPoint
       ? new THREE.Vector3(
         Number(nextOverlay.previewPoint.x) || 0,
-        y,
+        nodeType === "walkable_surface" ? y : roadOverlayY(num(nextOverlay.previewPoint.x, 0), num(nextOverlay.previewPoint.z, 0)),
         Number(nextOverlay.previewPoint.z) || 0
       )
       : null;
@@ -9499,15 +9530,34 @@ function resolveChunkDebugCenter(policy) {
       return index === selectedIndex;
     };
 
-    if (nodeType === "walkable_surface" && !extrudePreviewPoint && points.length >= 3) {
+    // Een lijn tussen twee punten volgt de grond: om de 2 m een tussenpunt op de hoogte van het terrein.
+    const drape = nodeType === "walkable_surface" ? null : function (a, b, out) {
+      const steps = Math.min(40, Math.floor(Math.hypot(b.x - a.x, b.z - a.z) / 2));
+      out.push(a);
+      for (let step = 1; step <= steps; step += 1) {
+        const t = step / (steps + 1);
+        const x = a.x + (b.x - a.x) * t;
+        const z = a.z + (b.z - a.z) * t;
+        const mid = new THREE.Vector3(x, roadOverlayY(x, z), z);
+        out.push(mid, mid);
+      }
+      out.push(b);
+    };
+
+    // Kevin 23-11: een 🧱 Muur kleurt elke rand naar zijn soort (oranje muur, groen deur, blauw raam, grijs open).
+    const wallEdges = Array.isArray(nextOverlay.wallEdges) ? nextOverlay.wallEdges : null;
+    if ((nodeType === "walkable_surface" || wallEdges) && !extrudePreviewPoint && points.length >= 3) {
       const closedEdges = new Set(Array.isArray(nextOverlay.closedEdges) ? nextOverlay.closedEdges : []);
       const selectedEdges = new Set(Array.isArray(nextOverlay.selectedEdgeIndices) ? nextOverlay.selectedEdgeIndices : []);
       const openPositions = [];
       const closedPositions = [];
+      const wallBuckets = { wall: [], door: [], window: [], open: [] };
       for (let edge = 0; edge < points.length; edge += 1) {
         const a = points[edge];
         const b = points[(edge + 1) % points.length];
-        (closedEdges.has(edge) ? closedPositions : openPositions).push(a, b);
+        const bucket = wallEdges ? (wallBuckets[wallEdges[edge]] || wallBuckets.wall) : (closedEdges.has(edge) ? closedPositions : openPositions);
+        if (drape) drape(a, b, bucket);
+        else bucket.push(a, b);
         if (selectedEdges.has(edge)) {
           // Witte markering midden op iedere gekozen lijn; de randkleur blijft zichtbaar.
           const marker = new THREE.Mesh(
@@ -9522,7 +9572,10 @@ function resolveChunkDebugCenter(policy) {
           terrainEditorOverlay.add(marker);
         }
       }
-      for (const [positions, edgeColor, name] of [[openPositions, 0x32e875, "open"], [closedPositions, 0xff3b30, "closed"]]) {
+      const edgeGroups = wallEdges
+        ? [[wallBuckets.wall, 0xf59e0b, "wall"], [wallBuckets.door, 0x32e875, "door"], [wallBuckets.window, 0x38bdf8, "window"], [wallBuckets.open, 0x9ca3af, "open"]]
+        : [[openPositions, 0x32e875, "open"], [closedPositions, 0xff3b30, "closed"]];
+      for (const [positions, edgeColor, name] of edgeGroups) {
         if (!positions.length) continue;
         const lines = new THREE.LineSegments(
           new THREE.BufferGeometry().setFromPoints(positions),
@@ -9537,7 +9590,16 @@ function resolveChunkDebugCenter(policy) {
         terrainEditorOverlay.add(lines);
       }
     } else {
-      const line = terrainOverlayLine(points, closed && points.length >= 3, lineColor, closed ? 0.92 : 0.95);
+      let linePoints = points;
+      if (drape && points.length >= 2) {
+        const pairs = [];
+        const loop = closed && points.length >= 3;
+        for (let index = 0; index < (loop ? points.length : points.length - 1); index += 1) drape(points[index], points[(index + 1) % points.length], pairs);
+        // Paren (a, b) terug naar één doorlopende lijn; de lus sluit vanzelf weer bij punt 0.
+        linePoints = pairs.filter(function (point, index) { return index % 2 === 0; });
+        if (!loop) linePoints.push(points[points.length - 1]);
+      }
+      const line = terrainOverlayLine(linePoints, closed && points.length >= 3, lineColor, closed ? 0.92 : 0.95);
       if (line) terrainEditorOverlay.add(line);
     }
 
@@ -9583,7 +9645,7 @@ function resolveChunkDebugCenter(policy) {
         || nextOverlay.draggingHandleRole === "center"
         || nextOverlay.draggingHandleRole === "rotate"
         || nextOverlay.draggingHandleRole === "geoscale";
-      const centerY = nodeType === "walkable_surface" ? num(nextOverlay.y, y) : y;
+      const centerY = nodeType === "walkable_surface" ? num(nextOverlay.y, y) : roadOverlayY(num(nextOverlay.x, 0), num(nextOverlay.z, 0));
       const center = terrainOverlayHandle(
         new THREE.Vector3(num(nextOverlay.x, 0), centerY, num(nextOverlay.z, 0)),
         color,
@@ -15604,15 +15666,123 @@ function resolveChunkDebugCenter(policy) {
         castShadow: options.castShadow !== undefined ? options.castShadow : true,
         receiveShadow: options.receiveShadow !== undefined ? options.receiveShadow : true
       });
-    } else if (entity.doorwayArrow && !entity.modelAssetId) {
-      addDoorwayArrow(root, entity.doorwayArrow);
-    } else {
+    } else if (!(entity.doorwayArrow && !entity.modelAssetId)) {
       addEntityPlaceholder(root);
+    }
+    // Kevin 23-11: een doorgang heeft altijd een pijl (ook met model). Groot rechtop vlak alleen in de editor zonder model,
+    // anders een klein plat pijltje op de grond in het midden van de deur.
+    if (entity.doorwayArrow) addDoorwayArrow(root, entity.doorwayArrow, entity.doorwayArrowBig === true);
+  }
+
+  // Kevin 23-11: 🧱 Muren (Area tool). Eén mesh per muur uit simpele blokken (shared/walls.js, dezelfde stukken als de
+  // botsing op de server) en één materiaal per muur. De textuur gaat per meter, zodat hij op elke muur even groot is.
+  // In de editor is de muur aan te klikken (kiest het muur-vlak). Ze zitten in content: setWorld bouwt ze opnieuw.
+  const wallTextureCache = new Map();
+  function withWallTexture(asset, apply) {
+    if (!asset?.sourcePath) return;
+    let record = wallTextureCache.get(asset.id);
+    if (!record) {
+      record = { texture: null, waiters: [] };
+      wallTextureCache.set(asset.id, record);
+      textureLoader.load(asset.sourcePath, function (texture) {
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.wrapS = THREE.RepeatWrapping;
+        texture.wrapT = THREE.RepeatWrapping;
+        texture.needsUpdate = true;
+        record.texture = texture;
+        for (const waiter of record.waiters.splice(0)) waiter(texture);
+        requestRender("wall-texture");
+      }, undefined, function () {
+        wallTextureCache.delete(asset.id);
+        loadErrors.push("Muur-textuur: " + (asset.name || asset.id));
+      });
+    }
+    if (record.texture) apply(record.texture);
+    else record.waiters.push(apply);
+  }
+
+  function wallGeometry(wall, groundY) {
+    const positions = [];
+    const normals = [];
+    const uvs = [];
+    const indices = [];
+    const meters = Math.max(0.1, num(wall.textureMeters, 2));
+    const quad = function (p0, p1, p2, p3, normal, u1, v0, v1) {
+      const base = positions.length / 3;
+      positions.push(p0[0], p0[1], p0[2], p1[0], p1[1], p1[2], p2[0], p2[1], p2[2], p3[0], p3[1], p3[2]);
+      for (let k = 0; k < 4; k += 1) normals.push(normal[0], normal[1], normal[2]);
+      uvs.push(0, v0, u1, v0, u1, v1, 0, v1);
+      indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    };
+    for (const piece of wallPieces(wall)) {
+      const dx = piece.bx - piece.ax;
+      const dz = piece.bz - piece.az;
+      const length = Math.hypot(dx, dz);
+      if (length < 0.001) continue;
+      const ux = dx / length;
+      const uz = dz / length;
+      const nx = -uz * piece.thickness / 2;
+      const nz = ux * piece.thickness / 2;
+      const y0 = groundY + piece.baseY + piece.from;
+      const y1 = groundY + piece.baseY + piece.to;
+      // A/B links (begin/eind), C/D rechts (eind/begin); de voorkant van elk vlak wijst naar buiten.
+      const at = function (x, z, y) { return [x, y, z]; };
+      const A0 = at(piece.ax + nx, piece.az + nz, y0); const A1 = at(piece.ax + nx, piece.az + nz, y1);
+      const B0 = at(piece.bx + nx, piece.bz + nz, y0); const B1 = at(piece.bx + nx, piece.bz + nz, y1);
+      const C0 = at(piece.bx - nx, piece.bz - nz, y0); const C1 = at(piece.bx - nx, piece.bz - nz, y1);
+      const D0 = at(piece.ax - nx, piece.az - nz, y0); const D1 = at(piece.ax - nx, piece.az - nz, y1);
+      const u = length / meters;
+      const v0 = piece.from / meters;
+      const v1 = piece.to / meters;
+      const t = piece.thickness / meters;
+      quad(A0, B0, B1, A1, [-uz, 0, ux], u, v0, v1);
+      quad(C0, D0, D1, C1, [uz, 0, -ux], u, v0, v1);
+      quad(A1, B1, C1, D1, [0, 1, 0], u, 0, t);
+      quad(D0, A0, A1, D1, [-ux, 0, -uz], t, v0, v1);
+      quad(B0, C0, C1, B1, [ux, 0, uz], t, v0, v1);
+      if (piece.from > 0) quad(D0, C0, B0, A0, [0, -1, 0], u, 0, t);
+    }
+    if (!indices.length) return null;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
+    geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+    geometry.setIndex(indices);
+    geometry.computeBoundingSphere();
+    return geometry;
+  }
+
+  function addWalls(worldData) {
+    const walls = Array.isArray(worldData?.walls) ? worldData.walls : [];
+    const groundY = num(worldData?.ground?.y, 0);
+    const shadow = staticPropShadowOptions();
+    for (const wall of walls) {
+      const geometry = wallGeometry(wall, groundY);
+      if (!geometry) continue;
+      const material = new THREE.MeshStandardMaterial({ color: new THREE.Color(colorOrDefault(wall.color, "#ffffff")), roughness: 0.92, metalness: 0 });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.name = "wall " + String(wall.id || "");
+      mesh.castShadow = shadow.castShadow;
+      mesh.receiveShadow = shadow.receiveShadow;
+      mesh.userData.runtimeAlive = true;
+      mesh.userData.gkWall = true;
+      if (mode === "editor") mesh.userData.entityId = wall.id;
+      const asset = wall.textureAssetId ? assetById(worldData, wall.textureAssetId) : null;
+      if (asset) withWallTexture(asset, function (texture) {
+        if (mesh.material !== material) return;
+        material.map = texture;
+        material.needsUpdate = true;
+        requestRender("wall-texture");
+      });
+      content.add(mesh);
+      runtimeStats.sceneObjects += 1;
+      runtimeStats.meshes += 1;
     }
   }
 
-  // Kevin 23-11: een doorgang zonder model = een rechtop staand vlak met een pijl, zodat je ook binnen ziet waar je
+  // Kevin 23-11: een doorgang zonder model = in de editor een rechtop staand vlak met een pijl, zodat je ziet waar je
   // eruit kunt. Groen ↑ = je kunt hier door; rood ↓ = kant B van een doorgang die maar één kant op gaat.
+  // Het vlak is alleen van voren te zien: dat is de kant waar je aankomt (lokaal +Z, zie doorwayArrival op de server).
   // Eén vlak en één materiaal per kleur, gedeeld door alle deuren (niets extra te laden).
   const doorwayArrowShared = new Map();
   function doorwayArrowResources(color) {
@@ -15647,17 +15817,47 @@ function resolveChunkDebugCenter(policy) {
     texture.needsUpdate = true;
     const geometry = new THREE.PlaneGeometry(1.6, 2.2);
     geometry.translate(0, 1.1, 0);
-    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide, depthWrite: false, toneMapped: false });
+    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.FrontSide, depthWrite: false, toneMapped: false });
     const resources = { geometry, material };
     doorwayArrowShared.set(key, resources);
     return resources;
   }
 
-  function addDoorwayArrow(root, color) {
+  // Klein plat pijltje (0,9 m) op de grond: groen wijst de deur in (lokaal -Z), rood wijst eruit (alleen aankomen).
+  function doorwayFlatArrowResources(color) {
+    const key = color === "red" ? "flat-red" : "flat-green";
+    if (doorwayArrowShared.has(key)) return doorwayArrowShared.get(key);
+    const shape = new THREE.Shape();
+    shape.moveTo(0, 0.45);
+    shape.lineTo(0.3, 0.05);
+    shape.lineTo(0.12, 0.05);
+    shape.lineTo(0.12, -0.45);
+    shape.lineTo(-0.12, -0.45);
+    shape.lineTo(-0.12, 0.05);
+    shape.lineTo(-0.3, 0.05);
+    shape.closePath();
+    const geometry = new THREE.ShapeGeometry(shape);
+    geometry.rotateX(-Math.PI / 2);
+    if (color === "red") geometry.rotateY(Math.PI);
+    geometry.translate(0, 0.06, 0);
+    const material = new THREE.MeshBasicMaterial({ color: color === "red" ? "#ef4444" : "#22c55e", transparent: true, opacity: 0.92,
+      side: THREE.FrontSide, depthWrite: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+    const resources = { geometry, material };
+    doorwayArrowShared.set(key, resources);
+    return resources;
+  }
+
+  function addDoorwayArrow(root, color, big = true) {
     if (!root) return;
-    const { geometry, material } = doorwayArrowResources(color);
+    const { geometry, material } = big ? doorwayArrowResources(color) : doorwayFlatArrowResources(color);
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = "doorway-arrow";
+    if (!big) {
+      // Even groot, wat de schaal van het model ook is.
+      const scale = Math.abs(Number(root.scale?.x) || 1);
+      if (scale > 0.001 && Math.abs(scale - 1) > 0.001) mesh.scale.setScalar(1 / scale);
+      mesh.renderOrder = 3;
+    }
     mesh.castShadow = false;
     mesh.receiveShadow = false;
     mesh.userData.runtimeAlive = true;
@@ -19786,6 +19986,7 @@ function resolveChunkDebugCenter(policy) {
     if (!useChunkedGround) addGround(world);
     // Ronde 3b: water altijd uit de wereld zetten, ook als de grond via een andere weg getekend wordt (game).
     waterLayer.setWater(world?.terrain?.water, num(world?.ground?.y, 0));
+    addWalls(world);
     // Altijd de hoogte van de terreinlaag als de wereld terrein heeft, ook als de laag nog niet getekend is (game:
     // die komt later via de grondvakken). Anders voorspelt de client zonder hellingen en trekt de server je terug.
     const nextWalkabilityIndex = buildWalkabilityIndex(world, { heightfield: world?.terrain?.heightfield || terrainLayer.active ? terrainLayer.heightfield : null });
@@ -20294,6 +20495,12 @@ function resolveChunkDebugCenter(policy) {
 
   function applyIndoorScene() {
     skyLayer.setHidden(Boolean(indoorCfg));
+    // Kevin 23-11: buiten het binnen-gebied wordt niets geladen (grond-vakken en wereld-vakken), en het water van buiten
+    // staat uit. Wat er dan nog is, valt weg in de achtergrondkleur.
+    const clip = indoorClipBounds();
+    indoorStreamingClip = clip;
+    if (typeof terrainLayer.setClip === "function") terrainLayer.setClip(clip);
+    if (waterLayer?.group) waterLayer.group.visible = !indoorCfg;
     if (indoorCfg) {
       if (scene.background?.isColor) scene.background.set(indoorCfg.background); else scene.background = new THREE.Color(indoorCfg.background);
       scene.fog = null;
@@ -20302,10 +20509,19 @@ function resolveChunkDebugCenter(policy) {
     applyLightLevels();
   }
 
-  // Kevin 23-11: buiten een binnen-gebied is alles zwart (de kleur van de achtergrond). Een plat vlak op de grond
+  // Kevin 23-11: buiten een binnen-gebied is alles weg (de kleur van de achtergrond, standaard zwart). Een plat vlak op de grond
   // rondom het gebied (met het gebied als gat) en muren langs de rand die alleen van binnenuit te zien zijn: staat de
   // camera net buiten de muur (speler bij de rand), dan kijk je er van achteren doorheen en zie je gewoon de kamer.
   // Geen clipping of nieuwe shaders: één keer bouwen bij binnenkomen, weg bij naar buiten gaan.
+  // De rand van het binnen-gebied met 4 m speling, in meters; null = buiten.
+  function indoorClipBounds() {
+    const points = indoorCfg?.outline;
+    if (mode !== "game" || !points || points.length < 3) return null;
+    let minX = Infinity; let maxX = -Infinity; let minZ = Infinity; let maxZ = -Infinity;
+    for (const [x, z] of points) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z); }
+    return { minX: minX - 4, maxX: maxX + 4, minZ: minZ - 4, maxZ: maxZ + 4 };
+  }
+
   function removeIndoorMask() {
     if (!indoorMask) return;
     scene.remove(indoorMask);
@@ -20345,7 +20561,8 @@ function resolveChunkDebugCenter(policy) {
     shape.holes.push(new THREE.Path(points.map(function ([x, z]) { return new THREE.Vector2(x, -z); })));
     const floorGeometry = new THREE.ShapeGeometry(shape);
     floorGeometry.rotateX(-Math.PI / 2);
-    const floorMaterial = new THREE.MeshBasicMaterial({ color: indoorCfg.background, fog: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+    // Precies de kleur van de achtergrond (geen toneMapping), zodat je de rand niet ziet: buiten is gewoon weg.
+    const floorMaterial = new THREE.MeshBasicMaterial({ color: indoorCfg.background, fog: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
     const floor = new THREE.Mesh(floorGeometry, floorMaterial);
     floor.position.y = floorY + 0.03;
     floor.name = "indoor-mask-floor";
@@ -20371,7 +20588,7 @@ function resolveChunkDebugCenter(policy) {
     }
     const wallGeometry = new THREE.BufferGeometry();
     wallGeometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-    const walls = new THREE.Mesh(wallGeometry, new THREE.MeshBasicMaterial({ color: indoorCfg.background, fog: false, side: THREE.FrontSide }));
+    const walls = new THREE.Mesh(wallGeometry, new THREE.MeshBasicMaterial({ color: indoorCfg.background, fog: false, toneMapped: false, side: THREE.FrontSide }));
     walls.name = "indoor-mask-walls";
     for (const mesh of [floor, walls]) {
       mesh.raycast = noRaycast;
