@@ -1007,6 +1007,8 @@ export function createDocBench(options = {}) {
     if (isNew && (!bench.draft || bench.draft.kind !== kind)) {
       const start = {};
       for (const [key, field] of Object.entries(spec.fields)) if (!emptyValue(field.default)) start[key] = clone(field.default);
+      // De editor kan een nieuwe kaart een plek geven (bijv. kant B van een doorgang in de 🏠 Binnen-zone).
+      if (typeof bench.onNewDraft === "function") { try { bench.onNewDraft(kind, start); } catch {} }
       bench.draft = { kind, body: start, idTouched: false };
     }
     const body = isNew ? bench.draft.body : clone(doc.body);

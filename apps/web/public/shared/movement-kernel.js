@@ -3,6 +3,7 @@
 // Fase 02 (F2-E1-T01): uit world-runtime.js gehaald; gedrag is ongewijzigd (zie tests/movement-parity.test.js).
 import earcut from "./earcut.js";
 import { createEdgeField } from "./edge-field.js";
+import { INDOOR_ZONE, inIndoorZone } from "./indoor-zone.js";
 import { createHeightfield, decodeTerrainChunk, normalizeTerrainWater, terrainHeightAt, terrainWaterAt, TERRAIN_MAX_SLOPE_DEG, WATER_BLOCK_DEPTH } from "./terrain.js";
 
 // Zelfde stappen als THREE.ShapeUtils.triangulateShape(contour, []): dubbel eindpunt weg, dan earcut.
@@ -109,7 +110,9 @@ export function worldGroundForCollision(worldData) {
   if (!bounds) return null;
   return Object.assign({}, bounds, {
     boundsMode: "explicitBounds",
-    y: num(worldData?.ground?.y, 0)
+    y: num(worldData?.ground?.y, 0),
+    // Kevin 23-11: de 🏠 Binnen-zone ligt ver achter de kaart en heeft zijn eigen grond (anders zet de rand je terug).
+    indoorZone: INDOOR_ZONE
   });
 }
 
@@ -1090,7 +1093,9 @@ export function isPointBlockedByTerrain(source, x, z, radius = 0) {
 
 export function clampPointToGround(point, ground, radius) {
   if (!ground) return point;
-  const bounds = effectiveGroundBounds(ground);
+  // In de 🏠 Binnen-zone geldt de rand van de zone, niet die van de wereld.
+  const zone = ground.indoorZone && inIndoorZone(point.x, point.z, 50) ? ground.indoorZone : null;
+  const bounds = zone ? { minX: zone.minX, maxX: zone.maxX, minZ: zone.minZ, maxZ: zone.maxZ } : effectiveGroundBounds(ground);
   if (bounds) {
     const minX = bounds.minX + radius;
     const maxX = bounds.maxX - radius;

@@ -105,6 +105,8 @@ export function indoorSettingsOf(area) {
     light: clampNum(area.indoorLight, 80, 0, 200) / 100,
     sun: clampNum(area.indoorSun, 20, 0, 100) / 100,
     // Kevin 23-11: de rand van het gebied; de game maakt alles erbuiten zwart (de kleur hierboven).
-    outline: areaOutlineMeters(area)
+    outline: areaOutlineMeters(area),
+    // Kevin 23-11: de vloer (terreintextuur, "terrain_texture:<id>"); met een vloer laat de game het terrein weg.
+    floor: typeof area.indoorFloorRef === "string" && area.indoorFloorRef ? area.indoorFloorRef : null
   };
 }

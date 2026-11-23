@@ -1,4 +1,4 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261123-fix3";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261123-binnentab1";
 import { edgeBetweenPoints, editClosedEdges } from "./walkable-edge-tools.js?v=20261031-randen1";
 import { createTerrainEditor } from "./terrain-editor.js?v=20261123-muur1";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261106-perf1";
@@ -11,7 +11,7 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261106-perf1";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261106-perf1";
-import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261123-muur1";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261123-binnentab1";
 import { createAssetPicker } from "./mini-asset-picker.js?v=20261106-thumbs150";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
 import { createDocDrop, docKeyFromRuntimeId, docSideFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261122-doorgang1";
@@ -19,6 +19,7 @@ import { createRoadEditor } from "./road-editor.js?v=20261123-muur1";
 import { createRouteEditor } from "./route-editor.js?v=20261116-herstel1";
 import { AREA_EDITOR_PREFIX, AREA_SOORTEN, AREA_SOORT_ORDER, areaBodyFromNodePatch, areaCirclePointsMm, areaNodeValues, areaSoort } from "../shared/area-soorten.js?v=20261123-muur1";
 import { editWallEdges, wallEdgeKinds } from "../shared/walls.js?v=20261123-muur1";
+import { INDOOR_ZONE, inIndoorZone } from "../shared/indoor-zone.js?v=20261123-binnentab1";
 import { removeVisualObjects, visualModelsForRelation, visualObjectRelations } from "./visual-object-relations.js?v=20261106-perf1";
 import { FIELD_HELP_STATUSES, createSemanticFieldHelpRegistry, formatSemanticFieldHelp, semanticFieldHelpEntry } from "./semantic-field-help.js?v=20261012-semantic-help1";
 import {
@@ -417,6 +418,10 @@ const state = {
   editorMinimapInteractions: null,
   editorMinimapSuppressed: false,
   editorMode: loadStoredEditorMode(),
+  // Kevin 23-11: tab 🏠 Binnen = de Werkbank, maar dan in de Binnen-zone op een zwart canvas (shared/indoor-zone.js).
+  indoorView: false,
+  indoorViewState: null,
+  outsideViewState: null,
   workbenchSelectedModelId: loadStoredWorkbenchSelection(),
   workbenchLibraryType: "assets",
   workbenchSearch: "",
@@ -517,6 +522,7 @@ const el = {
   allLayoutOverflow: document.querySelector("#allLayoutOverflow"),
   nodesModeButton: document.querySelector("#nodesModeButton"),
   workbenchModeButton: document.querySelector("#workbenchModeButton"),
+  indoorModeButton: document.querySelector("#indoorModeButton"),
   gameModeButton: document.querySelector("#gameModeButton"),
   terrainModeButton: document.querySelector("#terrainModeButton"),
   terrainToolsPanel: document.querySelector("#terrainToolsPanel"),
@@ -1258,7 +1264,9 @@ async function createAreaDoc(soort) {
   const cx = Number(center.x) || 0;
   const cz = Number(center.z) || 0;
   const groundY = terrainGroundY();
-  const corners = soort === "pad" ? [[-5, 0], [5, 0]] : [[-4, -4], [4, -4], [4, 4], [-4, 4]];
+  // Tab 🏠 Binnen: een nieuw deelgebied is meteen een binnenruimte van 12 x 12 m.
+  const indoorRoom = soort === "deelgebied" && state.indoorView;
+  const corners = soort === "pad" ? [[-5, 0], [5, 0]] : indoorRoom ? [[-6, -6], [6, -6], [6, 6], [-6, 6]] : [[-4, -4], [4, -4], [4, 4], [-4, 4]];
   // Questgebied: meteen een cirkel van 10 m (straal en vorm pas je aan in het paneel).
   const pointsMm = soort === "questgebied" ? areaCirclePointsMm(mm(cx), mm(cz), 10000) : corners.map(function (offset) {
     const point = [mm(cx + offset[0]), mm(cz + offset[1])];
@@ -1268,6 +1276,7 @@ async function createAreaDoc(soort) {
   const stamp = Date.now().toString(36);
   const body = { areaId: soort + ".vlak_" + stamp, displayName: def.label + " " + (docBench.docs("area").length + 1), soort: soort, shape: "polygon", pointsMm: pointsMm };
   if (def.road) Object.assign(body, { displayName: "Wegennet", links: [[0, 1]] });
+  if (indoorRoom) Object.assign(body, { displayName: "Binnen " + (docBench.docs("area").length + 1), indoor: true });
   try {
     const result = await docBench.saveDoc("area", null, body, def.label + " gemaakt");
     selectAreaDoc(result.docKey);
@@ -16772,6 +16781,8 @@ function renderDocFocusPanel() {
         const x = side === "b" ? (Number.isFinite(Number(body.bX)) && body.bX !== null ? Number(body.bX) : (Number(body.x) || 0) + 6) : Number(body.x) || 0;
         const z = side === "b" ? (Number.isFinite(Number(body.bZ)) && body.bZ !== null ? Number(body.bZ) : Number(body.z) || 0) : Number(body.z) || 0;
         state.doorwaySideB = side === "b" ? doorDoc.docKey : null;
+        // Ligt die kant in de 🏠 Binnen-zone, dan naar de tab Binnen (en andersom naar buiten).
+        if (inIndoorZone(x, z, 100) !== state.indoorView) setIndoorView(!state.indoorView, { focus: false });
         selectPlacedDoc(doorDoc.docKey);
         if (typeof runtime?.focusGroundPoint === "function") runtime.focusGroundPoint(x, z);
       });
@@ -16894,6 +16905,47 @@ function renderSettingsCardOnly() {
 // Tab Game: de game in een frame boven de editor. Zolang hij open is tekent de editor-3D niets,
 // zodat er maar één 3D-wereld tegelijk draait (oude laptop). Na SAVE TO GAME laadt de game opnieuw.
 let gameTabNeedsReload = false;
+// Kevin 23-11: tab 🏠 Binnen. Zelfde Werkbank en gereedschap, maar de camera staat in de Binnen-zone (50 km achter de
+// kaart, shared/indoor-zone.js) en de view is zwart, zonder terrein, lucht en water. Elke tab onthoudt zijn eigen plek.
+function setIndoorView(on, options = {}) {
+  const next = Boolean(on);
+  if (next === state.indoorView) return;
+  const here = editorCameraGroundPoint();
+  if (here) state[state.indoorView ? "indoorViewState" : "outsideViewState"] = { x: Number(here.x) || 0, z: Number(here.z) || 0 };
+  state.indoorView = next;
+  if (runtime && typeof runtime.setEditorIndoorView === "function") runtime.setEditorIndoorView(next);
+  if (options.focus !== false && runtime && typeof runtime.focusGroundPoint === "function") {
+    const saved = next ? state.indoorViewState : state.outsideViewState;
+    if (saved) runtime.focusGroundPoint(saved.x, saved.z);
+    else if (next) runtime.focusGroundPoint(INDOOR_ZONE.centerX, INDOOR_ZONE.centerZ);
+  }
+  if (el.workbenchModeButton) el.workbenchModeButton.classList.toggle("active", state.editorMode === "workbench" && !next);
+  if (el.indoorModeButton) el.indoorModeButton.classList.toggle("active", state.editorMode === "workbench" && next);
+  if (next) setStatus("🏠 Binnen: alle binnenruimtes op één zwart canvas. Maak per huis een 🔷 Deelgebied (staat meteen op Binnen) en zet kant B van een doorgang hier.", "");
+}
+
+// Na het laden: staat de camera in de Binnen-zone (bijv. na opnieuw openen), dan meteen de tab Binnen.
+function syncIndoorViewWithCamera() {
+  if (state.indoorView || state.editorMode !== "workbench") return;
+  const here = editorCameraGroundPoint();
+  if (here && inIndoorZone(here.x, here.z, 200)) setIndoorView(true, { focus: false });
+}
+
+// Nieuwe doorgang: kant A bij de camera (buiten), kant B vanzelf op een vrije plek in de 🏠 Binnen-zone.
+docBench.onNewDraft = function (kind, body) {
+  if (kind !== "doorway") return;
+  const here = editorCameraGroundPoint();
+  const round1 = function (value) { return Math.round(Number(value) * 10) / 10; };
+  const count = docBench.docs("doorway").length;
+  const free = { x: INDOOR_ZONE.centerX - 400 + (count % 20) * 40, z: INDOOR_ZONE.centerZ - 400 + Math.floor(count / 20) * 40 };
+  if (state.indoorView) {
+    if (here) Object.assign(body, { bX: round1(here.x), bZ: round1(here.z) });
+  } else {
+    if (here) Object.assign(body, { x: round1(here.x), z: round1(here.z) });
+    Object.assign(body, { bX: round1(free.x), bZ: round1(free.z) });
+  }
+};
+
 function setGameTabOpen(open) {
   const panel = el.gameTabPanel;
   if (!panel || !el.gameModeButton) return;
@@ -17036,9 +17088,14 @@ function setEditorMode(mode, persist = true) {
     el.nodesModeButton.classList.toggle("active", state.editorMode === "nodes");
     el.nodesModeButton.setAttribute("aria-pressed", state.editorMode === "nodes" ? "true" : "false");
   }
+  if (state.editorMode !== "workbench" && state.indoorView) setIndoorView(false);
   if (el.workbenchModeButton) {
-    el.workbenchModeButton.classList.toggle("active", state.editorMode === "workbench");
-    el.workbenchModeButton.setAttribute("aria-pressed", state.editorMode === "workbench" ? "true" : "false");
+    el.workbenchModeButton.classList.toggle("active", state.editorMode === "workbench" && !state.indoorView);
+    el.workbenchModeButton.setAttribute("aria-pressed", state.editorMode === "workbench" && !state.indoorView ? "true" : "false");
+  }
+  if (el.indoorModeButton) {
+    el.indoorModeButton.classList.toggle("active", state.editorMode === "workbench" && state.indoorView);
+    el.indoorModeButton.setAttribute("aria-pressed", state.editorMode === "workbench" && state.indoorView ? "true" : "false");
   }
   document.body.classList.toggle("terrainEditorMode", state.editorMode === "terrain");
   if (el.terrainModeButton) {
@@ -31183,6 +31240,7 @@ function applyViewportWorld(world) {
   attachEditorSurfaceNodeIds(world);
   state.viewportWorld = world || null;
   if (runtime) runtime.setWorld(world);
+  syncIndoorViewWithCamera();
   el.viewportStatus.textContent = world && world.world && world.world.displayName ? world.world.displayName : "Draft viewport";
   state.viewportDirty = false;
   clearViewportRefreshTimer();
@@ -34088,7 +34146,8 @@ document.addEventListener("visibilitychange", function () {
 });
 
 if (el.nodesModeButton) el.nodesModeButton.addEventListener("click", function () { if (el.oldModeMenu) el.oldModeMenu.open = false; setEditorMode("nodes"); });
-if (el.workbenchModeButton) el.workbenchModeButton.addEventListener("click", function () { setGameTabOpen(false); setBibleTabOpen(false); setEditorMode("workbench"); });
+if (el.workbenchModeButton) el.workbenchModeButton.addEventListener("click", function () { setGameTabOpen(false); setBibleTabOpen(false); setIndoorView(false); setEditorMode("workbench"); });
+if (el.indoorModeButton) el.indoorModeButton.addEventListener("click", function () { setGameTabOpen(false); setBibleTabOpen(false); setIndoorView(true); setEditorMode("workbench"); });
 if (el.settingsModeButton) el.settingsModeButton.addEventListener("click", function () { setGameTabOpen(false); setBibleTabOpen(false); setEditorMode("settings"); });
 if (el.gameModeButton) el.gameModeButton.addEventListener("click", function () { setGameTabOpen(true); });
 if (el.bibleModeButton) el.bibleModeButton.addEventListener("click", function () { setBibleTabOpen(true); });

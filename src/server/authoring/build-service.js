@@ -10,6 +10,7 @@ import { DocumentRepository } from "./document-repository.js";
 import { compileWorldSection } from "./world-compiler.js";
 import { compileActorSection } from "./actor-compiler.js";
 import { compileGameSection } from "./game-compiler.js";
+import { groundTooCloseToIndoorZone } from "../../../apps/web/public/shared/indoor-zone.js";
 import { authoringError, sha256, stableStringify } from "./stable-json.js";
 
 export const AUTHORING_COMPILER_VERSION = "gk-canonical-compiler-1";
@@ -123,6 +124,11 @@ export function compileCanonical(documents, options = {}) {
   if (worldSettings) {
     client.worldSettings = split(worldSettings).client;
     server.worldSettings = split(worldSettings).server;
+    // Kevin 23-11: de wereld mag nooit tegen de 🏠 Binnen-zone (50 km) aan groeien.
+    const half = (Number(worldSettings.body?.groundSize) || 0) / 2;
+    if (groundTooCloseToIndoorZone({ minX: -half, maxX: half, minZ: -half, maxZ: half })) {
+      errors.push({ code: "WORLD_NEAR_INDOOR_ZONE", docKey: worldSettings.docKey, message: "De wereld is zo groot dat hij bij de 🏠 Binnen-zone (op 50 km) komt. Maak de wereld kleiner." });
+    }
   }
   // Camera-keuze (19-11): camera-afstand en -hoek stonden vroeger op de kaart Wereld en staan nu op Project.
   // Zolang Project ze nog niet heeft, gaat de oude waarde van Wereld mee (de wereldbouwer gebruikt Project eerst).

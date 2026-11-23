@@ -332,6 +332,11 @@ export const CANONICAL_KINDS = {
         ui: ui("🎨", "color", "werkbank", { soorten: ["deelgebied"], group: INDOOR_GROUP, when: { key: "indoor", is: [true] } }), default: "#000000",
         help: help("De kleur van alles buiten dit deelgebied (er is binnen geen lucht en geen omgeving).", "Zwart voor een huis of grot. Teken het deelgebied precies langs de buitenmuren.",
           "Je ziet een stuk van de kamer niet → maak het deelgebied groter. Je ziet nog gras of bomen erbuiten → kleiner.") },
+      // Kevin 23-11: binnen is een eigen zwarte ruimte. Met een vloer is het terrein daar weg en tekent de game alleen de kamer.
+      indoorFloorRef: { type: "ref", refKind: "terrain_texture", required: false, audience: "client", label: "Vloer",
+        ui: ui("🟫", "ref", "werkbank", { soorten: ["deelgebied"], group: INDOOR_GROUP, when: { key: "indoor", is: [true] } }), default: null,
+        help: help("De vloer van de kamer: een terreintextuur uit de Bibliotheek, plat over het hele deelgebied. Met een vloer is het terrein hier weg, dus je kunt de kamer overal neerzetten, ook buiten de kaart in het niets.",
+          "Kies bijvoorbeeld je stenen of houten textuur. Leeg = het terrein (met verf) is de vloer.", "Je zakt door de vloer of ziet gras → kies een vloer. De tegels zijn te groot → maak de tegelmaat van de textuur kleiner.") },
       indoorLight: { type: "integer", required: false, min: 0, max: 200, audience: "client", label: "Licht binnen",
         ui: ui("💡", "slider", "werkbank", { step: 5, unit: "%", soorten: ["deelgebied"], group: INDOOR_GROUP, when: { key: "indoor", is: [true] } }), default: 80,
         help: help("Hoe licht het binnen is, los van dag en nacht (het licht van lampen en fakkels).", "60 tot 100 % voor een huis, 20 tot 40 % voor een donkere grot.",
@@ -706,7 +711,7 @@ function shapeIssues(kind, body, issues) {
 }
 
 // Ombouw stap 2: begroeiing, pad, blokkade en loopvlak zijn altijd punten (getekend met de Area tool).
-const DEELGEBIED_ONLY = ["regionRef", "priority", "musicAssetId", "safe", "indoor", "indoorCameraDistance", "indoorCameraPitch", "indoorBackground", "indoorLight", "indoorSun", "minXMm", "maxXMm", "minZMm", "maxZMm", "centerXMm", "centerZMm", "radiusMm"];
+const DEELGEBIED_ONLY = ["regionRef", "priority", "musicAssetId", "safe", "indoor", "indoorCameraDistance", "indoorCameraPitch", "indoorBackground", "indoorFloorRef", "indoorLight", "indoorSun", "minXMm", "maxXMm", "minZMm", "maxZMm", "centerXMm", "centerZMm", "radiusMm"];
 function areaShapeIssues(body, issues) {
   const soort = areaSoort(body);
   const def = AREA_SOORTEN[soort];

@@ -5,6 +5,7 @@ import { areaShapeReadModels } from "../publish-service.js";
 import { AREA_EDITOR_PREFIX, AREA_RUNTIME_ID_FIELD } from "../../shared/authoring/kinds/area.js";
 import { wallBlockers, wallFromAreaValues } from "../../../apps/web/public/shared/walls.js";
 import { areaOutlineMeters } from "../../../apps/web/public/shared/spatial.js";
+import { inIndoorZone } from "../../../apps/web/public/shared/indoor-zone.js";
 
 export const CANONICAL_SPAWN_PREFIX = "canonical.";
 
@@ -193,6 +194,9 @@ export function applyCanonicalBuild(world, serverBuild, options = {}) {
   }
   if (world.zonePackage?.zoneId) next.zonePackage = withCanonicalPickups(world.zonePackage, pickups, removedLegacy, options);
   withAreaShapes(next, data, options);
+  // Kevin 23-11: de vloer van een 🏠 Binnen-deelgebied (een terreintextuur, plat over het hele gebied), in editor en game.
+  const floors = indoorFloors(data.world?.areas);
+  if (floors.length) next.indoorFloors = floors;
   // Kevin 23-11: uit een deelgebied met 🏠 Binnen loop je niet zomaar weg (alleen via een doorgang). Niet in de editor.
   const indoorBlockers = options.editor ? [] : indoorEdgeBlockers(data.world?.areas);
   if (indoorBlockers.length) {
@@ -200,6 +204,22 @@ export function applyCanonicalBuild(world, serverBuild, options = {}) {
     next.collision = Object.assign({}, collision, { blockers: (Array.isArray(collision.blockers) ? collision.blockers : []).concat(indoorBlockers) });
   }
   return next;
+}
+
+export function indoorFloors(areas) {
+  const out = [];
+  for (const area of Array.isArray(areas) ? areas : []) {
+    if (area?.indoor !== true) continue;
+    const outline = areaOutlineMeters(area);
+    if (!outline || outline.length < 3) continue;
+    const x = outline.reduce((sum, point) => sum + point[0], 0) / outline.length;
+    const z = outline.reduce((sum, point) => sum + point[1], 0) / outline.length;
+    const floorRef = typeof area.indoorFloorRef === "string" && area.indoorFloorRef ? area.indoorFloorRef : null;
+    // In de 🏠 Binnen-zone is er geen terrein: daar altijd een vloer (zonder gekozen textuur een egale grijze).
+    if (!floorRef && !inIndoorZone(x, z)) continue;
+    out.push({ id: "indoor." + area.areaId, areaId: area.areaId, floorRef, outline, x, y: 0, z });
+  }
+  return out;
 }
 
 // Langs elke rand van een 🏠 Binnen-deelgebied een dichte strook van 60 cm (half binnen, half buiten), iets langer

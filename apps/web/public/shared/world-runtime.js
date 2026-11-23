@@ -33,6 +33,7 @@ import { createTerrainLayer, seedTerrainChunk, seedTerrainPaint } from "./terrai
 import { createWaterLayer } from "./water-render.js?v=20261030-terrein6";
 import { createSkyLayer } from "./sky-render.js?v=20261120-sky2";
 import { wallPieces } from "./walls.js?v=20261123-muur1";
+import { INDOOR_ZONE } from "./indoor-zone.js?v=20261123-binnentab1";
 export {
   effectiveGroundBounds,
   effectiveWorldGroundBounds,
@@ -15661,17 +15662,30 @@ function resolveChunkDebugCenter(policy) {
         chunkKeys: [chunkKeyValue]
       });
     }
+    // Kevin 23-11: een doorgang heeft altijd een pijl (ook met model). Groot rechtop vlak alleen in de editor zonder model,
+    // anders een klein plat pijltje op de grond: zonder model midden in de deur, met model vóór het model (aan de kant
+    // waar je aankomt en waar je erin loopt), anders valt hij eronder weg.
+    const doorwayArrowMesh = entity.doorwayArrow ? addDoorwayArrow(root, entity.doorwayArrow, entity.doorwayArrowBig === true) : null;
     if (!useEditorModelPlaceholders(worldData, options) && entity.modelAssetId && assetById(worldData, entity.modelAssetId)?.sourcePath) {
-      loadModelInto(root, entity.modelAssetId, worldData, null, {
+      loadModelInto(root, entity.modelAssetId, worldData, doorwayArrowMesh ? function (clone) { placeDoorwayArrowInFront(root, clone, doorwayArrowMesh); } : null, {
         castShadow: options.castShadow !== undefined ? options.castShadow : true,
         receiveShadow: options.receiveShadow !== undefined ? options.receiveShadow : true
       });
     } else if (!(entity.doorwayArrow && !entity.modelAssetId)) {
-      addEntityPlaceholder(root);
+      const placeholder = addEntityPlaceholder(root);
+      if (doorwayArrowMesh && placeholder) placeDoorwayArrowInFront(root, placeholder, doorwayArrowMesh);
     }
-    // Kevin 23-11: een doorgang heeft altijd een pijl (ook met model). Groot rechtop vlak alleen in de editor zonder model,
-    // anders een klein plat pijltje op de grond in het midden van de deur.
-    if (entity.doorwayArrow) addDoorwayArrow(root, entity.doorwayArrow, entity.doorwayArrowBig === true);
+  }
+
+  function placeDoorwayArrowInFront(root, model, arrow) {
+    if (!root || !model || !arrow || arrow.parent !== root) return;
+    root.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(model);
+    if (box.isEmpty()) return;
+    box.applyMatrix4(root.matrixWorld.clone().invert());
+    // 0,6 m vóór de voorkant van het model (lokaal +Z), in de maat van de deur zelf.
+    arrow.position.z = Math.max(0, box.max.z) + 0.6 * (Number(arrow.scale.z) || 1);
+    requestRender("doorway-arrow");
   }
 
   // Kevin 23-11: 🧱 Muren (Area tool). Eén mesh per muur uit simpele blokken (shared/walls.js, dezelfde stukken als de
@@ -15780,6 +15794,49 @@ function resolveChunkDebugCenter(policy) {
     }
   }
 
+  // Kevin 23-11: de vloer van een 🏠 Binnen-deelgebied: één plat vlak in de vorm van het gebied, met een terreintextuur
+  // (tegels in meters). Binnen staat het terrein uit als het gebied een vloer heeft (eigen zwarte ruimte).
+  function addIndoorFloors(worldData) {
+    const floors = Array.isArray(worldData?.indoorFloors) ? worldData.indoorFloors : [];
+    const groundY = num(worldData?.ground?.y, 0);
+    const textures = worldData?.terrain?.heightfield?.paint?.textures || {};
+    for (const floor of floors) {
+      const outline = Array.isArray(floor?.outline) ? floor.outline.filter(function (point) {
+        return Array.isArray(point) && Number.isFinite(Number(point[0])) && Number.isFinite(Number(point[1]));
+      }) : [];
+      if (outline.length < 3) continue;
+      const texture = textures[floor.floorRef] || null;
+      const tile = Math.max(0.25, num(texture?.size, 4));
+      const shape = new THREE.Shape(outline.map(function (point) { return new THREE.Vector2(Number(point[0]), -Number(point[1])); }));
+      const geometry = new THREE.ShapeGeometry(shape);
+      geometry.rotateX(-Math.PI / 2);
+      const uv = geometry.getAttribute("uv");
+      const position = geometry.getAttribute("position");
+      for (let index = 0; index < uv.count; index += 1) uv.setXY(index, position.getX(index) / tile, position.getZ(index) / tile);
+      uv.needsUpdate = true;
+      const material = new THREE.MeshStandardMaterial({ color: new THREE.Color(colorOrDefault(texture?.color, texture ? "#ffffff" : "#6b6b6b")), roughness: 0.95, metalness: 0 });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.name = "indoor floor " + String(floor.areaId || "");
+      mesh.position.y = groundY + num(floor.y, 0) + 0.02;
+      mesh.receiveShadow = true;
+      mesh.castShadow = false;
+      mesh.userData.runtimeAlive = true;
+      mesh.userData.gkIndoorFloor = true;
+      if (texture?.url) {
+        withWallTexture({ id: "floor:" + floor.floorRef, sourcePath: texture.url, name: texture.name || floor.floorRef }, function (map) {
+          if (mesh.material !== material) return;
+          material.map = map;
+          material.color.set("#ffffff");
+          material.needsUpdate = true;
+          requestRender("indoor-floor");
+        });
+      }
+      content.add(mesh);
+      runtimeStats.sceneObjects += 1;
+      runtimeStats.meshes += 1;
+    }
+  }
+
   // Kevin 23-11: een doorgang zonder model = in de editor een rechtop staand vlak met een pijl, zodat je ziet waar je
   // eruit kunt. Groen ↑ = je kunt hier door; rood ↓ = kant B van een doorgang die maar één kant op gaat.
   // Het vlak is alleen van voren te zien: dat is de kant waar je aankomt (lokaal +Z, zie doorwayArrival op de server).
@@ -15848,7 +15905,7 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function addDoorwayArrow(root, color, big = true) {
-    if (!root) return;
+    if (!root) return null;
     const { geometry, material } = big ? doorwayArrowResources(color) : doorwayFlatArrowResources(color);
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = "doorway-arrow";
@@ -15865,10 +15922,11 @@ function resolveChunkDebugCenter(policy) {
     root.add(mesh);
     runtimeStats.sceneObjects += 1;
     runtimeStats.meshes += 1;
+    return mesh;
   }
 
   function addEntityPlaceholder(root) {
-    if (!root) return;
+    if (!root) return null;
     const geometry = new THREE.BoxGeometry(1.2, 1.2, 1.2);
     const material = new THREE.MeshStandardMaterial({
       color: new THREE.Color("#38bdf8"),
@@ -15887,6 +15945,7 @@ function resolveChunkDebugCenter(policy) {
     root.add(mesh);
     runtimeStats.sceneObjects += 1;
     runtimeStats.meshes += 1;
+    return mesh;
   }
 
   function addScatterPlaceholderInstances(root, instances) {
@@ -16923,7 +16982,10 @@ function resolveChunkDebugCenter(policy) {
     const origin = player.root ? player.root.position : player.pos;
     const presentation = runtimeTargetPresentationConfig();
     const seenWorldLabels = new Set();
+    const indoorOutline = mode === "game" && indoorCfg?.outline && indoorCfg.outline.length >= 3 ? indoorCfg.outline : null;
     const push = function (id, name, entityKind, extra) {
+      // Kevin 23-11: binnen geen namen van dingen buiten de kamer (die bestaan daar niet).
+      if (indoorOutline && !pointInOutline(indoorOutline, point.x, point.z)) return;
       const distance = origin ? Math.hypot(point.x - origin.x, point.z - origin.z) : camera.position.distanceTo(point);
       if (!(distance <= maxDistance)) return;
       point.project(camera);
@@ -19987,6 +20049,7 @@ function resolveChunkDebugCenter(policy) {
     // Ronde 3b: water altijd uit de wereld zetten, ook als de grond via een andere weg getekend wordt (game).
     waterLayer.setWater(world?.terrain?.water, num(world?.ground?.y, 0));
     addWalls(world);
+    addIndoorFloors(world);
     // Altijd de hoogte van de terreinlaag als de wereld terrein heeft, ook als de laag nog niet getekend is (game:
     // die komt later via de grondvakken). Anders voorspelt de client zonder hellingen en trekt de server je terug.
     const nextWalkabilityIndex = buildWalkabilityIndex(world, { heightfield: world?.terrain?.heightfield || terrainLayer.active ? terrainLayer.heightfield : null });
@@ -20101,6 +20164,7 @@ function resolveChunkDebugCenter(policy) {
     applyCameraConfig(world);
     // Binnenruimtes (22-11): een nieuwe wereld zette lucht, achtergrond en mist terug; binnen blijft binnen.
     if (indoorCfg && mode === "game") { captureIndoorOutside(); applyIndoorScene(); }
+    if (editorIndoorView && mode === "editor") applyEditorIndoorView();
     const restoredEditorView = editorViewState ? restoreViewState(editorViewState) : false;
     removeDuplicateRuntimeGroups();
     syncChunkDebugState("setWorld");
@@ -20467,6 +20531,7 @@ function resolveChunkDebugCenter(policy) {
     const next = cfg && typeof cfg === "object" ? {
       cameraDistance: clamp(num(cfg.cameraDistance, 16), 4, 80), cameraPitch: clamp(num(cfg.cameraPitch, 65), 30, 89),
       background: colorOrDefault(cfg.background, "#000000"), light: clamp(num(cfg.light, 0.8), 0, 2), sun: clamp(num(cfg.sun, 0.2), 0, 1),
+      floor: typeof cfg.floor === "string" && cfg.floor ? cfg.floor : null,
       outline: Array.isArray(cfg.outline) ? cfg.outline.slice(0, 256).filter(function (point) {
         return Array.isArray(point) && Number.isFinite(Number(point[0])) && Number.isFinite(Number(point[1]));
       }).map(function (point) { return [Number(point[0]), Number(point[1])]; }) : null
@@ -20485,6 +20550,53 @@ function resolveChunkDebugCenter(policy) {
     requestRender("indoor");
   }
 
+  // Kevin 23-11: editor-tab 🏠 Binnen: zwart canvas zonder terrein, lucht, water en mist, met een raster (10 m) op de
+  // Binnen-zone zodat je ziet waar je tekent. Alleen zichtbaarheid; terug naar Werkbank zet alles weer aan.
+  let editorIndoorView = false;
+  let editorIndoorGrid = null;
+  let editorOutsideLook = null;
+  function setEditorIndoorView(on) {
+    if (mode !== "editor") return;
+    const next = Boolean(on);
+    if (next === editorIndoorView) return;
+    editorIndoorView = next;
+    if (next) editorOutsideLook = { background: scene.background?.isColor ? scene.background.clone() : scene.background, fog: scene.fog || null };
+    applyEditorIndoorView();
+    if (!next && editorOutsideLook) {
+      scene.background = editorOutsideLook.background;
+      scene.fog = editorOutsideLook.fog;
+      editorOutsideLook = null;
+    }
+    requestRender("editor-indoor-view");
+  }
+  function applyEditorIndoorView() {
+    const on = editorIndoorView;
+    skyLayer.setHidden(on);
+    if (terrainLayer?.group) terrainLayer.group.visible = !on;
+    if (waterLayer?.group) waterLayer.group.visible = !on;
+    if (on) {
+      // Na een nieuwe wereld staat de achtergrond van buiten er weer: die onthouden voor terug naar Werkbank.
+      if (!(scene.background?.isColor && scene.background.getHex() === 0x000000 && editorOutsideLook)) {
+        editorOutsideLook = { background: scene.background?.isColor ? scene.background.clone() : scene.background, fog: scene.fog || null };
+      }
+      scene.background = new THREE.Color("#000000");
+      scene.fog = null;
+      if (!editorIndoorGrid) {
+        const size = INDOOR_ZONE.maxX - INDOOR_ZONE.minX;
+        editorIndoorGrid = new THREE.GridHelper(size, Math.round(size / 10), 0x3a3a3a, 0x1c1c1c);
+        editorIndoorGrid.position.set(INDOOR_ZONE.centerX, num(world?.ground?.y, 0) + 0.005, INDOOR_ZONE.centerZ);
+        editorIndoorGrid.name = "editor-indoor-grid";
+        editorIndoorGrid.userData.runtimeAlive = true;
+        editorIndoorGrid.raycast = function () {};
+        editorIndoorGrid.frustumCulled = false;
+        scene.add(editorIndoorGrid);
+      }
+      editorIndoorGrid.visible = true;
+    } else if (editorIndoorGrid) {
+      editorIndoorGrid.visible = false;
+    }
+  }
+
   function captureIndoorOutside() {
     indoorOutside = {
       background: scene.background?.isColor ? scene.background.clone() : scene.background,
@@ -20501,6 +20613,11 @@ function resolveChunkDebugCenter(policy) {
     indoorStreamingClip = clip;
     if (typeof terrainLayer.setClip === "function") terrainLayer.setClip(clip);
     if (waterLayer?.group) waterLayer.group.visible = !indoorCfg;
+    // Met een eigen vloer is het terrein er binnen helemaal niet (ook niet onder de kamer).
+    if (terrainLayer?.group) terrainLayer.group.visible = !(indoorCfg && indoorCfg.floor);
+    // Kevin 23-11: binnen is een eigen zwarte ruimte. De game tekent alleen wat binnen de rand van het deelgebied staat
+    // (alles erbuiten wordt weggeknipt: grond, bomen, modellen). Eén keer bij binnenkomen, tijdens de zwarte fade.
+    renderer.clippingPlanes = indoorClipPlanes();
     if (indoorCfg) {
       if (scene.background?.isColor) scene.background.set(indoorCfg.background); else scene.background = new THREE.Color(indoorCfg.background);
       scene.fog = null;
@@ -20513,6 +20630,44 @@ function resolveChunkDebugCenter(policy) {
   // rondom het gebied (met het gebied als gat) en muren langs de rand die alleen van binnenuit te zien zijn: staat de
   // camera net buiten de muur (speler bij de rand), dan kijk je er van achteren doorheen en zie je gewoon de kamer.
   // Geen clipping of nieuwe shaders: één keer bouwen bij binnenkomen, weg bij naar buiten gaan.
+  // Knipvlakken langs de rand (de bolle omtrek; bij een L-vorm vult het masker de hoek). Naar binnen gericht, 10 cm speling.
+  function indoorClipPlanes() {
+    const points = indoorCfg?.outline;
+    if (mode !== "game" || !points || points.length < 3) return [];
+    const sorted = points.map(function ([x, z]) { return [x, z]; }).sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
+    const cross = function (o, a, b) { return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]); };
+    const lower = [];
+    for (const point of sorted) {
+      while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], point) <= 0) lower.pop();
+      lower.push(point);
+    }
+    const upper = [];
+    for (let index = sorted.length - 1; index >= 0; index -= 1) {
+      const point = sorted[index];
+      while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], point) <= 0) upper.pop();
+      upper.push(point);
+    }
+    const hull = lower.slice(0, -1).concat(upper.slice(0, -1));
+    if (hull.length < 3) return [];
+    let cx = 0; let cz = 0;
+    for (const [x, z] of hull) { cx += x; cz += z; }
+    cx /= hull.length; cz /= hull.length;
+    const planes = [];
+    // Hooguit 16 vlakken (een rond gebied heeft er 32): elke zoveelste rand, rondom verdeeld, zodat niets van de kamer wegvalt.
+    const step = Math.max(1, Math.ceil(hull.length / 16));
+    for (let index = 0; index < hull.length; index += step) {
+      const a = hull[index];
+      const b = hull[(index + 1) % hull.length];
+      const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      if (length < 0.01) continue;
+      let nx = -(b[1] - a[1]) / length;
+      let nz = (b[0] - a[0]) / length;
+      if (nx * (cx - a[0]) + nz * (cz - a[1]) < 0) { nx = -nx; nz = -nz; }
+      planes.push(new THREE.Plane(new THREE.Vector3(nx, 0, nz), -(nx * a[0] + nz * a[1]) + 0.1));
+    }
+    return planes;
+  }
+
   // De rand van het binnen-gebied met 4 m speling, in meters; null = buiten.
   function indoorClipBounds() {
     const points = indoorCfg?.outline;
@@ -20605,6 +20760,7 @@ function resolveChunkDebugCenter(policy) {
   return {
     setDaylight: setDaylight,
     setIndoor: setIndoor,
+    setEditorIndoorView: setEditorIndoorView,
     setWorld: setWorld,
     render: requestRender,
     setRenderPaused: setRenderPaused,

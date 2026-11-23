@@ -96,3 +96,39 @@ test("Kevin 23-11: uit een 🏠 Binnen-gebied loop je niet weg (rand dicht), in 
   assert.equal(applyCanonicalBuild(base, build).collision.blockers.filter((blocker) => blocker.reason === "indoor").length, 4);
   assert.equal((applyCanonicalBuild(base, build, { editor: true }).collision?.blockers || []).length, 0, "editor: geen rand");
 });
+
+test("Kevin 23-11: binnen als eigen ruimte: vloer van het deelgebied in de wereld en in de binnen-instellingen", async () => {
+  const { applyCanonicalBuild } = await import("../src/server/authoring/runtime-overlay.js");
+  const area = { areaId: "huis", displayName: "Huis", indoor: true, indoorFloorRef: "terrain_texture:steen", shape: "box", minXMm: 0, maxXMm: 10000, minZMm: 0, maxZMm: 8000 };
+  assert.equal(indoorSettingsOf(area).floor, "terrain_texture:steen");
+  assert.equal(indoorSettingsOf(Object.assign({}, area, { indoorFloorRef: null })).floor, null);
+  const base = { gameProject: { zones: {} }, collision: { blockers: [] } };
+  const floors = applyCanonicalBuild(base, { data: { world: { areas: [area] } } }, { editor: true }).indoorFloors;
+  assert.equal(floors.length, 1, "ook in de editor, om te kunnen bouwen");
+  assert.equal(floors[0].floorRef, "terrain_texture:steen");
+  assert.deepEqual([floors[0].x, floors[0].z], [5, 4]);
+  assert.equal(validateDocument("area", { areaId: "huis", displayName: "Huis", shape: "box", minXMm: 0, maxXMm: 1000, minZMm: 0, maxZMm: 1000, indoor: true, indoorFloorRef: "terrain_texture:steen" }).ok, true);
+});
+
+test("Kevin 23-11: 🏠 Binnen-zone ver achter de kaart: eigen rand voor lopen, grijze vloer, de wereld komt er nooit bij", async () => {
+  const { INDOOR_ZONE, groundTooCloseToIndoorZone, inIndoorZone } = await import("../apps/web/public/shared/indoor-zone.js");
+  const { clampPointToGround, worldGroundForCollision } = await import("../apps/web/public/shared/movement-kernel.js");
+  const { indoorFloors } = await import("../src/server/authoring/runtime-overlay.js");
+  const { CANONICAL_KINDS } = await import("../src/shared/authoring/kinds.js");
+  // De grootste wereld (Wereld > Grootte, max) blijft ver van de zone.
+  const maxHalf = CANONICAL_KINDS.world_settings.fields.groundSize.max / 2;
+  assert.equal(groundTooCloseToIndoorZone({ minX: -maxHalf, maxX: maxHalf, minZ: -maxHalf, maxZ: maxHalf }), false);
+  assert.equal(groundTooCloseToIndoorZone({ minX: -45000, maxX: 45000, minZ: -45000, maxZ: 45000 }), true);
+  // Lopen in de zone: de rand van de wereld zet je niet terug.
+  const ground = worldGroundForCollision({ ground: { boundsMode: "centerSize", width: 500, depth: 500, y: 0 } });
+  const inside = clampPointToGround({ x: INDOOR_ZONE.centerX + 3, y: 0, z: 7 }, ground, 0.4);
+  assert.deepEqual([inside.x, inside.z], [INDOOR_ZONE.centerX + 3, 7]);
+  const outside = clampPointToGround({ x: 900, y: 0, z: 0 }, ground, 0.4);
+  assert.equal(outside.x, 249.6, "buiten blijft de rand van de wereld");
+  // Een binnenruimte in de zone heeft altijd een vloer; buiten de zone alleen met een gekozen Vloer.
+  const room = { areaId: "huis", indoor: true, shape: "box", minXMm: 50000000, maxXMm: 50010000, minZMm: 0, maxZMm: 8000 };
+  const strook = { areaId: "strook", indoor: true, shape: "box", minXMm: 0, maxXMm: 10000, minZMm: 0, maxZMm: 8000 };
+  const floors = indoorFloors([room, strook]);
+  assert.deepEqual(floors.map((floor) => [floor.areaId, floor.floorRef]), [["huis", null]]);
+  assert.equal(inIndoorZone(floors[0].x, floors[0].z), true);
+});

@@ -219,6 +219,8 @@ export function liftWorldOntoTerrain(world, heightfield) {
     doorways: Array.isArray(world.doorways) ? world.doorways.map((door) => Object.assign({}, door, { a: liftPoint(door.a), b: liftPoint(door.b) })) : world.doorways,
     // Kevin 23-11: muren staan op het terrein (elk punt op de hoogte van de grond daar).
     walls: Array.isArray(world.walls) ? world.walls.map((wall) => Object.assign({}, wall, { points: (wall.points || []).map(liftPoint) })) : world.walls,
+    // Kevin 23-11: de vloer van een binnenruimte ligt plat op de hoogte van de grond in het midden.
+    indoorFloors: Array.isArray(world.indoorFloors) ? world.indoorFloors.map(liftPoint) : world.indoorFloors,
     spawn,
     zones,
     zonePackage: liftPackage(world.zonePackage),
