@@ -1,4 +1,4 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261123-binnentab1";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261123-binnentab2";
 import { edgeBetweenPoints, editClosedEdges } from "./walkable-edge-tools.js?v=20261031-randen1";
 import { createTerrainEditor } from "./terrain-editor.js?v=20261123-muur1";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261106-perf1";
@@ -16788,8 +16788,38 @@ function renderDocFocusPanel() {
       });
       row.appendChild(button);
     }
+    // Kevin 23-11: kant B in de 🏠 Binnen-zone zetten. In de tab Binnen: precies hier (midden van het beeld);
+    // buiten: naar een vrije plek in de zone en meteen naar de tab Binnen.
+    const place = document.createElement("button");
+    place.type = "button";
+    place.className = "wbdDoorwayToIndoor";
+    place.textContent = state.indoorView ? "📍 Kant B hier neerzetten" : "🏠 Kant B naar Binnen";
+    place.title = state.indoorView ? "Zet kant B van deze doorgang in het midden van het beeld" : "Zet kant B op een vrije plek in de tab Binnen en ga erheen";
+    place.addEventListener("click", function () { void placeDoorwaySideBIndoors(doorDoc.docKey); });
+    row.appendChild(place);
     host.appendChild(row);
   }
+}
+
+async function placeDoorwaySideBIndoors(docKey) {
+  const doc = docBench.doc(docKey);
+  if (!doc || doc.kind !== "doorway") return;
+  const round1 = function (value) { return Math.round(Number(value) * 10) / 10; };
+  let spot = state.indoorView ? editorCameraGroundPoint() : null;
+  if (!spot || !inIndoorZone(spot.x, spot.z)) {
+    const count = docBench.docs("doorway").indexOf(doc);
+    const n = count >= 0 ? count : docBench.docs("doorway").length;
+    spot = { x: INDOOR_ZONE.centerX - 400 + (n % 20) * 40, z: INDOOR_ZONE.centerZ - 400 + Math.floor(n / 20) * 40 };
+  }
+  const body = Object.assign({}, doc.body, { bX: round1(spot.x), bY: 0, bZ: round1(spot.z) });
+  try {
+    await docBench.saveDoc("doorway", doc, body, "Kant B in Binnen gezet");
+  } catch { return; }
+  if (!state.indoorView) setIndoorView(true, { focus: false });
+  state.doorwaySideB = docKey;
+  selectPlacedDoc(docKey);
+  if (typeof runtime?.focusGroundPoint === "function") runtime.focusGroundPoint(spot.x, spot.z);
+  setStatus("🚪 Kant B staat nu in de tab Binnen. Verplaats met G, draai met R (de voorkant wijst de kamer in).", "");
 }
 
 // Onderdelen die al op documenten draaien: hun oude nodesoort verschijnt niet meer in de Werkbank.
@@ -16909,9 +16939,13 @@ let gameTabNeedsReload = false;
 // kaart, shared/indoor-zone.js) en de view is zwart, zonder terrein, lucht en water. Elke tab onthoudt zijn eigen plek.
 function setIndoorView(on, options = {}) {
   const next = Boolean(on);
-  if (next === state.indoorView) return;
+  if (next === state.indoorView) {
+    if (next) backIntoIndoorZone();
+    return;
+  }
   const here = editorCameraGroundPoint();
-  if (here) state[state.indoorView ? "indoorViewState" : "outsideViewState"] = { x: Number(here.x) || 0, z: Number(here.z) || 0 };
+  // Alleen een plek onthouden die echt bij de tab hoort (binnen = in de zone, buiten = erbuiten).
+  if (here && inIndoorZone(here.x, here.z, 200) === state.indoorView) state[state.indoorView ? "indoorViewState" : "outsideViewState"] = { x: Number(here.x) || 0, z: Number(here.z) || 0 };
   state.indoorView = next;
   if (runtime && typeof runtime.setEditorIndoorView === "function") runtime.setEditorIndoorView(next);
   if (options.focus !== false && runtime && typeof runtime.focusGroundPoint === "function") {
@@ -16921,7 +16955,16 @@ function setIndoorView(on, options = {}) {
   }
   if (el.workbenchModeButton) el.workbenchModeButton.classList.toggle("active", state.editorMode === "workbench" && !next);
   if (el.indoorModeButton) el.indoorModeButton.classList.toggle("active", state.editorMode === "workbench" && next);
+  for (const button of document.querySelectorAll(".wbdDoorwayToIndoor")) button.textContent = next ? "📍 Kant B hier neerzetten" : "🏠 Kant B naar Binnen";
   if (next) setStatus("🏠 Binnen: alle binnenruimtes op één zwart canvas. Maak per huis een 🔷 Deelgebied (staat meteen op Binnen) en zet kant B van een doorgang hier.", "");
+}
+
+// Staat de camera in de tab Binnen buiten de zone (bijv. na "."), dan terug naar de laatste binnenplek of het midden.
+function backIntoIndoorZone() {
+  const here = editorCameraGroundPoint();
+  if (!runtime || typeof runtime.focusGroundPoint !== "function" || (here && inIndoorZone(here.x, here.z, 200))) return;
+  const saved = state.indoorViewState && inIndoorZone(state.indoorViewState.x, state.indoorViewState.z, 200) ? state.indoorViewState : null;
+  runtime.focusGroundPoint(saved ? saved.x : INDOOR_ZONE.centerX, saved ? saved.z : INDOOR_ZONE.centerZ);
 }
 
 // Na het laden: staat de camera in de Binnen-zone (bijv. na opnieuw openen), dan meteen de tab Binnen.
@@ -31803,6 +31846,12 @@ function nodeCoordinatePoint(node) {
 }
 
 function focusTerrainOrSelected() {
+  focusTerrainOrSelectedNow();
+  // Tab 🏠 Binnen: "." blijft in de Binnen-zone (zonder keuze sprong hij naar 0,0 van de buitenwereld).
+  if (state.indoorView) backIntoIndoorZone();
+}
+
+function focusTerrainOrSelectedNow() {
   if (!runtime) return;
   const scatterNode = selectedScatterNode();
   if (scatterNode) {

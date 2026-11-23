@@ -8826,6 +8826,7 @@ function resolveChunkDebugCenter(policy) {
     lastTime = time;
     // Interpolatie en HUD-indeling moeten klaar zijn vóór animaties, camera en tekenen.
     try { onBeforeRenderFrame({ now: time }); } catch {}
+    if (editorIndoorView) clampEditorCameraToIndoorZone();
     waterLayer.update(time);
     skyLayer.update(time);
     perfHudFrameMs = perfHudWarmup ? perfHudFrameMs * 0.85 + frameMs * 0.15 : frameMs;
@@ -20569,8 +20570,27 @@ function resolveChunkDebugCenter(policy) {
     }
     requestRender("editor-indoor-view");
   }
+  // In de tab Binnen kom je niet bij de buitenwereld: het camerapunt blijft in de zone (camera schuift mee).
+  function clampEditorCameraToIndoorZone() {
+    if (!orbitControls) return;
+    const target = orbitControls.target;
+    const x = Math.min(INDOOR_ZONE.maxX, Math.max(INDOOR_ZONE.minX, target.x));
+    const z = Math.min(INDOOR_ZONE.maxZ, Math.max(INDOOR_ZONE.minZ, target.z));
+    if (x === target.x && z === target.z) return;
+    camera.position.x += x - target.x;
+    camera.position.z += z - target.z;
+    target.x = x;
+    target.z = z;
+    orbitControls.update();
+  }
+
   function applyEditorIndoorView() {
     const on = editorIndoorView;
+    // Alles buiten de zone wordt niet getekend (knipvlakken langs de rand van de zone).
+    renderer.clippingPlanes = on ? [
+      new THREE.Plane(new THREE.Vector3(1, 0, 0), -INDOOR_ZONE.minX), new THREE.Plane(new THREE.Vector3(-1, 0, 0), INDOOR_ZONE.maxX),
+      new THREE.Plane(new THREE.Vector3(0, 0, 1), -INDOOR_ZONE.minZ), new THREE.Plane(new THREE.Vector3(0, 0, -1), INDOOR_ZONE.maxZ)
+    ] : [];
     skyLayer.setHidden(on);
     if (terrainLayer?.group) terrainLayer.group.visible = !on;
     if (waterLayer?.group) waterLayer.group.visible = !on;
