@@ -1071,8 +1071,8 @@ function withGame(world, source, options) {
     .concat(currencyList.map((currency) => currency.iconAssetId))
     // 5-11: plaatjes in het startvenster van quests.
     .concat(quests.map((quest) => quest?.imageAssetId))
-    // Kevin 23-11: de textuur van een 🧱 Muur.
-    .concat((world.walls || []).map((wall) => wall?.textureAssetId))
+    // Kevin 23-11: de textuur van een 🧱 Muur en van zijn ramen.
+    .concat((world.walls || []).flatMap((wall) => [wall?.textureAssetId, wall?.windowTextureAssetId]))
     .concat((player.classes || []).flatMap((entry) => entry.models || [])).filter(Boolean)));
   const known = new Map((world.assets || []).map((asset) => [asset.id, asset]));
   // Paden van thumbnails kunnen na een import/migratie wijzigen zonder dat de

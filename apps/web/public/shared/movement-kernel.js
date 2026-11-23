@@ -745,7 +745,9 @@ export function createWalkabilityIndex(worldData, options = {}) {
       depth: depth,
       radius: radius,
       points: points,
-      reason: blocker?.reason || null
+      reason: blocker?.reason || null,
+      // Kevin 23-11 (2): een muur weet hoe hoog hij is (de camera mag erover kijken).
+      height: Number.isFinite(Number(blocker?.height)) ? Number(blocker.height) : null
     });
   }
 

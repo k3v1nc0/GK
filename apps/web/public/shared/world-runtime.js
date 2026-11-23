@@ -32,7 +32,7 @@ import { createPlayerPathClient } from "./player-path-client.js?v=20261108-roads
 import { createTerrainLayer, seedTerrainChunk, seedTerrainPaint } from "./terrain-render.js?v=20261123-fix3";
 import { createWaterLayer } from "./water-render.js?v=20261030-terrein6";
 import { createSkyLayer } from "./sky-render.js?v=20261120-sky2";
-import { wallPieces, wallWindows } from "./walls.js?v=20261123-muur2";
+import { wallPieces, wallWindows } from "./walls.js?v=20261123-muur3";
 import { INDOOR_ZONE } from "./indoor-zone.js?v=20261123-binnentab1";
 export {
   effectiveGroundBounds,
@@ -13865,8 +13865,71 @@ function resolveChunkDebugCenter(policy) {
         if (target.y + oy * t > cameraSolidTop(solid)) continue;
         best = t;
       }
+      // Kevin 23-11 (2): ook muren, de rand van een binnenruimte en gebouwen met een botsvorm (vlakken, geen cirkels):
+      // de camera komt dan na een deur niet meer in de muur of in een gebouw te staan.
+      best = thirdPersonPolygonClear(target, ox, oy, oz, best);
     }
     return Math.max(Math.min(0.6, maxDistance), best - 0.2);
+  }
+
+  // Eerste punt waar de lijn vanaf de speler (target + (ox, oy, oz) * t) een vlak binnengaat. Staat de speler er zelf in, dan telt
+  // dat vlak niet. Alleen muren (tot hun hoogte), de binnenrand (altijd) en modellen met een botsvorm (tot hun bovenkant).
+  function polygonBox(entry) {
+    if (entry.cameraBox) return entry.cameraBox;
+    let minX = Infinity; let maxX = -Infinity; let minZ = Infinity; let maxZ = -Infinity;
+    for (const point of entry.points) {
+      minX = Math.min(minX, point.x); maxX = Math.max(maxX, point.x);
+      minZ = Math.min(minZ, point.z); maxZ = Math.max(maxZ, point.z);
+    }
+    entry.cameraBox = { minX, maxX, minZ, maxZ };
+    return entry.cameraBox;
+  }
+  function rayPolygonEntry(target, ox, oz, best, points) {
+    let inside = false;
+    for (let i = 0, j = points.length - 1; i < points.length; j = i, i += 1) {
+      const pi = points[i]; const pj = points[j];
+      if ((pi.z > target.z) !== (pj.z > target.z) && target.x < (pj.x - pi.x) * (target.z - pi.z) / ((pj.z - pi.z) || 1e-9) + pi.x) inside = !inside;
+    }
+    if (inside) return best;
+    let hit = best;
+    for (let i = 0, j = points.length - 1; i < points.length; j = i, i += 1) {
+      const px = points[j].x; const pz = points[j].z;
+      const sx = points[i].x - px; const sz = points[i].z - pz;
+      const denom = ox * sz - oz * sx;
+      if (Math.abs(denom) < 1e-9) continue;
+      const wx = px - target.x; const wz = pz - target.z;
+      const t = (wx * sz - wz * sx) / denom;
+      const u = (wx * oz - wz * ox) / denom;
+      if (t > 0 && t < hit && u >= 0 && u <= 1) hit = t;
+    }
+    return hit;
+  }
+  function thirdPersonPolygonClear(target, ox, oy, oz, best) {
+    const endX = target.x + ox * best; const endZ = target.z + oz * best;
+    const segMinX = Math.min(target.x, endX) - 0.1; const segMaxX = Math.max(target.x, endX) + 0.1;
+    const segMinZ = Math.min(target.z, endZ) - 0.1; const segMaxZ = Math.max(target.z, endZ) + 0.1;
+    const overlaps = function (box) { return box.maxX >= segMinX && box.minX <= segMaxX && box.maxZ >= segMinZ && box.minZ <= segMaxZ; };
+    const index = resolveWalkabilitySource();
+    for (const blocker of Array.isArray(index?.blockers) ? index.blockers : []) {
+      if (blocker?.reason !== "wall" && blocker?.reason !== "indoor") continue;
+      if (!Array.isArray(blocker.points) || blocker.points.length < 3 || !overlaps(polygonBox(blocker))) continue;
+      const t = rayPolygonEntry(target, ox, oz, best, blocker.points);
+      if (t >= best) continue;
+      // Over een muur heen kijken mag (camera hoger dan de muur); over de rand van een binnenruimte nooit.
+      if (blocker.reason === "wall" && Number.isFinite(blocker.height)) {
+        const x = target.x + ox * t; const z = target.z + oz * t;
+        if (target.y + oy * t > cameraGroundY(x, z) + blocker.height) continue;
+      }
+      best = t;
+    }
+    for (const solid of predictionSolids) {
+      if (!solid || solid.enabled === false || !Array.isArray(solid.points) || solid.points.length < 3) continue;
+      if (!overlaps(polygonBox(solid))) continue;
+      const t = rayPolygonEntry(target, ox, oz, best, solid.points);
+      if (t >= best || target.y + oy * t > cameraSolidTop(solid)) continue;
+      best = t;
+    }
+    return best;
   }
 
   function updateThirdPersonCamera() {
@@ -15748,6 +15811,12 @@ function resolveChunkDebugCenter(policy) {
     const uvs = [];
     const indices = [];
     const meters = Math.max(0.1, num(wall.textureMeters, 2));
+    // Kevin 23-11 (2): "Hele hoogte": het plaatje één keer over de hele muurhoogte, links-rechts herhalen. u blijft dan in
+    // meters; addWalls deelt hem door de breedte van één plaatje (hoogte x verhouding) zodra het plaatje geladen is.
+    const fitHeight = wall.textureFit === "height";
+    const wallHeight = Math.max(0.2, num(wall.height, 3));
+    const across = fitHeight ? 1 : 1 / meters;
+    const vOf = function (y) { return fitHeight ? Math.min(0.998, Math.max(0.002, y / wallHeight)) : y / meters; };
     const quad = function (p0, p1, p2, p3, normal, u1, v0, v1) {
       const base = positions.length / 3;
       positions.push(p0[0], p0[1], p0[2], p1[0], p1[1], p1[2], p2[0], p2[1], p2[2], p3[0], p3[1], p3[2]);
@@ -15772,10 +15841,10 @@ function resolveChunkDebugCenter(policy) {
       const B0 = at(piece.bx + nx, piece.bz + nz, y0); const B1 = at(piece.bx + nx, piece.bz + nz, y1);
       const C0 = at(piece.bx - nx, piece.bz - nz, y0); const C1 = at(piece.bx - nx, piece.bz - nz, y1);
       const D0 = at(piece.ax - nx, piece.az - nz, y0); const D1 = at(piece.ax - nx, piece.az - nz, y1);
-      const u = length / meters;
-      const v0 = piece.from / meters;
-      const v1 = piece.to / meters;
-      const t = piece.thickness / meters;
+      const u = length * across;
+      const v0 = vOf(piece.from);
+      const v1 = vOf(piece.to);
+      const t = piece.thickness * across;
       quad(A0, B0, B1, A1, [-uz, 0, ux], u, v0, v1);
       quad(C0, D0, D1, C1, [uz, 0, -ux], u, v0, v1);
       quad(A1, B1, C1, D1, [0, 1, 0], u, 0, t);
@@ -15811,6 +15880,15 @@ function resolveChunkDebugCenter(policy) {
       const asset = wall.textureAssetId ? assetById(worldData, wall.textureAssetId) : null;
       if (asset) withWallTexture(asset, function (texture) {
         if (mesh.material !== material) return;
+        const image = texture.image;
+        if (wall.textureFit === "height" && image?.width > 0 && image?.height > 0 && !geometry.userData.fitDone) {
+          // Eén plaatje is zo breed als de muur hoog is maal de verhouding van het plaatje (niets uitgerekt).
+          const scale = 1 / (Math.max(0.2, num(wall.height, 3)) * (image.width / image.height));
+          const uv = geometry.getAttribute("uv");
+          for (let index = 0; index < uv.count; index += 1) uv.setX(index, uv.getX(index) * scale);
+          uv.needsUpdate = true;
+          geometry.userData.fitDone = true;
+        }
         material.map = texture;
         material.needsUpdate = true;
         requestRender("wall-texture");
@@ -15869,16 +15947,53 @@ function resolveChunkDebugCenter(policy) {
       runtimeStats.meshes += 1;
       return mesh;
     };
-    // Het raam zelf, 1 cm voor de muur.
-    const panelMaterial = new THREE.MeshBasicMaterial({ color: new THREE.Color("#dbeaff"), transparent: true, toneMapped: false, side: THREE.FrontSide });
+    // Het raam zelf, 1 cm voor de muur: jouw PNG helemaal te zien (doorzichtige stukken laten de muur zien), met een
+    // gloed vanuit het midden die naar de rand uitdooft. De gloed schijnt vooral door de doorzichtige stukken (het glas,
+    // "buiten"); op het raam zelf (sponning, tralies) maar een beetje. Eén kleine shader, één keer gebouwd.
+    const panelMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        map: { value: null }, hasMap: { value: 0 }, tint: { value: new THREE.Color(1, 1, 1) },
+        glowColor: { value: new THREE.Color("#fff1c9") }, glow: { value: 0.8 }
+      },
+      vertexShader: "varying vec2 vUv;\nvoid main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
+      fragmentShader: [
+        "uniform sampler2D map; uniform float hasMap; uniform vec3 tint; uniform vec3 glowColor; uniform float glow;",
+        "varying vec2 vUv;",
+        "void main() {",
+        "  vec4 tex = hasMap > 0.5 ? texture2D(map, vUv) : vec4(0.72, 0.8, 0.9, 1.0);",
+        "  float fade = 1.0 - smoothstep(0.0, 1.0, length((vUv - 0.5) * 2.0));",
+        "  float g = clamp(glow * fade * fade, 0.0, 1.0);",
+        "  float through = g * (1.0 - tex.a);",
+        "  vec3 color = tex.rgb * tint * tex.a + glowColor * (through + g * tex.a * 0.3);",
+        "  float alpha = clamp(tex.a + through, 0.0, 1.0);",
+        "  if (alpha < 0.02) discard;",
+        "  gl_FragColor = vec4(color / max(alpha, 0.001), alpha);",
+        "  #include <colorspace_fragment>",
+        "}"
+      ].join("\n"),
+      transparent: true,
+      toneMapped: false,
+      side: THREE.FrontSide
+    });
     const panel = mark(new THREE.Mesh(new THREE.PlaneGeometry(width, height), panelMaterial), "window", 2, true);
     panel.position.set(win.x + win.nx * 0.012, baseY + (win.sill + win.top) / 2, win.z + win.nz * 0.012);
     panel.rotation.y = yaw;
     const asset = wall.windowTextureAssetId ? assetById(worldData, wall.windowTextureAssetId) : null;
     if (asset) withWallTexture(asset, function (texture) {
       if (panel.material !== panelMaterial) return;
-      panelMaterial.map = texture;
-      panelMaterial.needsUpdate = true;
+      // Eén kopie per plaatje zonder herhalen: het raam is één plaatje over het hele vlak (de muur herhaalt wel).
+      let single = texture.userData.gkWindowSingle;
+      if (!single) {
+        single = texture.clone();
+        single.wrapS = THREE.ClampToEdgeWrapping;
+        single.wrapT = THREE.ClampToEdgeWrapping;
+        single.repeat.set(1, 1);
+        single.offset.set(0, 0);
+        single.needsUpdate = true;
+        texture.userData.gkWindowSingle = single;
+      }
+      panelMaterial.uniforms.map.value = single;
+      panelMaterial.uniforms.hasMap.value = 1;
       requestRender("window-texture");
     });
     // Zonnevlek op de vloer: van "Raam vanaf" tot iets verder dan "Raam tot" de kamer in (zon schuin van boven), iets breder.
@@ -15920,9 +16035,10 @@ function resolveChunkDebugCenter(policy) {
       record.beamMaterial.color.copy(record.patchMaterial.color);
       record.patchMaterial.opacity = Math.min(1, 0.45 * strength);
       record.beamMaterial.opacity = Math.min(0.4, 0.09 * strength);
-      record.panelMaterial.color.setScalar(Math.min(1, 0.3 + 0.7 * Math.min(1, strength)));
-      if (day < 1) record.panelMaterial.color.lerp(windowNightColor, (1 - day) * 0.5);
-      if (!record.panelMaterial.map) record.panelMaterial.color.multiply(new THREE.Color("#dbeaff"));
+      // Het plaatje zelf: overdag zoals het is, 's nachts donkerder. De gloed volgt Raamlicht en de dag.
+      record.panelMaterial.uniforms.tint.value.setScalar(0.35 + 0.65 * day);
+      record.panelMaterial.uniforms.glowColor.value.copy(record.patchMaterial.color);
+      record.panelMaterial.uniforms.glow.value = Math.min(1.5, 0.8 * strength);
     }
     requestRender("window-light");
   }

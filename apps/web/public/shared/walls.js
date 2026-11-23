@@ -72,6 +72,7 @@ export function wallFromAreaValues(id, values = {}) {
     color: typeof values.wallColor === "string" && /^#[0-9a-fA-F]{6}$/.test(values.wallColor) ? values.wallColor : null,
     textureAssetId: values.wallTextureAssetId || null,
     textureMeters: clamp(num(values.wallTextureMeters, WALL_DEFAULTS.textureMeters), 0.1, 50),
+    textureFit: values.wallTextureFit === "height" ? "height" : "tile",
     doorHeight: clamp(num(values.doorHeight, WALL_DEFAULTS.doorHeight), 0.5, height),
     windowSill: clamp(num(values.windowSill, WALL_DEFAULTS.windowSill), 0, height),
     windowTop: clamp(num(values.windowTop, WALL_DEFAULTS.windowTop), 0, height),
@@ -182,7 +183,7 @@ export function wallBlockers(wall) {
     const nx = -dz / length * piece.thickness / 2;
     const nz = dx / length * piece.thickness / 2;
     out.push({
-      id: wall.id + "::muur" + piece.edge, label: wall.label, shapeType: "polygon", reason: "wall",
+      id: wall.id + "::muur" + piece.edge, label: wall.label, shapeType: "polygon", reason: "wall", height: num(wall.height, WALL_DEFAULTS.height),
       points: [
         { x: piece.ax + nx, z: piece.az + nz }, { x: piece.bx + nx, z: piece.bz + nz },
         { x: piece.bx - nx, z: piece.bz - nz }, { x: piece.ax - nx, z: piece.az - nz }

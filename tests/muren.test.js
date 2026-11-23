@@ -91,6 +91,12 @@ test("muur als net: T-splitsing, soort per lijn, geldig en het raam schijnt naar
   assert.deepEqual(split.net.links.slice(-2), [[1, 6, 2], [6, 2, 2]], "beide helften blijven raam");
   const removed = roadDelete(split.net, [], [0]);
   assert.ok(removed.links.some((link) => link[2] === 1), "deur blijft deur");
+  // Textuur passen: hele hoogte (links-rechts herhalen) of overal herhalen; een andere keuze is fout.
+  const tall = Object.assign({}, body, { settings: { wallTextureFit: "height" } });
+  assert.equal(validateDocument("area", tall).ok, true);
+  assert.equal(wallFromAreaValues("muur.huis", areaNodeValues(tall, "muur.huis")).textureFit, "height");
+  assert.equal(wall.textureFit, "tile", "standaard overal herhalen");
+  assert.equal(validateDocument("area", Object.assign({}, body, { settings: { wallTextureFit: "raar" } })).ok, false);
   // Een oude muur zonder lijnen is een gesloten ring.
   assert.deepEqual(wallNetLinks(4, undefined, { openEdges: [3] }), [[0, 1], [1, 2], [2, 3], [3, 0, 3]]);
 });
