@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { buildRuntimeWorld } from "./authoring/world-builder.js";
 import { createSpatialIndex, metersToMm, resolveMembership } from "../../apps/web/public/shared/spatial.js";
+import { doorwaysOf, indoorSettingsOf, outsidePointsByArea } from "./runtime/doorway-runtime.js";
 import { buildWalkabilityIndex, groundHeightAt, localMovementSource, resolveMovement, solidCollisionEntriesForWorld, walkabilityForFlags } from "../../apps/web/public/shared/movement-kernel.js";
 import { mmoNetworkPresetValues } from "../shared/node-types.js";
 import { createWorldClock } from "./runtime/world-clock.js";
@@ -1188,9 +1189,30 @@ export class MmoService {
       areaId: area?.areaId || null,
       areaName: area?.displayName || null,
       areaText: area?.enterText || null,
+      // Binnenruimtes (22-11): camera van boven, geen lucht of mist, eigen licht (zie world-runtime setIndoor).
+      indoor: indoorSettingsOf(area),
       musicAssetId,
       musicUrl: musicAssetId ? (spatial.world?.audio?.[musicAssetId] || (musicAssetId === worldMusic?.assetId ? worldMusic.url : null) || null) : null
     };
+  }
+
+  // Binnenruimtes (22-11): sta je in een deelgebied met 🏠 Binnen, dan is dit de plek buiten bij de deur (anders null).
+  // Respawn, unstuck en reizen rekenen dan vanaf de deur buiten, niet vanaf de binnenruimte zelf.
+  outsidePointFor(world, position) {
+    const spatial = this.spatialIndex();
+    if (!spatial.index || !position) return null;
+    const xMm = metersToMm(position.x);
+    const zMm = metersToMm(position.z);
+    if (!Number.isFinite(xMm) || !Number.isFinite(zMm)) return null;
+    const areaId = resolveMembership(spatial.index, xMm, zMm, null).areaId;
+    if (!areaId || spatial.index.areas.get(areaId)?.indoor !== true) return null;
+    if (!this.outsideCache || this.outsideCache.buildId !== spatial.buildId || this.outsideCache.world !== world) {
+      const indoor = new Set();
+      for (const [id, entry] of spatial.index.areas) if (entry?.indoor === true) indoor.add(id);
+      const areaIdAt = (x, z) => resolveMembership(spatial.index, metersToMm(x), metersToMm(z), null).areaId;
+      this.outsideCache = { buildId: spatial.buildId, world, points: outsidePointsByArea(doorwaysOf(world), indoor, areaIdAt) };
+    }
+    return this.outsideCache.points.get(areaId) || null;
   }
 
   sendSpatialMembership(connection, state, worldId, toUser = false) {

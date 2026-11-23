@@ -1,4 +1,4 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261120-sky2";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261122-doorgang1";
 import { nextPlayerRouteWaypoint } from "../shared/player-path-client.js?v=20261108-roads9";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20261106-perf1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
@@ -7656,7 +7656,8 @@ async function runNode03Action(action, targetId, extra = {}) {
   const isTravel = normalizedAction === "travel";
   const isUnstuck = normalizedAction === "unstuck";
   // Portals (8-11): reizen binnen dezelfde wereld; direct weg en op de nieuwe plek, zonder glijden.
-  const isPortalTravel = normalizedAction === "portal_travel" || normalizedAction === "portal_travel_mate";
+  // Doorgangen (22-11): door_use is ook direct weg en op de nieuwe plek.
+  const isPortalTravel = normalizedAction === "portal_travel" || normalizedAction === "portal_travel_mate" || normalizedAction === "door_use";
   const isRespawn = normalizedAction === "respawn" || normalizedAction === "reset_demo" || normalizedAction === "reset";
   const bypassDefeatState = isRespawn || normalizedAction.startsWith("debug_") || normalizedAction === "inventory_cleanup";
   if (isNode03Defeated() && !bypassDefeatState) {
@@ -8359,6 +8360,7 @@ function activateRuntimeTarget(target) {
     return;
   }
   if (action === "portal_map") { activatePortalTarget(target); return; }
+  if (action === "door_use_target") { activateDoorTarget(target); return; }
   if (action === "lore_read") { activateLoreTarget(target); return; }
   if (gkHud && (action === "node04:start_dialogue" || action === "node05:focus_service")) {
     gkHud.talkTo(target);
@@ -8388,6 +8390,7 @@ function activateRuntimeTargetDirect(target) {
   const action = String(target.action);
   if (action === "npc_walker") { activateRuntimeTarget(target); return; }
   if (action === "portal_map") { activateRuntimeTarget(target); return; }
+  if (action === "door_use_target") { activateDoorTarget(target); return; }
   if (action === "lore_read") { activateLoreTarget(target); return; }
   if (action.startsWith("node04:")) {
     runNode04Action(action, target.instanceId, { questId: target.questId || null, dialogueId: target.dialogueId || null });
@@ -8427,6 +8430,7 @@ function collectRuntimeTargets() {
   if (state.node04.snapshot) addTargets(node04RuntimeTargetsForScene());
   if (state.node05.snapshot) addTargets(node05RuntimeTargetsForScene());
   addTargets(portalRuntimeTargets());
+  addTargets(doorwayRuntimeTargets());
   addTargets(loreRuntimeTargets());
   return withoutEscortedNpcs(Array.from(byId.values()));
 }
@@ -8554,6 +8558,7 @@ function activatePortalTarget(target) {
   if (distance === null || distance <= portalUseRange(target)) openPortalTarget(target);
 }
 function maybeOpenPendingPortal(now = performance.now()) {
+  maybeUseDoorways(now);
   const target = portalPending.target;
   if (!target) return;
   if (isWalkingToTarget(target)) portalPending.at = now;
@@ -8580,6 +8585,117 @@ function portalRuntimeTargets() {
       renderBody: false
     });
   });
+}
+
+// ---- Doorgangen (22-11): een deur, grot of trap met twee kanten (A en B). ----
+// Klikken (of E): ver weg = eerst erheen lopen, dichtbij = erdoor. Erin lopen: binnen "Gebruiken binnen" ga je er vanzelf door.
+// De server beslist en zet je aan de overkant; het beeld is heel even zwart, zodat je niet ziet hoe de wereld wisselt.
+const doorState = { pending: null, pendingAt: 0, busy: false, armed: true, lastTriedAt: 0 };
+function doorwaysVisible() {
+  const list = Array.isArray(state.gameWorld?.doorways) ? state.gameWorld.doorways : [];
+  if (!list.length) return [];
+  const hidden = new Set(Array.isArray(state.node04.snapshot?.world?.hidden) ? state.node04.snapshot.world.hidden.map(String) : []);
+  return list.filter(function (door) { return door && door.id && door.a && door.b && !hidden.has("doorway_entity." + door.id + ".a") && !hidden.has("doorway_entity." + door.id + ".b"); });
+}
+function doorSides(door) {
+  return door.oneWay === true ? ["a"] : ["a", "b"];
+}
+function doorUseRange(door) {
+  return Math.max(1, num(door?.useMeters, 2));
+}
+function doorwayRuntimeTargets() {
+  const out = [];
+  for (const door of doorwaysVisible()) {
+    for (const side of doorSides(door)) {
+      const end = door[side];
+      const entityId = "doorway_entity." + door.id + "." + side;
+      out.push(node03TargetWithClientRange(Object.assign({
+        instanceId: "door_target." + door.id + "." + side, doorwayId: door.id, side: side, entityKind: "doorway", targetKind: "doorway",
+        action: "door_use_target", prompt: door.useMode === "walk" ? "Erheen" : "Naar binnen", displayName: door.displayName || "Doorgang",
+        x: num(end.x, 0), y: num(end.y, 0), z: num(end.z, 0), radius: 1, range: doorUseRange(door), useMeters: doorUseRange(door), available: true
+      }, end.hasModel ? {
+        visualEntityId: entityId, linkedEntityId: entityId, entityRef: entityId, linkedEntity: { entityId: entityId, nodeId: entityId }
+      } : {}, {
+        // Net als een portal: geen blauw blokje; het model zelf is het klikvlak (zonder model: onzichtbaar, werkt met Erin lopen).
+        renderBody: false
+      })));
+    }
+  }
+  return out;
+}
+function doorDistance(end) {
+  const here = currentLocalPlayerPosition();
+  return here && end ? Math.hypot(num(here.x, 0) - num(end.x, 0), num(here.z, 0) - num(end.z, 0)) : Infinity;
+}
+function activateDoorTarget(target) {
+  const door = doorwaysVisible().find(function (entry) { return entry.id === target?.doorwayId; });
+  if (!door) return;
+  const side = target.side === "b" ? "b" : "a";
+  const end = door[side];
+  if (doorDistance(end) > doorUseRange(door)) {
+    doorState.pending = { doorwayId: door.id, side: side };
+    doorState.pendingAt = performance.now();
+    startClickToMoveTarget(num(end.x, 0), num(end.z, 0), "door-target", { arrivalRadius: Math.max(0, doorUseRange(door) - 0.4) });
+    return;
+  }
+  doorState.pending = null;
+  useDoorway(door, side);
+}
+function maybeUseDoorways(now = performance.now()) {
+  if (doorState.busy || !state.gameWorld?.doorways?.length) return;
+  const doors = doorwaysVisible();
+  // Lopend naar een deur (geklikt): dichtbij genoeg = erdoor.
+  if (doorState.pending) {
+    const door = doors.find(function (entry) { return entry.id === doorState.pending.doorwayId; });
+    const walking = state.pointer?.active === true || hasMovementInput();
+    if (!door || now - doorState.pendingAt > 20000) { doorState.pending = null; }
+    else if (doorDistance(door[doorState.pending.side]) <= doorUseRange(door)) {
+      const side = doorState.pending.side;
+      doorState.pending = null;
+      useDoorway(door, side);
+      return;
+    } else if (!walking && now - doorState.pendingAt > 1500) { doorState.pending = null; }
+  }
+  // Erin lopen: pas weer "scherp" als je na aankomst eerst uit elke deur bent gestapt (anders meteen terug).
+  let inside = null;
+  for (const door of doors) {
+    if (door.useMode !== "walk") continue;
+    for (const side of doorSides(door)) {
+      if (doorDistance(door[side]) <= doorUseRange(door)) { inside = { door: door, side: side }; break; }
+    }
+    if (inside) break;
+  }
+  if (!inside) { doorState.armed = true; return; }
+  if (!doorState.armed || now - doorState.lastTriedAt < 1500) return;
+  useDoorway(inside.door, inside.side);
+}
+function doorFadeElement() {
+  let fade = document.getElementById("gkDoorFade");
+  if (!fade) {
+    fade = document.createElement("div");
+    fade.id = "gkDoorFade";
+    fade.style.cssText = "position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;transition:opacity 160ms ease;z-index:40";
+    document.body.appendChild(fade);
+  }
+  return fade;
+}
+async function useDoorway(door, side) {
+  if (doorState.busy || state.node03.actionInFlight) return;
+  doorState.busy = true;
+  doorState.armed = false;
+  doorState.lastTriedAt = performance.now();
+  const fade = doorFadeElement();
+  fade.style.opacity = "1";
+  try {
+    await new Promise(function (resolve) { window.setTimeout(resolve, 170); });
+    await waitForServerPositionInRange({ x: door[side].x, z: door[side].z, range: doorUseRange(door), radius: 0 }, 900);
+    const result = await runNode03Action("door_use", door.id + ":" + side, { skipMoveToTarget: true });
+    // Even zwart laten terwijl de nieuwe plek dichtbij eerst wordt opgebouwd.
+    if (result?.position) await new Promise(function (resolve) { window.setTimeout(resolve, 260); });
+  } finally {
+    fade.style.opacity = "0";
+    doorState.busy = false;
+  }
 }
 
 // Stap 8: een NPC die met je meeloopt staat niet ook nog op zijn vaste plek: zijn model, naam en praat-/winkelknop zijn daar even weg.
@@ -15052,6 +15168,9 @@ function applyWorldMembership(message) {
   state.debug.worldRegionId = regionId;
   state.debug.worldAreaId = areaId;
   if (message.musicUrl || worldSpatial.music) ensureWorldMusic().setTrack(message.musicUrl || null);
+  // Binnenruimtes (22-11): camera van boven, geen lucht of mist, eigen licht. null = weer buiten.
+  worldSpatial.indoor = message.indoor && typeof message.indoor === "object" ? message.indoor : null;
+  if (state.runtime && typeof state.runtime.setIndoor === "function") state.runtime.setIndoor(worldSpatial.indoor);
   refreshWorldRegionLabel();
   if (changed && state.minimapHud) state.minimapHud.dirty = true;
   // Werkbank Fase 10: de naam groot in beeld met de zin uit de editor (📜 Zin bij binnenkomst) eronder.

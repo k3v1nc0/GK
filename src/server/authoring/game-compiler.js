@@ -9,6 +9,7 @@ import { balanceValues } from "../../shared/authoring/kinds/balance.js";
 import { economyValues } from "../../shared/authoring/kinds/economy.js";
 import { tradeValues } from "../../shared/authoring/kinds/trade.js";
 import { portalSettingsValues } from "../../shared/authoring/kinds/portal.js";
+import { doorwaySideB } from "../../shared/authoring/kinds/doorway.js";
 import { chatValues } from "../../shared/authoring/kinds/chat.js";
 import { hasOwnSteps, questGraphIssues, questStartIssues, questRepeatOf, questStartMode, questSteps, worldEventEvery, worldEventLasts } from "../../../apps/web/public/shared/quest-graph.js";
 import { areaPointsMeters, areaSoort } from "../../shared/authoring/kinds/area.js";
@@ -17,7 +18,7 @@ import { routePointsOf } from "../../shared/authoring/route-points.js";
 const hoursOf = (value) => (value === "day" || value === "night" ? value : "always");
 
 export const GAME_SECTION_VERSION = "gk-game-1";
-export const GAME_DOC_KINDS = Object.freeze(["currency", "player_class", "hud_settings", "minimap_settings", "combat_settings", "network_settings", "water_walk_settings", "party_settings", "chat_settings", "balance_settings", "respawn_settings", "equipment_settings", "economy_settings", "trade_settings", "npc", "quest", "recipe", "profession", "placed_model", "world_flag", "portal", "portal_settings", "lore_entry"]);
+export const GAME_DOC_KINDS = Object.freeze(["currency", "player_class", "hud_settings", "minimap_settings", "combat_settings", "network_settings", "water_walk_settings", "party_settings", "chat_settings", "balance_settings", "respawn_settings", "equipment_settings", "economy_settings", "trade_settings", "npc", "quest", "recipe", "profession", "placed_model", "world_flag", "portal", "doorway", "portal_settings", "lore_entry"]);
 
 const idFromRef = (ref) => String(ref || "").replace(/^[a-z_]+:/, "");
 const kindOfRef = (ref) => String(ref || "").split(":")[0];
@@ -354,6 +355,26 @@ export function compileGameSection(documents, options = {}) {
       x: doc.body.x, y: Number(doc.body.y) || 0, z: doc.body.z
     }, flagGateOf(doc.body));
   });
+  // Doorgangen (22-11): precies twee kanten (A en B). De server zet je van de ene kant naar de andere.
+  const doorways = of("doorway").map((doc) => {
+    const label = "Doorgang " + doc.body.displayName;
+    needAsset(doc, doc.body.modelAssetId, ["model"], label + " (kant A)");
+    needAsset(doc, doc.body.bModelAssetId, ["model"], label + " (kant B)");
+    needRef(doc, doc.body.flagRef, label + " (alleen als vlag)");
+    needRef(doc, doc.body.keyItemRef, label + " (sleutel)");
+    const clampNum = (value, fallback, min, max) => Math.min(max, Math.max(min, Number.isFinite(Number(value)) ? Number(value) : fallback));
+    const b = doorwaySideB(doc.body);
+    return Object.assign({
+      doorwayId: doc.body.doorwayId, displayName: doc.body.displayName,
+      useMode: doc.body.useMode === "walk" ? "walk" : "click", useMeters: clampNum(doc.body.useMeters, 2, 1, 20),
+      arriveMeters: clampNum(doc.body.arriveMeters, 2.5, 0, 30), oneWay: doc.body.oneWay === true,
+      keyItemId: doc.body.keyItemRef ? idFromRef(doc.body.keyItemRef) : null,
+      minLevel: Math.round(clampNum(doc.body.minLevel, 1, 1, 1000)), combatBlockSeconds: Math.round(clampNum(doc.body.combatBlockSeconds, 5, 0, 120)),
+      a: { x: Number(doc.body.x) || 0, y: Number(doc.body.y) || 0, z: Number(doc.body.z) || 0, rotationY: Number(doc.body.rotationY) || 0,
+        modelAssetId: doc.body.modelAssetId || null, scale: Number(doc.body.scale) || 1 },
+      b: { x: b.x, y: b.y, z: b.z, rotationY: Number(doc.body.bRotationY) || 0, modelAssetId: doc.body.bModelAssetId || null, scale: Number(doc.body.bScale) || 1 }
+    }, flagGateOf(doc.body));
+  });
   const portalDoc = of("portal_settings")[0] || null;
   const portalValues = portalSettingsValues(portalDoc?.body || null);
   if (portalDoc) needRef(portalDoc, portalValues.costCurrencyRef, "Portals (betalen met)");
@@ -378,6 +399,7 @@ export function compileGameSection(documents, options = {}) {
   };
   for (const doc of of("npc").concat(of("placed_model"))) usesFlag(doc, doc.body.flagRef, (doc.kind === "npc" ? "NPC " : "model ") + doc.body.displayName);
   for (const doc of of("portal")) usesFlag(doc, doc.body.flagRef, "portal " + doc.body.displayName);
+  for (const doc of of("doorway")) usesFlag(doc, doc.body.flagRef, "doorgang " + doc.body.displayName);
   // Kevin 8-11: een loopvlak (brug) met "Alleen als vlag".
   for (const doc of active.filter((entry) => entry.kind === "area" && entry.body?.soort === "loopvlak" && entry.body?.flagRef)) {
     needRef(doc, doc.body.flagRef, "Loopvlak " + doc.body.displayName + " (alleen als vlag)");
@@ -389,7 +411,7 @@ export function compileGameSection(documents, options = {}) {
   return {
     server: Object.assign({ schema: GAME_SECTION_VERSION, currencies, player, hud, minimap, combat, network, waterWalk, party, chat, npcs, quests, recipes, placedModels },
       professions.length ? { professions } : {},
-      questAreas.length ? { questAreas } : {}, flags.length ? { flags } : {}, portals.length || portalDoc ? { portals, portalRules } : {},
+      questAreas.length ? { questAreas } : {}, flags.length ? { flags } : {}, portals.length || portalDoc ? { portals, portalRules } : {}, doorways.length ? { doorways } : {},
       lore.length ? { lore } : {},
       balanceDoc ? { balance: balanceValues(balanceDoc.body) } : {},
       respawnDoc ? { respawn: settingsValues("respawn_settings", respawnDoc.body) } : {},

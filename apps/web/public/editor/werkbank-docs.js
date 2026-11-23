@@ -3,7 +3,7 @@
 // met icoon en Ⓘ-hulp. Alles schrijft naar documenten (/api/authoring/command), nooit naar de node-graph.
 import { api, command, el, friendlyError, slug } from "./canonical-api.js";
 import { createAssetPicker, createMiniPicker } from "./mini-asset-picker.js?v=20261106-thumbs150";
-import { convertShape } from "./werkbank-world.js?v=20261108-portals1";
+import { convertShape } from "./werkbank-world.js?v=20261122-doorgang1";
 import { renderUsers } from "./werkbank-users.js?v=20261115-fase10";
 import { computeDamage, rollLoot } from "../shared/combat-math.js";
 import { cleanXpCurve, xpCostAt, xpTotals } from "../shared/level-math.js";
@@ -29,7 +29,7 @@ const REASON_TEXT = {
 // Een placed_model is een losse wereldinstantie, geen herbruikbare Bibliotheek-kaart.
 // De bron blijft de asset (of bij een pickup: het item); zo groeit de Werkbank niet
 // uit tot een lijst met iedere boom/stoel/steen die ooit in de wereld is neergezet.
-const LIBRARY_KINDS = ["item_definition", "currency", "ability", "loot_table", "resource_definition", "actor_archetype", "npc", "portal", "quest", "lore_entry", "recipe", "profession", "world_flag"];
+const LIBRARY_KINDS = ["item_definition", "currency", "ability", "loot_table", "resource_definition", "actor_archetype", "npc", "portal", "doorway", "quest", "lore_entry", "recipe", "profession", "world_flag"];
 // Kaarten met een plek in de wereld: klik in de 3D-view, G = verplaatsen (R = draaien, T = groter/kleiner waar het kan).
 // Een pickup draait per plek; zijn grootte komt van het item (Grootte op de grond).
 // tilt = kantelen (R en dan X of Y); NPC's en portals blijven rechtop staan.
@@ -38,6 +38,8 @@ export const PLACED_KINDS = Object.freeze({
   npc: { move: true, rotate: true },
   // Portals (8-11): sleep de kaart op de wereld; G, R en T zoals bij een model.
   portal: { move: true, rotate: true, scale: true },
+  // Doorgangen (22-11): elke kant apart (klik kant A of kant B in de 3D-view).
+  doorway: { move: true, rotate: true, scale: true },
   placed_model: { move: true, rotate: true, scale: true, tilt: true },
   actor_spawn: { move: true, rotate: true },
   resource_spawn: { move: true, rotate: true, tilt: true }
@@ -1104,7 +1106,7 @@ export function createDocBench(options = {}) {
         if (isNew && key === spec.idField) bench.draft.idTouched = true;
         if (key === "displayName" && isNew && spec.idField && !bench.draft.idTouched) {
           const prefix = { item_definition: "item", ability: "ability", loot_table: "loot", resource_definition: "resource", actor_archetype: "actor",
-            currency: "currency", npc: "npc", portal: "portal", quest: "quest", recipe: "recipe", placed_model: "model", player_class: "class",
+            currency: "currency", npc: "npc", portal: "portal", doorway: "door", quest: "quest", recipe: "recipe", placed_model: "model", player_class: "class",
             terrain_texture: "tex", terrain_stamp: "stamp", terrain_water: "water", world_flag: "flag", profession: "profession", lore_entry: "lore" }[kind];
           if (prefix && next) body[spec.idField] = prefix + "." + slug(next);
         }

@@ -12,9 +12,15 @@ const round2 = (value) => Math.round(Number(value) * 100) / 100;
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
 // "doc:pickup:pickup.brood_1" -> "pickup:pickup.brood_1"
+// Doorgangen (22-11): kant B van een doorgang heeft "#b" achter zijn id; het document is hetzelfde.
 export function docKeyFromRuntimeId(runtimeId) {
   const text = String(runtimeId || "");
-  return text.startsWith(EDITOR_DOC_PREFIX) ? text.slice(EDITOR_DOC_PREFIX.length) : null;
+  return text.startsWith(EDITOR_DOC_PREFIX) ? text.slice(EDITOR_DOC_PREFIX.length).replace(/#b$/, "") : null;
+}
+
+// "doc:doorway:huis#b" -> "b", anders "a".
+export function docSideFromRuntimeId(runtimeId) {
+  return /#b$/.test(String(runtimeId || "")) ? "b" : "a";
 }
 
 export function runtimeIdForDocKey(docKey) {
@@ -88,9 +94,9 @@ export function createDocDrop({ bench, getRuntime, getActiveZoneId, onSelect, se
     if (!docKey) return false;
     event.preventDefault();
     const source = bench.doc(docKey);
-    const kinds = ["item_definition", "actor_archetype", "resource_definition", "npc", "portal", "placed_model"];
+    const kinds = ["item_definition", "actor_archetype", "resource_definition", "npc", "portal", "doorway", "placed_model"];
     if (!source || source.archived || !kinds.includes(source.kind)) {
-      setStatus("Sleep een item, vijand, grondstof, NPC of portal op de wereld; sleep losse modellen vanuit Assets.", "");
+      setStatus("Sleep een item, vijand, grondstof, NPC, portal of doorgang op de wereld; sleep losse modellen vanuit Assets.", "");
       return true;
     }
     const runtime = getRuntime();
@@ -120,6 +126,12 @@ export function createDocDrop({ bench, getRuntime, getActiveZoneId, onSelect, se
         x, y, z
       });
       await save("placed_model", null, copyBody, "Model opnieuw geplaatst");
+    } else if (source.kind === "doorway") {
+      // Doorgangen (22-11): slepen = kant A onder de muis. Staat kant B nog nergens, dan komt hij 6 m ernaast.
+      const body = Object.assign({}, source.body, { x, y, z });
+      const hasB = Number.isFinite(Number(source.body.bX)) && Number.isFinite(Number(source.body.bZ)) && source.body.bX !== null && source.body.bZ !== null;
+      if (!hasB) Object.assign(body, { bX: round2(x + 6), bY: y, bZ: z });
+      await save("doorway", source, body, "Doorgang verplaatst (kant A)");
     } else if (source.kind === "portal") {
       // Portals (8-11): net als een NPC staat elke portal maar op één plek; slepen = verplaatsen.
       await save("portal", source, Object.assign({}, source.body, { x, y, z }), "Portal verplaatst");

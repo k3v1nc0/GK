@@ -4746,6 +4746,9 @@ export function createGkWorldRuntime(canvas, options = {}) {
   // Werkbank Fase 10: dag en nacht. De lampen onthouden hun eigen sterkte; setDaylight schaalt ze (1 = dag).
   const ambientLights = [];
   let daylightLevel = 1;
+  // Binnenruimtes (22-11): zie setIndoor. indoorOutside = achtergrond en mist van buiten, om terug te zetten.
+  let indoorCfg = null;
+  let indoorOutside = null;
   const groundChunkState = {
     mode: "full",
     tilesByChunkKey: new Map(),
@@ -13616,6 +13619,12 @@ function resolveChunkDebugCenter(policy) {
     } else {
       camTarget.copy(playerCameraTarget());
     }
+    if (mode === "game" && indoorCfg) {
+      camPitch = indoorCfg.cameraPitch;
+      camDistance = indoorCfg.cameraDistance;
+      camMinDistance = Math.max(3, indoorCfg.cameraDistance * 0.5);
+      camMaxDistance = Math.max(camMinDistance, indoorCfg.cameraDistance * 1.6);
+    }
     const shouldApplyToViewport = mode === "game" || !editorViewInitialized;
     if (shouldApplyToViewport) {
       gameBaseFov = num(cam?.fov, mode === "editor" ? editorCameraDefaults.fov : gameCameraDefaults.fov);
@@ -13635,6 +13644,8 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function resolvedGameCameraMode(cam) {
+    // Binnenruimtes (22-11): binnen kijkt de camera altijd van boven.
+    if (indoorCfg) return "top-down";
     const authored = cam?.mode === "third-person" ? "third-person" : "top-down";
     if (cam?.playerChoice === true && (camModeOverride === "third-person" || camModeOverride === "top-down")) return camModeOverride;
     return authored;
@@ -19825,6 +19836,8 @@ function resolveChunkDebugCenter(policy) {
       camTarget.copy(playerCameraTarget());
     }
     applyCameraConfig(world);
+    // Binnenruimtes (22-11): een nieuwe wereld zette lucht, achtergrond en mist terug; binnen blijft binnen.
+    if (indoorCfg && mode === "game") { captureIndoorOutside(); applyIndoorScene(); }
     const restoredEditorView = editorViewState ? restoreViewState(editorViewState) : false;
     removeDuplicateRuntimeGroups();
     syncChunkDebugState("setWorld");
@@ -20165,17 +20178,66 @@ function resolveChunkDebugCenter(policy) {
     if (skyLayer.setNight(nightMix)) requestRender("sky-night");
     if (Math.abs(next - daylightLevel) < 0.005 && (!sky || scene.background?.getHexString?.() === String(sky).replace("#", "").toLowerCase())) return;
     daylightLevel = next;
-    for (const light of ambientLights) light.intensity = num(light.userData.baseIntensity, 0) * next;
-    for (const light of directionalLights) light.intensity = num(light.userData.baseIntensity, light.intensity) * next;
-    if (sky) {
+    applyLightLevels();
+    if (sky && indoorCfg) {
+      // Binnen: de lucht van buiten onthouden voor als je weer naar buiten gaat.
+      if (indoorOutside) indoorOutside.background = new THREE.Color(sky);
+      if (indoorOutside?.fog?.color) indoorOutside.fog.color.set(sky);
+    } else if (sky) {
       if (scene.background?.isColor) scene.background.set(sky); else scene.background = new THREE.Color(sky);
       if (scene.fog?.color) scene.fog.color.set(sky);
     }
     requestRender();
   }
 
+  function applyLightLevels() {
+    for (const light of ambientLights) light.intensity = num(light.userData.baseIntensity, 0) * (indoorCfg ? indoorCfg.light : daylightLevel);
+    for (const light of directionalLights) light.intensity = num(light.userData.baseIntensity, light.intensity) * daylightLevel * (indoorCfg ? indoorCfg.sun : 1);
+  }
+
+  // Binnenruimtes (22-11): in een deelgebied met 🏠 Binnen kijkt de camera van boven, staan lucht, wolken en mist van
+  // buiten uit en komt het licht van het gebied zelf (een beetje zon door de ramen volgt dag en nacht). null = buiten.
+  // Alleen zichtbaarheid, kleuren en lichtsterkte: geen nieuwe shaders, dus geen haperen bij het wisselen.
+  function setIndoor(cfg) {
+    if (mode !== "game") return;
+    const next = cfg && typeof cfg === "object" ? {
+      cameraDistance: clamp(num(cfg.cameraDistance, 16), 4, 80), cameraPitch: clamp(num(cfg.cameraPitch, 65), 30, 89),
+      background: colorOrDefault(cfg.background, "#0b0b10"), light: clamp(num(cfg.light, 0.8), 0, 2), sun: clamp(num(cfg.sun, 0.2), 0, 1)
+    } : null;
+    if (JSON.stringify(next) === JSON.stringify(indoorCfg)) return;
+    const wasIndoor = Boolean(indoorCfg);
+    if (next && !wasIndoor) captureIndoorOutside();
+    indoorCfg = next;
+    if (!next && wasIndoor && indoorOutside) {
+      scene.background = indoorOutside.background;
+      scene.fog = indoorOutside.fog || null;
+      indoorOutside = null;
+    }
+    if (world) applyCameraConfig(world);
+    applyIndoorScene();
+    requestRender("indoor");
+  }
+
+  function captureIndoorOutside() {
+    indoorOutside = {
+      background: scene.background?.isColor ? scene.background.clone() : scene.background,
+      // De mist van de third-person camera is tijdelijk; bewaar de mist van de wereld zelf.
+      fog: scene.fog?.gkCamera ? (camFogBackup || null) : (scene.fog || null)
+    };
+  }
+
+  function applyIndoorScene() {
+    skyLayer.setHidden(Boolean(indoorCfg));
+    if (indoorCfg) {
+      if (scene.background?.isColor) scene.background.set(indoorCfg.background); else scene.background = new THREE.Color(indoorCfg.background);
+      scene.fog = null;
+    }
+    applyLightLevels();
+  }
+
   return {
     setDaylight: setDaylight,
+    setIndoor: setIndoor,
     setWorld: setWorld,
     render: requestRender,
     setRenderPaused: setRenderPaused,

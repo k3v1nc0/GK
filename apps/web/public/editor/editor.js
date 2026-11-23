@@ -1,4 +1,4 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261120-sky2";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261122-doorgang1";
 import { edgeBetweenPoints, editClosedEdges } from "./walkable-edge-tools.js?v=20261031-randen1";
 import { createTerrainEditor } from "./terrain-editor.js?v=20261102-terrein10";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261106-perf1";
@@ -11,10 +11,10 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261106-perf1";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261106-perf1";
-import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261119-camera1";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261122-doorgang1";
 import { createAssetPicker } from "./mini-asset-picker.js?v=20261106-thumbs150";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
-import { createDocDrop, docKeyFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261108-portals1";
+import { createDocDrop, docKeyFromRuntimeId, docSideFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261122-doorgang1";
 import { createRoadEditor } from "./road-editor.js?v=20261108-roads7";
 import { createRouteEditor } from "./route-editor.js?v=20261116-herstel1";
 import { AREA_EDITOR_PREFIX, AREA_SOORTEN, AREA_SOORT_ORDER, areaBodyFromNodePatch, areaCirclePointsMm, areaNodeValues, areaSoort } from "../shared/area-soorten.js?v=20261108-roads7";
@@ -1017,6 +1017,11 @@ async function importAssetFile(file, options = {}) {
 let docDrop = null;
 const PLACED_DOC_KINDS = new Set(Object.keys(PLACED_KINDS));
 
+// Doorgangen (22-11): welke kant van een doorgang gekozen is ("b" = kant B). De 3D-view kiest dan dat model voor G/R/T.
+function runtimeIdForPlacedDoc(docKey) {
+  return runtimeIdForDocKey(docKey) + (state.doorwaySideB === docKey ? "#b" : "");
+}
+
 function focusedPlacedDocKey() {
   const doc = docBench.selectedDocKey ? docBench.doc(docBench.selectedDocKey) : null;
   return doc && PLACED_DOC_KINDS.has(doc.kind) && !doc.archived ? doc.docKey : null;
@@ -1095,11 +1100,13 @@ function selectPlacedDoc(docKey) {
   focusDoc(docKey);
   syncRuntimeSelection();
   const doc = docBench.doc(docKey);
-  setStatus(placedDocLabel(docKey) + " gekozen. " + placedDocHint(doc?.kind) + ".", "");
+  if (state.doorwaySideB && state.doorwaySideB !== docKey) state.doorwaySideB = null;
+  const sideText = doc?.kind === "doorway" ? (state.doorwaySideB === docKey ? " (kant B)" : " (kant A)") : "";
+  setStatus(placedDocLabel(docKey) + sideText + " gekozen. " + placedDocHint(doc?.kind) + ".", "");
   if (routeTarget()) routeEditor.hint();
 }
 
-async function commitDocTransform(docKey, transform) {
+async function commitDocTransform(docKey, transform, side = "a") {
   const doc = docBench.doc(docKey);
   if (!doc || !PLACED_DOC_KINDS.has(doc.kind)) {
     state.lastTransformCommitError = "Transform niet opgeslagen: document niet gevonden (" + docKey + ").";
@@ -1119,6 +1126,17 @@ async function commitDocTransform(docKey, transform) {
     body.zMm = Math.round(z * 1000);
     const regionRef = regionRefAt(docBench, body.xMm, body.zMm);
     if (regionRef) body.regionRef = regionRef; else delete body.regionRef;
+  } else if (doc.kind === "doorway" && side === "b") {
+    // Doorgangen (22-11): kant B heeft eigen velden (bX, bY, bZ, bRotationY, bScale).
+    Object.assign(body, { bX: x, bY: y, bZ: z });
+    if (Number.isFinite(Number(transform?.rotationY))) body.bRotationY = Math.round(((Number(transform.rotationY) % 360) + 360) % 360) % 360;
+    if (Number.isFinite(Number(transform?.scaleX)) && Number(transform.scaleX) > 0) body.bScale = Math.min(100, Math.max(0.01, round2(transform.scaleX)));
+    try {
+      await docBench.saveDoc(doc.kind, doc, body, "Doorgang aangepast (kant B)");
+    } catch {
+      refreshViewportForDocs();
+    }
+    return;
   } else {
     Object.assign(body, { x: x, y: y, z: z });
   }
@@ -4657,11 +4675,11 @@ function syncRuntimeModelSelectionForTransform() {
   // Een gekozen document (pickup) verplaats je met G, net als een model.
   const placedDocKeys = state.selectedNodeIds.length ? [] : selectedPlacedDocKeys();
   if (placedDocKeys.length > 1 && typeof runtime.selectEntities === "function") {
-    runtime.selectEntities(placedDocKeys.map(runtimeIdForDocKey), { authoringIds: [], selectionCount: 0 });
+    runtime.selectEntities(placedDocKeys.map(runtimeIdForPlacedDoc), { authoringIds: [], selectionCount: 0 });
     return null;
   }
   if (placedDocKeys.length) {
-    if (typeof runtime.selectEntity === "function") runtime.selectEntity(runtimeIdForDocKey(placedDocKeys[0]));
+    if (typeof runtime.selectEntity === "function") runtime.selectEntity(runtimeIdForPlacedDoc(placedDocKeys[0]));
     return null;
   }
   // A finished transform clears the runtime's transient selection, while the editor's
@@ -5797,7 +5815,7 @@ function syncRuntimeSelection() {
   const runtimeIds = state.selectedNodeIds
     .map(function (nodeId) { return runtimeNodeId(nodeById(nodeId)); })
     .filter(Boolean);
-  if (!state.selectedNodeIds.length) for (const docKey of selectedPlacedDocKeys()) runtimeIds.push(runtimeIdForDocKey(docKey));
+  if (!state.selectedNodeIds.length) for (const docKey of selectedPlacedDocKeys()) runtimeIds.push(runtimeIdForPlacedDoc(docKey));
   if (typeof runtime.selectEntities === "function") {
     runtime.selectEntities(runtimeIds, {
       authoringIds: state.selectedNodeIds,
@@ -6091,6 +6109,7 @@ async function boot() {
       }
       const clickedDocKey = docKeyFromRuntimeId(entityId);
       if (clickedDocKey) {
+        state.doorwaySideB = docSideFromRuntimeId(entityId) === "b" ? clickedDocKey : null;
         selectPlacedDoc(clickedDocKey);
         return;
       }
@@ -6191,7 +6210,7 @@ async function boot() {
       state.lastTransformCommitError = "";
       const movedDocKey = typeof entityIdOrPayload === "string" ? docKeyFromRuntimeId(entityIdOrPayload) : null;
       if (movedDocKey) {
-        void commitDocTransform(movedDocKey, transform);
+        void commitDocTransform(movedDocKey, transform, docSideFromRuntimeId(entityIdOrPayload));
         setViewportAxis(null);
         return;
       }
@@ -16723,6 +16742,28 @@ function renderDocFocusPanel() {
       if (docKey) focusDoc(docKey); else { clearDocFocus(); renderWorkbench(); }
     }
   });
+  // Doorgangen (22-11): de twee kanten staan vaak ver uit elkaar; spring met de camera naar kant A of kant B en kies hem.
+  const doorDoc = !docBench.newKind && kind === "doorway" ? docBench.doc(docBench.selectedDocKey) : null;
+  if (doorDoc) {
+    const row = document.createElement("div");
+    row.className = "wbdDoorwaySides";
+    row.style.cssText = "display:flex;gap:6px;margin-top:8px";
+    for (const side of ["a", "b"]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = side === "a" ? "🅰️ Ga naar kant A" : "🅱️ Ga naar kant B";
+      button.addEventListener("click", function () {
+        const body = doorDoc.body || {};
+        const x = side === "b" ? (Number.isFinite(Number(body.bX)) && body.bX !== null ? Number(body.bX) : (Number(body.x) || 0) + 6) : Number(body.x) || 0;
+        const z = side === "b" ? (Number.isFinite(Number(body.bZ)) && body.bZ !== null ? Number(body.bZ) : Number(body.z) || 0) : Number(body.z) || 0;
+        state.doorwaySideB = side === "b" ? doorDoc.docKey : null;
+        selectPlacedDoc(doorDoc.docKey);
+        if (typeof runtime?.focusGroundPoint === "function") runtime.focusGroundPoint(x, z);
+      });
+      row.appendChild(button);
+    }
+    host.appendChild(row);
+  }
 }
 
 // Onderdelen die al op documenten draaien: hun oude nodesoort verschijnt niet meer in de Werkbank.
@@ -21380,7 +21421,7 @@ function positionAuthoringIndicatorCluster(cluster, screen, wrapRect) {
 // Zoals in de game: 2D-namen boven NPC's, vijanden, grondstoffen, pickups en portals, met dezelfde kleuren,
 // hoogte en tekstgrootte (Instellingen > Game-scherm > 🎯 Objecten, NPC's en namen). Met "Editor: extra info"
 // staat eronder waar het ding in de Werkbank aan vastzit; dan krijgen losse modellen ook een naam.
-const VIEWPORT_LABEL_KIND = { npc: "npc", actor_spawn: "enemy", resource_spawn: "resource", pickup: "pickup", portal: "portal", placed_model: "model" };
+const VIEWPORT_LABEL_KIND = { npc: "npc", actor_spawn: "enemy", resource_spawn: "resource", pickup: "pickup", portal: "portal", doorway: "portal", placed_model: "model" };
 const viewportLabelPool = new Map();
 let viewportLabelCache = { at: -Infinity, workspace: null, entries: [], byId: new Map(), ids: [] };
 
@@ -21443,8 +21484,11 @@ function viewportLabelEntries() {
       for (const doc of docBench.docs(kind)) {
         const source = placedDocSource(doc);
         const name = String(doc.body.displayName || source?.body?.displayName || "").trim() || doc.docKey;
-        entries.push({ id: runtimeIdForDocKey(doc.docKey), docKey: doc.docKey, kind: VIEWPORT_LABEL_KIND[kind], name: name.slice(0, 34),
+        // Doorgangen (22-11): kant A en kant B elk met een eigen naam.
+        const sideName = kind === "doorway" ? " (A)" : "";
+        entries.push({ id: runtimeIdForDocKey(doc.docKey), docKey: doc.docKey, kind: VIEWPORT_LABEL_KIND[kind], name: name.slice(0, 30) + sideName,
           info: info ? placedDocInfo(doc, source, questRefs) : "" });
+        if (kind === "doorway") entries.push({ id: runtimeIdForDocKey(doc.docKey) + "#b", docKey: doc.docKey, kind: "portal", name: name.slice(0, 30) + " (B)", info: "" });
       }
     }
   }
@@ -24948,9 +24992,10 @@ async function commitGroupTransform(payload) {
   const docCommits = new Map();
   for (const entry of commits) {
     const docKey = docKeyFromRuntimeId(entry?.entityId);
-    if (docKey && !docCommits.has(docKey) && PLACED_DOC_KINDS.has(docBench.doc(docKey)?.kind)) docCommits.set(docKey, entry.transform || {});
+    const side = docSideFromRuntimeId(entry?.entityId);
+    if (docKey && !docCommits.has(docKey + "|" + side) && PLACED_DOC_KINDS.has(docBench.doc(docKey)?.kind)) docCommits.set(docKey + "|" + side, { docKey, side, transform: entry.transform || {} });
   }
-  for (const [docKey, transform] of docCommits) await commitDocTransform(docKey, transform);
+  for (const commit of docCommits.values()) await commitDocTransform(commit.docKey, commit.transform, commit.side);
   if (docCommits.size && !state.selectedNodeIds.length) return;
   const patchedNodeIds = new Set();
   const patchMap = new Map();

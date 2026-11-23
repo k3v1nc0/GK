@@ -22,6 +22,7 @@ import { BALANCE_KINDS } from "./kinds/balance.js";
 import { ECONOMY_KINDS } from "./kinds/economy.js";
 import { TRADE_KINDS } from "./kinds/trade.js";
 import { PORTAL_KINDS } from "./kinds/portal.js";
+import { DOORWAY_KINDS } from "./kinds/doorway.js";
 import { PROFESSION_KINDS, itemProfessionFields } from "./kinds/profession.js";
 import { effectFields } from "./kinds/effect-fields.js";
 import { AREA_SETTING_SPECS, AREA_SOORT_ORDER, AREA_SOORTEN, areaSettingsIssues, areaSoort } from "./kinds/area.js";
@@ -41,6 +42,7 @@ const SHAPE_HELP = help(
 );
 const mmField = (label, required, icon = "📐") => ({ type: "integer", required, min: MM.min, max: MM.max, audience: "client", label,
   ui: ui(icon, "slider", "viewport", { step: 100, unit: "m", scale: 1000 }), default: null, help: SHAPE_HELP });
+const INDOOR_GROUP = "🏠 Binnen";
 const MUSIC_HELP = help(
   "De muziek die speelt zolang je hier bent.",
   "Sleep een muziekstuk uit de Bibliotheek op dit vak. Rustige muziek voor dorpen.",
@@ -310,7 +312,34 @@ export const CANONICAL_KINDS = {
       // Fase 05: veilig gebied. Hier weigert de server elke aanval (van en op spelers) en jagen vijanden niet.
       safe: { type: "boolean", required: false, audience: "client", label: "Veilig (geen gevechten)",
         ui: ui("🕊️", "toggle", "werkbank", { soorten: ["deelgebied"] }), default: false,
-        help: help("Hier kan niemand aanvallen of aangevallen worden.", "Aan voor dorpen en het startpunt.", "Vijanden jagen in het dorp → zet Veilig aan.") }
+        help: help("Hier kan niemand aanvallen of aangevallen worden.", "Aan voor dorpen en het startpunt.", "Vijanden jagen in het dorp → zet Veilig aan.") },
+      // Binnenruimtes (22-11): een deelgebied met 🏠 Binnen is de binnenkant van een huis, grot of etage (bereikbaar met een 🚪 Doorgang).
+      // De camera is daar altijd van boven, lucht en mist van buiten staan uit en het licht is van het gebied zelf.
+      indoor: { type: "boolean", required: false, audience: "client", label: "Binnen",
+        ui: ui("🏠", "toggle", "werkbank", { soorten: ["deelgebied"], group: INDOOR_GROUP }), default: false,
+        help: help("Is dit de binnenkant van een huis, grot of etage? Dan kijkt de camera van boven, en lucht, wolken en mist van buiten staan uit.",
+          "Aan voor elke binnenruimte die je met een 🚪 Doorgang bereikt. Teken het vlak om de hele kamer heen.",
+          "Je ziet binnen nog wolken of de camera blijft achter je → zet Binnen aan en kijk of het vlak de hele kamer bedekt.") },
+      indoorCameraDistance: { type: "number", required: false, min: 4, max: 80, audience: "client", label: "Camera-afstand",
+        ui: ui("🎥", "slider", "werkbank", { step: 1, unit: "m", range: [6, 40], soorten: ["deelgebied"], group: INDOOR_GROUP, when: { key: "indoor", is: [true] } }), default: 16,
+        help: help("Hoe ver de camera binnen boven de speler hangt.", "12 tot 20 m voor een kamer, verder voor een grote zaal.",
+          "Je ziet de hele kamer niet → verder. Alles is te klein → dichterbij.") },
+      indoorCameraPitch: { type: "integer", required: false, min: 30, max: 89, audience: "client", label: "Camera-hoek",
+        ui: ui("📐", "slider", "werkbank", { step: 1, unit: "°", soorten: ["deelgebied"], group: INDOOR_GROUP, when: { key: "indoor", is: [true] } }), default: 65,
+        help: help("Hoe schuin de camera binnen naar beneden kijkt. 89 = recht van boven.", "60 tot 75°: je ziet de vloer goed en de muren een beetje.",
+          "Muren aan de voorkant staan in de weg → steiler (hoger getal).") },
+      indoorBackground: { type: "color", required: false, audience: "client", label: "Achtergrond",
+        ui: ui("🎨", "color", "werkbank", { soorten: ["deelgebied"], group: INDOOR_GROUP, when: { key: "indoor", is: [true] } }), default: "#0b0b10",
+        help: help("De kleur die je binnen ziet waar geen vloer of muur is (er is geen lucht).", "Bijna zwart voor een huis of grot.",
+          "Je ziet een felle kleur langs de rand → kies een donkere kleur.") },
+      indoorLight: { type: "integer", required: false, min: 0, max: 200, audience: "client", label: "Licht binnen",
+        ui: ui("💡", "slider", "werkbank", { step: 5, unit: "%", soorten: ["deelgebied"], group: INDOOR_GROUP, when: { key: "indoor", is: [true] } }), default: 80,
+        help: help("Hoe licht het binnen is, los van dag en nacht (het licht van lampen en fakkels).", "60 tot 100 % voor een huis, 20 tot 40 % voor een donkere grot.",
+          "Binnen is alles te donker → hoger. Te fel → lager.") },
+      indoorSun: { type: "integer", required: false, min: 0, max: 100, audience: "client", label: "Zon door ramen",
+        ui: ui("🌤️", "slider", "werkbank", { step: 5, unit: "%", soorten: ["deelgebied"], group: INDOOR_GROUP, when: { key: "indoor", is: [true] } }), default: 20,
+        help: help("Hoeveel zonlicht er binnen komt. Dit volgt dag en nacht: 's nachts is het vanzelf minder.", "0 % voor een grot, 20 tot 40 % voor een huis met ramen.",
+          "Het is binnen net zo licht als buiten → lager.") }
     }
   },
   // F4-E1-T03: statische collider (obstakel) binnen een Region. Server-movement én client-prediction lezen exact
@@ -349,6 +378,7 @@ export const CANONICAL_KINDS = {
   ...GAME_KINDS,
   ...PROFESSION_KINDS,
   ...PORTAL_KINDS,
+  ...DOORWAY_KINDS,
   ...NETWORK_KINDS,
   ...WATER_WALK_KINDS,
   ...PARTY_KINDS,
@@ -676,7 +706,7 @@ function shapeIssues(kind, body, issues) {
 }
 
 // Ombouw stap 2: begroeiing, pad, blokkade en loopvlak zijn altijd punten (getekend met de Area tool).
-const DEELGEBIED_ONLY = ["regionRef", "priority", "musicAssetId", "safe", "minXMm", "maxXMm", "minZMm", "maxZMm", "centerXMm", "centerZMm", "radiusMm"];
+const DEELGEBIED_ONLY = ["regionRef", "priority", "musicAssetId", "safe", "indoor", "indoorCameraDistance", "indoorCameraPitch", "indoorBackground", "indoorLight", "indoorSun", "minXMm", "maxXMm", "minZMm", "maxZMm", "centerXMm", "centerZMm", "radiusMm"];
 function areaShapeIssues(body, issues) {
   const soort = areaSoort(body);
   const def = AREA_SOORTEN[soort];

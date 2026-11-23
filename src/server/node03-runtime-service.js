@@ -13,6 +13,7 @@ import { applyEffect, clearEffectsForDeath, combatRulesFromProject, itemCooldown
 import { abilityFromSection, classSkillIdsFromSection, playerAbilityFromSection } from "./authoring/actor-compiler.js";
 import { arrivalPoint, isUnlocked, nearestRespawnPortal, portalNear, portalRulesOf, portalsOf, portalVisibleFor, publicPortalState,
   storeUnlock, travelCost, unlockedPortalIds, withinUnlockRange } from "./runtime/portal-runtime.js";
+import { doorwayArrival, doorwayRefusal, doorwaysOf, doorwayVisibleFor, otherSide, parseDoorwayTarget } from "./runtime/doorway-runtime.js";
 
 // Kevin 21-11: acties waarbij een bot (snapshot: false) het antwoord zonder hele HUD-stand mag krijgen.
 const LEAN_ACTIONS = new Set(["attack", "gather", "pickup", "skill"]);
@@ -1470,6 +1471,7 @@ export class Node03RuntimeService {
     if (action === "portal_unlock") return this.portalUnlock(ctx, payload.targetId);
     if (action === "portal_travel") return this.portalTravel(ctx, payload.targetId);
     if (action === "portal_travel_mate") return this.portalTravelToMate(ctx, payload.targetId);
+    if (action === "door_use") return this.doorUse(ctx, payload.targetId);
     if (action === "attack") return this.attackTarget(ctx, payload.targetId, operationId);
     if (action === "gather") return this.gatherTarget(ctx, payload.targetId, operationId);
     if (action === "pickup") return this.pickupTarget(ctx, payload.targetId, operationId);
@@ -1952,7 +1954,7 @@ export class Node03RuntimeService {
     if (combatMs > 0 && nowMs - combatAt < combatMs) {
       throw this.portalRefused("Je bent nog in gevecht. Reizen kan over " + Math.ceil((combatMs - (nowMs - combatAt)) / 1000) + " s.");
     }
-    const cost = travelCost(rules, ctx.position, portal, Boolean(atPortal));
+    const cost = travelCost(rules, this.outsideOr(ctx, ctx.position), portal, Boolean(atPortal));
     let paid = "";
     if (cost > 0) {
       const currencyName = displayForCurrency(ctx.catalogs, rules.costCurrencyId);
@@ -1993,7 +1995,9 @@ export class Node03RuntimeService {
     const cached = this.mmoService.playerStateCache?.get(this.mmoService.getPlayerStateCacheKey(id, ctx.worldId)) || null;
     const where = cached || this.db.prepare("SELECT x, z FROM player_positions WHERE player_id = ? AND world_id = ? LIMIT 1").get(id, ctx.worldId) || null;
     if (!where) throw this.portalRefused("Waar je teamgenoot is, is nog niet bekend.");
-    const mate = { x: safeNumber(where.x, 0), z: safeNumber(where.z, 0) };
+    const mateAt = { x: safeNumber(where.x, 0), z: safeNumber(where.z, 0) };
+    // Binnenruimtes (22-11): is je teamgenoot binnen, dan telt de deur buiten.
+    const mate = this.outsideOr(ctx, mateAt);
     const unlocked = unlockedPortalIds(this.db, ctx.profile.id, ctx.worldId);
     const visible = portalsOf(ctx.world).filter((entry) => portalVisibleFor(entry, ctx.profile.id, this.mmoService.worldFlags) && isUnlocked(entry, unlocked));
     let best = null;
@@ -2012,12 +2016,50 @@ export class Node03RuntimeService {
     const rules = portalRulesOf(ctx.world);
     if (rules.respawnAtPortal === false) return null;
     const unlocked = unlockedPortalIds(this.db, ctx.profile.id, ctx.worldId);
-    const portal = nearestRespawnPortal(portalsOf(ctx.world), unlocked, ctx.position,
+    const portal = nearestRespawnPortal(portalsOf(ctx.world), unlocked, this.outsideOr(ctx, ctx.position),
       (entry) => portalVisibleFor(entry, ctx.profile.id, this.mmoService.worldFlags));
     if (!portal) return null;
     const arrival = arrivalPoint(portal);
     return { zoneId: ctx.zoneId, zonePackage: ctx.zonePackage, portalRef: "portal:" + portal.id, linkId: null,
       x: arrival.x, y: arrival.y, z: arrival.z, facing: arrival.rotationY, label: portal.displayName || "portal" };
+  }
+
+  // Binnenruimtes (22-11): binnen telt de plek buiten bij de deur (respawn, reizen, teamgenoot). Buiten: de plek zelf.
+  outsideOr(ctx, position) {
+    const outside = this.mmoService.outsidePointFor ? this.mmoService.outsidePointFor(ctx.world, position) : null;
+    return outside || position;
+  }
+
+  // Doorgangen (22-11): de game vraagt "kant A (of B) van doorgang X"; de server checkt alles en zet je aan de overkant.
+  doorUse(ctx, targetId) {
+    const target = parseDoorwayTarget(targetId);
+    const playerId = ctx.profile.id;
+    const door = doorwaysOf(ctx.world).find((entry) => entry.id === target.id) || null;
+    if (!door || !doorwayVisibleFor(door, playerId, this.mmoService.worldFlags)) throw this.portalRefused("Deze doorgang bestaat niet (meer).");
+    const nowMs = Date.now();
+    const combatAt = this.vitals()?.combatAt?.get(playerId) || 0;
+    const keyName = door.keyItemId ? (catalogSection(ctx.catalogs, "items")[door.keyItemId]?.displayName || door.keyItemId) : "";
+    const refusal = doorwayRefusal(door, target.side, {
+      position: ctx.position,
+      level: Number(door.minLevel) > 1 ? this.levelOfPlayer(playerId) : 1,
+      keyCount: door.keyItemId ? this.ownedItemCount(playerId, door.keyItemId) : 1,
+      keyName,
+      combatAgoMs: combatAt ? nowMs - combatAt : Infinity
+    });
+    if (refusal) throw this.portalRefused(refusal);
+    const arrival = doorwayArrival(door, otherSide(target.side));
+    const connection = { ...ctx.sessionContext, player: ctx.profile, worldId: ctx.worldId };
+    const position = this.mmoService.applyTeleportState(connection, { zoneId: ctx.zoneId, position: arrival, animationState: "idle" }, { reason: "doorway" });
+    this.mmoService.schedulePersist(position, connection, true);
+    ctx.position = position;
+    this.recordGameplayEvent(ctx, "doorway_used", "player", door.id, { doorwayId: door.id, side: target.side });
+    return {
+      action: "door_use",
+      doorwayId: door.id,
+      side: otherSide(target.side),
+      message: "",
+      position: this.mmoService.publicPositionForPlayer(position, ctx.sessionContext.session, ctx.worldId)
+    };
   }
 
   portalSnapshot(ctx) {
@@ -2028,6 +2070,15 @@ export class Node03RuntimeService {
   }
 
   unstuckPlayer(ctx) {
+    // Binnenruimtes (22-11): vast binnen = naar buiten, voor de deur waar de binnenruimte bij hoort.
+    const outside = this.mmoService.outsidePointFor ? this.mmoService.outsidePointFor(ctx.world, ctx.position) : null;
+    if (outside) {
+      const connection = { ...ctx.sessionContext, player: ctx.profile, worldId: ctx.worldId };
+      const position = this.mmoService.applyTeleportState(connection, { zoneId: ctx.zoneId, position: outside, animationState: "idle" }, { reason: "unstuck" });
+      this.mmoService.schedulePersist(position, connection, true);
+      ctx.position = position;
+      return { action: "unstuck", message: "Je bent weer buiten, bij de deur.", position: this.mmoService.publicPositionForPlayer(position, ctx.sessionContext.session, ctx.worldId) };
+    }
     // Kevin 8-11: met portals in de wereld ga je naar de dichtstbijzijnde vrijgespeelde portal (direct, zonder de wereld te herladen).
     if (portalsOf(ctx.world).length) {
       const unlocked = unlockedPortalIds(this.db, ctx.profile.id, ctx.worldId);

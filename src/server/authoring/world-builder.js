@@ -216,6 +216,7 @@ export function liftWorldOntoTerrain(world, heightfield) {
     entities: (world.entities || []).map(liftEntity),
     interactables: (world.interactables || []).map(liftPoint),
     portals: Array.isArray(world.portals) ? world.portals.map(liftPoint) : world.portals,
+    doorways: Array.isArray(world.doorways) ? world.doorways.map((door) => Object.assign({}, door, { a: liftPoint(door.a), b: liftPoint(door.b) })) : world.doorways,
     spawn,
     zones,
     zonePackage: liftPackage(world.zonePackage),
@@ -862,6 +863,24 @@ function withGame(world, source, options) {
       rotationY: portal.rotationY, unlockMeters: portal.unlockMeters, interactMeters: portal.interactMeters, arriveMeters: portal.arriveMeters, startUnlocked: portal.startUnlocked === true,
       respawnHere: portal.respawnHere !== false }, portal.flagId ? { flag: { id: portal.flagId, on: portal.flagOn !== false } } : {}));
   }
+  // Doorgangen (22-11): twee kanten (A en B), elk met een eigen model. In de editor staan beide kanten er altijd
+  // (zonder model een blauw blokje); in de game alleen een kant met model. De server zet je van de ene kant naar de andere.
+  const doorways = [];
+  for (const door of game?.doorways || []) {
+    for (const side of ["a", "b"]) {
+      const end = door[side] || {};
+      const entityId = editor ? EDITOR_DOC_PREFIX + "doorway:" + door.doorwayId + (side === "b" ? "#b" : "") : "doorway_entity." + door.doorwayId + "." + side;
+      if (!editor && !end.modelAssetId) continue;
+      entities.push(modelEntity({ id: entityId, label: door.displayName + (editor ? (side === "a" ? " (A)" : " (B)") : ""), modelAssetId: end.modelAssetId, x: end.x, y: end.y, z: end.z,
+        rotationY: end.rotationY, scale: end.scale, flagId: editor ? null : door.flagId, flagOn: door.flagOn }));
+      if (!editor && door.flagId) flagGates.push({ entityId, npcId: null, flagId: door.flagId, on: door.flagOn !== false });
+    }
+    doorways.push(Object.assign({ id: door.doorwayId, displayName: door.displayName, useMode: door.useMode, useMeters: door.useMeters, arriveMeters: door.arriveMeters,
+      oneWay: door.oneWay === true, keyItemId: door.keyItemId || null, minLevel: door.minLevel || 1, combatBlockSeconds: door.combatBlockSeconds,
+      a: { x: Number(door.a?.x) || 0, y: Number(door.a?.y) || 0, z: Number(door.a?.z) || 0, rotationY: Number(door.a?.rotationY) || 0, hasModel: Boolean(door.a?.modelAssetId) },
+      b: { x: Number(door.b?.x) || 0, y: Number(door.b?.y) || 0, z: Number(door.b?.z) || 0, rotationY: Number(door.b?.rotationY) || 0, hasModel: Boolean(door.b?.modelAssetId) } },
+    door.flagId ? { flag: { id: door.flagId, on: door.flagOn !== false } } : {}));
+  }
   // In de editor: vijand- en grondstofplekken als model (de game toont ze via de vijandenserver).
   if (editor && source.actors) {
     for (const spawn of source.actors.spawns || []) {
@@ -1071,6 +1090,8 @@ function withGame(world, source, options) {
     worldMusic: worldMusic && worldMusic.url ? { assetId: worldMusic.assetId, url: worldMusic.url } : null,
     // Portals (8-11): plekken en regels (Instellingen > Portals). Zonder portals: lege lijst en de standaardregels.
     portals,
+    // Doorgangen (22-11): kant A en kant B per doorgang (zie runtime/doorway-runtime.js).
+    doorways,
     flyers,
     // Werkbank Fase 10 (10b): verhalen (titel, tekst, kopje) en de modellen waarop je ze leest.
     lore: Object.fromEntries((game?.lore || []).map((entry) => [entry.loreId, { title: entry.title, text: entry.text, category: entry.category }])),
