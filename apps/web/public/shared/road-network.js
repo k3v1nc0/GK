@@ -261,6 +261,29 @@ export function roadDelete(net, pointIndices = [], linkIndices = []) {
   return { points, links: cleanLinks(links), remap };
 }
 
+// Kevin 23-11 (8): punten opheffen zonder de lijn kwijt te raken (Dissolve). Een punt tussen precies twee lijnen: die twee
+// worden één lijn tussen de buren, met de soort van de langste. Andere punten blijven staan. Geeft { net, dissolved }.
+export function roadDissolve(net, pointIndices = []) {
+  let links = net.links.slice();
+  const drop = [];
+  for (const i of new Set(pointIndices)) {
+    const at = [];
+    links.forEach((link, k) => { if (link[0] === i || link[1] === i) at.push(k); });
+    if (at.length !== 2) continue;
+    const [l1, l2] = at.map((k) => links[k]);
+    const o1 = l1[0] === i ? l1[1] : l1[0];
+    const o2 = l2[0] === i ? l2[1] : l2[0];
+    if (o1 === o2 || !net.points[o1] || !net.points[o2]) continue;
+    const length = (o) => Math.hypot(net.points[o].x - net.points[i].x, net.points[o].z - net.points[i].z);
+    const keep = length(o1) >= length(o2) ? l1 : l2;
+    links = links.filter((_, k) => k !== at[0] && k !== at[1]).concat([relink(keep, o1, o2)]);
+    drop.push(i);
+  }
+  if (!drop.length) return { net, dissolved: 0 };
+  const result = roadDelete({ points: net.points, links }, drop);
+  return { net: { points: result.points, links: result.links }, dissolved: drop.length };
+}
+
 // Punt "from" opgaan in punt "into" (zijn lijnen gaan mee). Geeft { net, index } met het nieuwe nummer van "into".
 export function roadMerge(net, from, into) {
   if (from === into) return { net, index: into };

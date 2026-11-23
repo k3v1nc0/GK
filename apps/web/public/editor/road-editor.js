@@ -5,8 +5,8 @@
 // Wijzigingen staan meteen in beeld; opslaan (met Ctrl+Z) loopt op de achtergrond, één tegelijk.
 // Kevin 23-11 (2): hetzelfde gereedschap bewerkt ook een 🧱 Muur (deps.channel "wall", eigen toNet/toBody): de soort per
 // lijn (muur, deur, raam, open) is het derde getal van een lijn en gaat mee bij alles (setLinkKind zet hem).
-import { areaRoadLinks } from "../shared/area-soorten.js?v=20261123-muur11";
-import { roadAddPoint, roadClip, roadConnect, roadDelete, roadDuplicate, roadChainOrder, roadHasLink, roadInsertChain, roadMerge, roadParts, roadPaste, roadSplitLink } from "../shared/road-network.js?v=20261123-muur7";
+import { areaRoadLinks } from "../shared/area-soorten.js?v=20261123-muur14";
+import { roadAddPoint, roadClip, roadConnect, roadDelete, roadDissolve, roadDuplicate, roadChainOrder, roadHasLink, roadInsertChain, roadMerge, roadParts, roadPaste, roadSplitLink } from "../shared/road-network.js?v=20261123-muur14";
 
 const toRoadNet = (body) => ({ points: (body?.pointsMm || []).map((p) => ({ x: p[0] / 1000, z: p[1] / 1000 })), links: areaRoadLinks(body) });
 const toRoadBody = (body, net) => {
@@ -75,7 +75,7 @@ export function createRoadEditor(deps) {
     const text = (prefix ? icon + " " + prefix + " · " : icon + " " + name + " · ") + net.points.length + " punten, " + net.links.length + (net.links.length === 1 ? " lijn" : " lijnen")
       + (selPoints.length ? " · " + selPoints.length + " punt(en) gekozen" : "") + (selLinks.length ? " · " + selLinks.length + " lijn(en) gekozen" : "")
       + (parts > 1 ? " · ⚠️ " + parts + " losse delen: kies een punt van elk deel en druk F" : "")
-      + (channel === "wall" && selLinks.length ? " · Muur, Deur, Raam of Open: kaart, onder ⚙️ meer · Ctrl+C op een deur/raam, dan Ctrl+V op een muur = dezelfde erin · G G = punt langs de lijn" : "")
+      + (channel === "wall" && selLinks.length ? " · Muur, Deur, Raam of Open: kaart, onder ⚙️ meer · Ctrl+C op een deur/raam, dan Ctrl+V op een muur = dezelfde erin · G G = punt langs de lijn · Ctrl+X = punt weg, lijn blijft" : "")
       + (others > 0 ? " · Er " + (others === 1 ? "is nog 1 andere Weg" : "zijn nog " + others + " andere Wegen") + ": Ctrl+J voegt ze hierbij" : "");
     deps.setStatus(text, "");
   }
@@ -300,6 +300,14 @@ export function createRoadEditor(deps) {
     commit({ points: result.points, links: result.links }, (selPoints.length ? selPoints.length + " punt(en)" : selLinks.length + " lijn(en)") + " weggehaald", { points: [], links: [] });
   }
 
+  // Kevin 23-11 (8): Ctrl+X = punt weg, de lijn blijft (zoals Dissolve in Blender): de twee lijnen aan het punt worden één.
+  function dissolve() {
+    if (!selPoints.length) { deps.setStatus("Kies eerst een punt (klik). Ctrl+X haalt het punt weg en houdt de lijn.", "error"); return; }
+    const result = roadDissolve(net, selPoints);
+    if (!result.dissolved) { deps.setStatus("Dit punt zit niet tussen precies twee lijnen; weghalen kan met Delete.", "error"); return; }
+    commit(result.net, result.dissolved + " punt(en) weg, de lijn blijft", { points: [], links: [] });
+  }
+
   function duplicate() {
     const indices = sessionIndices();
     if (!indices.length) { deps.setStatus("Kies eerst wat je wilt dupliceren.", "error"); return; }
@@ -313,7 +321,7 @@ export function createRoadEditor(deps) {
 
   // Kevin 23-11 (4): een gekopieerd stuk muur in een rechte rij (bijv. één deur- of raam-lijn) zet Ctrl+V ín de muurlijn
   // onder de muis (of de gekozen lijn), even breed en met dezelfde soorten. Zo krijgen alle ramen dezelfde breedte.
-  const OPENING_NAMES = { 1: "deur", 2: "raam", 3: "opening", 4: "deur" };
+  const OPENING_NAMES = { 1: "deur", 2: "raam", 3: "opening", 4: "deco 1", 5: "deco 2", 6: "deco 3" };
   const meters = (value) => value.toFixed(2).replace(".", ",") + " m";
   function chainOf(clip) {
     const order = channel === "wall" && clip ? roadChainOrder(clip) : null;
@@ -441,6 +449,7 @@ export function createRoadEditor(deps) {
         return consume();
       }
       if (key === "v") { paste(); return consume(); }
+      if (key === "x") { dissolve(); return consume(); }
       if (key === "d") { duplicate(); return consume(); }
       if (key === "j") { void joinOthers(); return consume(); }
       return false;

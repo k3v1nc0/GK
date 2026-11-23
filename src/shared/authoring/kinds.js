@@ -531,7 +531,7 @@ export function validateDocument(kind, body) {
       if (value.length > field.maxItems) issues.push(issue(key, "FIELD_RANGE", field.label + ": hooguit " + field.maxItems + "."));
       // Kevin 23-11: bij een 🧱 Muur mag een lijn een derde getal hebben (1 = deur, 2 = raam, 3 = open).
       if (value.some((link) => !Array.isArray(link) || link.length < 2 || link.length > 3 || link.slice(0, 2).some((n) => !Number.isInteger(n) || n < 0) || link[0] === link[1]
-        || (link.length === 3 && ![1, 2, 3, 4].includes(link[2])))) {
+        || (link.length === 3 && ![1, 2, 3, 4, 5, 6].includes(link[2])))) {
         issues.push(issue(key, "FIELD_LINK", field.label + ": elke lijn is [punt, ander punt]."));
       }
       continue;

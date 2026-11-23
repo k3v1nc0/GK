@@ -274,7 +274,8 @@ export function cameraConfigOf(data = {}) {
   const touch = { side: values.cameraTouchStickSide === "right" ? "right" : "left", size: n("cameraTouchStickSize"), x: n("cameraTouchStickX"), y: n("cameraTouchStickY"),
     turnSpeed: n("cameraTouchTurnSpeed") / 100, runAtEdge: values.cameraTouchRunAtEdge !== false };
   return { camera, mode: values.cameraMode === "third_person" ? "third-person" : "top-down", playerChoice: values.cameraPlayerChoice === true,
-    topDownRotate: values.cameraTopDownRotate === true, thirdPerson, touch };
+    topDownRotate: values.cameraTopDownRotate === true, thirdPerson, touch,
+    vision: values.cameraTopDownVision !== false, visionDark: Math.max(0, Math.min(1, n("cameraTopDownVisionDark") / 100)) };
 }
 
 // De basis van de wereld uit de build. data = server.json van de build (of {} als er nog geen build is).
@@ -331,6 +332,7 @@ export function baseRuntimeWorld(data = {}, options = {}) {
       performance: Object.assign(clone(PERFORMANCE), { shared: { worldId: WORLD_ID, displayName: gameName, backgroundColor: sky, fogColor: sky, fogDensity: 0, smoothShading: true } }, gameShadowOf(settings)) },
     ground,
     camera: Object.assign({ mode: cameraConfig.mode, playerChoice: cameraConfig.playerChoice, topDownRotate: cameraConfig.topDownRotate,
+      vision: cameraConfig.vision, visionDark: cameraConfig.visionDark,
       thirdPerson: cameraConfig.thirdPerson, touch: cameraConfig.touch }, camera),
     player: { id: "player", modelAssetId: settings.playerModelAssetId || null, moveSpeed: Number(settings.playerSpeed), sprintMultiplier: Number(settings.playerRunSpeedPct) / 100,
       alwaysRun: settings.playerAlwaysRun === true,
@@ -1073,7 +1075,7 @@ function withGame(world, source, options) {
     // 5-11: plaatjes in het startvenster van quests.
     .concat(quests.map((quest) => quest?.imageAssetId))
     // Kevin 23-11: de textuur van een 🧱 Muur en van zijn ramen.
-    .concat((world.walls || []).flatMap((wall) => [wall?.textureAssetId, wall?.topTextureAssetId, wall?.windowTextureAssetId, wall?.doorTextureAssetId]))
+    .concat((world.walls || []).flatMap((wall) => [wall?.textureAssetId, wall?.topTextureAssetId, wall?.windowTextureAssetId].concat((wall?.decos || []).map((deco) => deco?.textureAssetId))))
     .concat((player.classes || []).flatMap((entry) => entry.models || [])).filter(Boolean)));
   const known = new Map((world.assets || []).map((asset) => [asset.id, asset]));
   // Paden van thumbnails kunnen na een import/migratie wijzigen zonder dat de

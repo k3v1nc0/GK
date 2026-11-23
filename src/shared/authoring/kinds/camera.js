@@ -44,6 +44,12 @@ export const CAMERA_FIELDS = {
   cameraTopDownRotate: toggle("Draaien met rechtermuisknop", "🔄", false, TOP_GROUP,
     help("Op de pc: houd de rechtermuisknop ingedrukt en sleep om de camera rond de speler te draaien. Uit = de camera kijkt altijd dezelfde kant op.",
       "Uit voor een vaste kaart-blik, aan als huizen en bomen het zicht wegnemen.", "Spelers raken de weg kwijt → zet uit (noorden blijft dan boven).")),
+  // Kevin 23-11 (9): zichtveld. Van boven zie je niet over een muur heen: wat je poppetje niet kan zien, is donker.
+  cameraTopDownVision: toggle("Zichtveld (niet over muren kijken)", "🔦", true, TOP_GROUP,
+    help("Van boven kun je niet over een muur heen kijken: alles wat je poppetje niet kan zien (achter een muur of dichte deur) is donker. Door een open deur, een gat of een raam zie je wel.",
+      "Aan voor huizen, kastelen en kerkers.", "Te veel donker buiten → zet uit, of maak het minder donker.")),
+  cameraTopDownVisionDark: int("Zichtveld: hoe donker", "🌑", 92, 0, 100, 1, "%", TOP_GROUP,
+    help("Hoe donker het stuk is dat je niet kunt zien. 100 = helemaal zwart.", "85-95%.", "Je ziet nog te veel achter de muur → hoger."), { range: [40, 100] }),
 
   // Third-person: achter de speler.
   cameraTpDistance: num("Afstand achter je", "🎥", 6, 1, 40, 0.5, "m", TP_GROUP,

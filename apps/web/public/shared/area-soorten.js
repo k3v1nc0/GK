@@ -3,7 +3,7 @@
 // verhuisd pad, bos of blokkade er precies hetzelfde uitziet. De instellingen per soort staan in "settings";
 // hun regels (type, min, max, keuzes) komen uit de oude nodedefinitie, de naam/icoon/hulp staat hier.
 import { NODE_TYPES } from "./node-types.js?v=20261106-perf1";
-import { WALL_DEFAULTS, WALL_EDGE_KEYS, wallNetLinks } from "./walls.js?v=20261123-muur11";
+import { WALL_DEFAULTS, WALL_EDGE_KEYS, wallNetLinks } from "./walls.js?v=20261123-muur14";
 
 // Zelfde vorm als help() in src/shared/authoring/kinds/ui.js (dit bestand draait ook in de browser).
 const help = (waarvoor, goed, probleem) => Object.freeze({ waarvoor, goed, probleem });
@@ -13,6 +13,21 @@ export const AREA_SOORT_ORDER = Object.freeze(["begroeiing", "pad", "blokkade", 
 // Kevin 23-11: de instellingen van een 🧱 Muur (geen oude node; hun regels staan hier).
 const wallNumber = (key, label, icon, min, max, def, step, range, more, waarvoor, goed, probleem) => ({ key, spec: { type: "number", label, icon, default: def,
   min, max, step, range, more, help: help(waarvoor, goed, probleem) } });
+const DECO_SIDES = [{ value: "both", label: "Beide kanten", icon: "↔️" }, { value: "inside", label: "Alleen binnen", icon: "🏠" },
+  { value: "outside", label: "Alleen buiten", icon: "🌳" }];
+const decoFields = (slot) => [
+  { key: slot === 1 ? "wallDoorTextureAssetId" : "deco" + slot + "TextureAssetId", spec: { type: "asset", label: "Deco " + slot + ": plaatje" + (slot === 1 ? " (deur)" : ""),
+    icon: slot === 1 ? "🚪" : "🖼️", default: null, more: true, assetTypes: ["texture", "image"],
+    help: help("Het plaatje op een Deco " + slot + "-lijn: een deur, schilderij, gordijn of bord. Doorzichtige stukken laten de muur zien. Door een deur ga je met een doorgang of portal.",
+      "Sleep een PNG uit de Bibliotheek op dit vak. Zo breed als de lijn, de hoogte volgt het plaatje.",
+      "Te breed of te smal → maak de Deco-lijn korter of langer (F, G G). Komt hij boven de muur uit → hij wordt vanzelf smaller.") } },
+  wallNumber("deco" + slot + "Bottom", "Deco " + slot + ": onderkant (m)", "⬆️", 0, 50, slot === 1 ? 0 : 1, 0.05, [0, 4], true,
+    "Hoe hoog boven de grond het plaatje begint.", slot === 1 ? "0 voor een deur." : "1 tot 1.5 m voor een schilderij, 0 voor een gordijn tot de grond.",
+    "Hangt te laag of te hoog → schuif."),
+  { key: "deco" + slot + "Side", spec: { type: "select", label: "Deco " + slot + ": kant", icon: "🔀", default: slot === 1 ? "both" : "inside", more: true,
+    options: DECO_SIDES, help: help("Aan welke kant van de muur het plaatje zit. Binnen = de kant van het midden van de muur (de kamer in).",
+      "Deur: beide kanten. Schilderij of gordijn: alleen binnen.", "Zit aan de verkeerde kant → kies de andere.") } }
+];
 const WALL_FIELDS = [
   wallNumber("wallHeight", "Hoogte (m)", "↕️", 0.2, 50, WALL_DEFAULTS.height, 0.1, [1, 10], false,
     "Hoe hoog de muur is.", "2.5 tot 3 m voor een huis, 5 tot 10 m voor een zaal of kasteel.", "Muur staat in de weg van de camera → lager, of de camera steiler (kaart Deelgebied)."),
@@ -38,9 +53,9 @@ const WALL_FIELDS = [
   wallNumber("windowTop", "Raam tot (m)", "🪟", 0, 50, WALL_DEFAULTS.windowTop, 0.1, [1, 5], true,
     "Tot hoe hoog het raam op een Raam-lijn komt.", "2 tot 2.4 m, lager dan de muurhoogte.", "Raam loopt tot het plafond → lager."),
   // Kevin 23-11 (2): een Raam-lijn is dicht met aan de binnenkant een raam dat licht geeft (geen gat naar het zwart buiten).
-  // Kevin 23-11 (7): het plaatje van een Deur (dicht): aan beide kanten van de muur, doorzichtige stukken laten de muur zien.
-  { key: "wallDoorTextureAssetId", spec: { type: "asset", label: "Deur-textuur", icon: "🚪", default: null, more: true, assetTypes: ["texture", "image"],
-    help: help("Het plaatje van een Deur (dicht), aan beide kanten van de muur. Geen gat: door de deur ga je met een doorgang of portal.", "Sleep een deur-PNG uit de Bibliotheek op dit vak. De hoogte volgt het plaatje. Leeg = een bruine deur zo hoog als Deurhoogte.", "Deur te breed of te smal → maak de deur-lijn korter of langer.") } },
+  // Kevin 23-11 (7/8): Deco op de muur: een lijn Deco 1, 2 of 3 is dicht met een plaatje erop (deur, schilderij, gordijn).
+  // Per soort een plaatje, de hoogte van de onderkant en aan welke kant. Deco 1 = de deur (op de grond, beide kanten).
+  ...[1, 2, 3].flatMap((slot) => decoFields(slot)),
   { key: "windowTextureAssetId", spec: { type: "asset", label: "Raam-textuur", icon: "🖼️", default: null, more: true, assetTypes: ["texture", "image"],
     help: help("Het plaatje van het raam (glas, sponning, tralies). Het gloeit, alsof er daglicht door valt.", "Sleep een raam-textuur uit de Bibliotheek op dit vak. Leeg = een licht vlak.", "Raam te fel of te donker → schuif Raamlicht.") } },
   wallNumber("windowLight", "Raamlicht", "☀️", 0, 3, WALL_DEFAULTS.windowLight, 0.1, [0, 2], true,

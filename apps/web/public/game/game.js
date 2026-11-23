@@ -1,4 +1,4 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261123-muur13";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261123-muur15";
 import { nextPlayerRouteWaypoint } from "../shared/player-path-client.js?v=20261108-roads9";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20261106-perf1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
@@ -8627,6 +8627,22 @@ function doorDistance(end) {
   const here = currentLocalPlayerPosition();
   return here && end ? Math.hypot(num(here.x, 0) - num(end.x, 0), num(here.z, 0) - num(end.z, 0)) : Infinity;
 }
+// De doorgang bij een aangeklikt deco-vlak: de dichtstbijzijnde kant binnen 4 m, aan de voorkant van de muur.
+function doorTargetAtWallDeco(clientX, clientY) {
+  const hit = state.runtime && typeof state.runtime.pickWallDecoAt === "function" ? state.runtime.pickWallDecoAt(clientX, clientY) : null;
+  if (!hit) return null;
+  let best = null;
+  for (const door of doorwaysVisible()) {
+    for (const side of doorSides(door)) {
+      const end = door[side];
+      const dx = num(end.x, 0) - hit.x, dz = num(end.z, 0) - hit.z;
+      const distance = Math.hypot(dx, dz);
+      if (distance > 4 || dx * hit.nx + dz * hit.nz < -0.3) continue;
+      if (!best || distance < best.distance) best = { distance, doorwayId: door.id, side };
+    }
+  }
+  return best ? { doorwayId: best.doorwayId, side: best.side } : null;
+}
 function activateDoorTarget(target) {
   const door = doorwaysVisible().find(function (entry) { return entry.id === target?.doorwayId; });
   if (!door) return;
@@ -14392,6 +14408,12 @@ function handleGamePointerDown(event, source = "pointer") {
     : null;
   if (pickedNode03Target?.instanceId && pickedNode03Target?.action) {
     activateRuntimeTarget(pickedNode03Target);
+    return;
+  }
+  // Kevin 23-11 (9): klik of tik op een deur-plaatje op de muur = naar de doorgang die daar staat lopen (en erdoor).
+  const decoDoor = doorTargetAtWallDeco(event.clientX, event.clientY);
+  if (decoDoor) {
+    activateDoorTarget(decoDoor);
     return;
   }
   // Alleen een tweede vinger terwijl de eerste nog echt op het scherm staat betekent sprint.

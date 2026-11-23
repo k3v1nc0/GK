@@ -5,8 +5,8 @@ import { validateDocument } from "../src/shared/authoring/kinds.js";
 import { areaBodyFromNodePatch, areaNodeValues } from "../src/shared/authoring/kinds/area.js";
 import { compileAreaShapes } from "../src/server/authoring/area-compiler.js";
 import { applyCanonicalBuild } from "../src/server/authoring/runtime-overlay.js";
-import { editWallEdges, wallBlockers, wallDoors, wallEdgeKinds, wallFromAreaValues, wallJoins, wallNetLinks, wallPieces, wallWindows } from "../apps/web/public/shared/walls.js";
-import { roadChainOrder, roadDelete, roadInsertChain, roadSplitLink } from "../apps/web/public/shared/road-network.js";
+import { editWallEdges, wallBlockers, wallDecos, wallEdgeKinds, wallFromAreaValues, wallJoins, wallNetLinks, wallPieces, wallWindows } from "../apps/web/public/shared/walls.js";
+import { roadChainOrder, roadDelete, roadDissolve, roadInsertChain, roadSplitLink } from "../apps/web/public/shared/road-network.js";
 import { isPointBlockedByBlocker, createWalkabilityIndex } from "../apps/web/public/shared/movement-kernel.js";
 
 // Kamer van 4 x 4 m. Rand 0 = voorkant (z = 0), rand 1 = rechts, rand 2 = achter, rand 3 = links.
@@ -116,13 +116,13 @@ test("muur als net: T-splitsing, soort per lijn, geldig en het raam schijnt naar
   assert.deepEqual(wallNetLinks(4, undefined, { openEdges: [3] }), [[0, 1], [1, 2], [2, 3], [3, 0, 3]]);
 });
 
-test("hoeken in verstek, textuur loopt door, en Deur (dicht) = muur met deur-plaatje aan beide kanten", () => {
+test("hoeken in verstek, textuur loopt door, en Deco 1 = muur met deur-plaatje aan beide kanten", () => {
   // L-vorm: (0,0) -> (4,0) -> (4,3), en de tweede lijn andersom getekend; dikte 0.3.
   const body = { areaId: "muur.l", displayName: "L", soort: "muur", shape: "polygon", pointsMm: [[0, 0], [4000, 0], [4000, 3000]],
     links: [[0, 1], [2, 1, 4]], settings: { wallThickness: 0.3 } };
-  assert.equal(validateDocument("area", body).ok, true, "code 4 (Deur dicht) is geldig");
+  assert.equal(validateDocument("area", body).ok, true, "code 4 (Deco 1) is geldig");
   const wall = wallFromAreaValues("muur.l", areaNodeValues(body, "muur.l"));
-  assert.deepEqual(wall.links.map((link) => link.kind), ["wall", "gate"]);
+  assert.deepEqual(wall.links.map((link) => link.kind), ["wall", "deco1"]);
   const joins = wallJoins(wall);
   // Hoek op (4,0): buitenhoek (4.15,-0.15), binnenhoek (3.85,0.15), voor beide lijnen dezelfde punten.
   const near = (p, x, z) => Math.abs(p[0] - x) < 1e-9 && Math.abs(p[1] - z) < 1e-9;
@@ -134,10 +134,34 @@ test("hoeken in verstek, textuur loopt door, en Deur (dicht) = muur met deur-pla
   assert.equal(joins[0].uStart + joins[0].length, 4);
   assert.equal(joins[1].flip, true);
   assert.equal(-(joins[1].uStart + joins[1].length), 4, "textuur loopt door over de hoek");
-  // Deur (dicht): botst als muur, en een deur-vlak aan beide kanten.
+  // Deco 1: botst als muur, en een deur-vlak aan beide kanten.
   assert.equal(wallBlockers(wall).length, 2, "dicht");
-  const doors = wallDoors(wall);
+  const doors = wallDecos(wall);
   assert.equal(doors.length, 2, "aan beide kanten");
-  assert.ok(doors.every((door) => Math.abs(door.width - 3) < 1e-9 && door.height === 2.4));
+  assert.ok(doors.every((door) => Math.abs(door.width - 3) < 1e-9 && door.height === 2.4 && door.bottom === 0 && door.slot === 0));
   assert.equal(wallPieces(wall).filter((piece) => piece.edge === 1).length, 1, "één dicht stuk muur");
+});
+
+test("T-splitsing zonder uitsteeksels, Deco 2 alleen binnen, en Ctrl+X houdt de lijn", () => {
+  // Doorgaande muur (0,0)-(4,0)-(8,0), zijtak (4,0)-(4,3); dikte 0.3.
+  const body = { areaId: "muur.t", displayName: "T", soort: "muur", shape: "polygon", pointsMm: [[0, 0], [4000, 0], [8000, 0], [4000, 3000]],
+    links: [[0, 1], [1, 2], [1, 3, 5]], settings: { wallThickness: 0.3, deco2Bottom: 1.2 } };
+  assert.equal(validateDocument("area", body).ok, true, "code 5 (Deco 2) en deco-velden zijn geldig");
+  const wall = wallFromAreaValues("muur.t", areaNodeValues(body, "muur.t"));
+  const joins = wallJoins(wall);
+  const near = (p, x, z) => Math.abs(p[0] - x) < 1e-9 && Math.abs(p[1] - z) < 1e-9;
+  assert.ok(near(joins[0].b.left, 4, 0.15) && near(joins[0].b.right, 4, -0.15), "doorgaande muur: recht aan elkaar, geen kopje");
+  assert.ok(near(joins[1].a.left, 4, 0.15) && near(joins[1].a.right, 4, -0.15));
+  const branch = [joins[2].a.left, joins[2].a.right];
+  assert.ok(branch.some((p) => near(p, 3.85, 0.15)) && branch.some((p) => near(p, 4.15, 0.15)), "zijtak stopt tegen de zijkant (z = 0.15)");
+  const decos = wallDecos(wall);
+  assert.equal(decos.length, 1, "Deco 2 standaard alleen binnen");
+  assert.equal(decos[0].bottom, 1.2);
+  // Ctrl+X op punt 1 van een rechte muur: één lijn van 0 naar 2.
+  const net = { points: [{ x: 0, z: 0 }, { x: 2, z: 0 }, { x: 5, z: 0 }], links: [[0, 1], [1, 2, 2]] };
+  const result = roadDissolve(net, [1]);
+  assert.equal(result.dissolved, 1);
+  assert.deepEqual(result.net.links, [[0, 1, 2]], "de langste (raam) blijft");
+  assert.equal(result.net.points.length, 2);
+  assert.equal(roadDissolve(net, [0]).dissolved, 0, "eindpunt: niet");
 });

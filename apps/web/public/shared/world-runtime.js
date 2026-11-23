@@ -32,7 +32,7 @@ import { createPlayerPathClient } from "./player-path-client.js?v=20261108-roads
 import { createTerrainLayer, seedTerrainChunk, seedTerrainPaint } from "./terrain-render.js?v=20261123-muur7";
 import { createWaterLayer } from "./water-render.js?v=20261030-terrein6";
 import { createSkyLayer } from "./sky-render.js?v=20261120-sky2";
-import { wallDoors, wallJoins, wallPieces, wallWindows } from "./walls.js?v=20261123-muur11";
+import { wallDecos, wallJoins, wallPieces, wallWindows } from "./walls.js?v=20261123-muur14";
 import { INDOOR_ZONE } from "./indoor-zone.js?v=20261123-binnentab1";
 import { createSrgbTextureLoader } from "./srgb-texture-loader.js?v=20261123-muur7";
 export {
@@ -4713,7 +4713,8 @@ export function createGkWorldRuntime(canvas, options = {}) {
   installConsoleWarnGate();
   let shadowPolicy = resolveShadowPolicy(null, mode);
 
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: rendererAntialias });
+  // Kevin 23-11 (9): de game krijgt een stencil-buffer voor het zichtveld (updateVision).
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: rendererAntialias, stencil: mode === "game" });
   renderer.setPixelRatio(effectivePixelRatio(mode === "editor" ? worldPerformance.editor : worldPerformance.game));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -4826,6 +4827,11 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let daylightLevel = 1;
   // Kevin 23-11 (2): ramen op muren (addWallWindow); hun licht volgt dag en nacht.
   const windowLightRecords = [];
+  // Kevin 23-11 (8): de muurstukken voor "naam achter een muur?" (hiddenBehindWall) en het zichtveld, gevuld door addWalls.
+  let wallSightPieces = [];
+  let wallSightVersion = 0;
+  // Kevin 23-11 (9): de deco-vlakken op muren (deur-plaatjes), om in de game op een deur te kunnen klikken.
+  const wallDecoMeshes = [];
   const windowDayColor = new THREE.Color("#fff1c9");
   const windowNightColor = new THREE.Color("#8fb0ff");
   // Binnenruimtes (22-11): zie setIndoor. indoorOutside = achtergrond en mist van buiten, om terug te zetten.
@@ -8954,6 +8960,7 @@ function resolveChunkDebugCenter(policy) {
     if (dangerZones.size) updateDangerZones(performance.now());
     // Een pixelratio-wijziging kan het canvas wissen: voer die vóór het tekenen uit.
     maybeAdaptPixelRatio(time);
+    if (mode === "game") updateVision();
     if (gpuFrameTimer) gpuFrameTimer.begin();
     renderer.render(scene, camera);
     if (gpuFrameTimer) gpuFrameTimer.end();
@@ -9817,8 +9824,8 @@ function resolveChunkDebugCenter(policy) {
     };
     const links = Array.isArray(data.links) ? data.links : [];
     if (wall) {
-      // Muur: oranje = muur, groen = deur (gat), blauw = raam, grijs = open, bruin = deur (dicht) (derde getal van de lijn).
-      const colors = [0xffb347, 0x4ade80, 0x60a5fa, 0x9ca3af, 0xb45309];
+      // Muur: oranje = muur, groen = deur (gat), blauw = raam, grijs = open, bruin/paars/roze = Deco 1/2/3 (derde getal).
+      const colors = [0xffb347, 0x4ade80, 0x60a5fa, 0x9ca3af, 0xb45309, 0xa855f7, 0xec4899];
       for (let code = 0; code < colors.length; code += 1) {
         ribbon(links.filter((link, k) => !selectedLinks.has(k) && (Number.isInteger(link[2]) ? link[2] : 0) === code), 0.35, colors[code], 0.95, 7002);
       }
@@ -15959,6 +15966,17 @@ function resolveChunkDebugCenter(policy) {
   function addWalls(worldData) {
     const walls = Array.isArray(worldData?.walls) ? worldData.walls : [];
     const groundY = num(worldData?.ground?.y, 0);
+    wallSightPieces = [];
+    wallSightVersion += 1;
+    wallDecoMeshes.length = 0;
+    for (const wall of walls) {
+      for (const piece of wallPieces(wall)) {
+        wallSightPieces.push({ ax: piece.ax, az: piece.az, bx: piece.bx, bz: piece.bz,
+          y0: groundY + piece.baseY + piece.from, y1: groundY + piece.baseY + piece.to,
+          // Zichtveld: alleen stukken vanaf de grond (geen boog boven een deur) en geen raam (daar kijk je door).
+          sight: piece.from <= 0.3 && piece.kind !== "window", half: piece.thickness / 2 });
+      }
+    }
     const shadow = staticPropShadowOptions();
     for (const wall of walls) {
       const fitHeight = wall.textureFit === "height";
@@ -16006,7 +16024,7 @@ function resolveChunkDebugCenter(policy) {
       runtimeStats.sceneObjects += 1;
       runtimeStats.meshes += 1;
       for (const win of wallWindows(wall)) addWallWindow(worldData, wall, win, groundY);
-      for (const door of wallDoors(wall)) addWallDoor(worldData, wall, door, groundY);
+      for (const deco of wallDecos(wall)) addWallDeco(worldData, wall, deco, groundY);
     }
     applyWindowLights();
   }
@@ -16329,34 +16347,36 @@ function resolveChunkDebugCenter(policy) {
     });
     windowLightRecords.push({ panelUniforms, patchMaterial, beamMaterial, light: Math.max(0, num(win.light, 1)), rays: Math.max(0, num(win.rays, 1)) });
   }
-  // Kevin 23-11 (7): Deur (dicht). Een dichte muur met aan beide kanten een deur-plaatje erop (veld Deur-textuur, PNG met
-  // doorzichtige stukken mag). Erdoor ga je met een 🚪 Doorgang (kant A voor de deur, kant B aan de overkant), niet door
-  // een gat. Het plaatje houdt zijn verhouding: zo breed als de lijn, de hoogte volgt (nooit hoger dan de muur).
-  // Zonder plaatje een bruin vlak zo hoog als Deurhoogte. Belicht zoals de muur; geen eigen schaduw.
-  function addWallDoor(worldData, wall, door, groundY) {
-    const width = Math.max(0.1, door.width - 0.04);
-    const maxHeight = Math.max(0.2, door.maxHeight - 0.02);
-    const material = new THREE.MeshStandardMaterial({ color: new THREE.Color("#7a4a24"), roughness: 0.85, metalness: 0,
-      transparent: true, alphaTest: 0.02, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
+  // Kevin 23-11 (7/8): Deco op de muur (Deco 1 = deur, of een schilderij, gordijn ...). Een dichte muur met een plaatje
+  // erop (veld Deco 1-3: plaatje, hoogte onderkant, kant). Erdoor ga je met een 🚪 Doorgang, niet door een gat. Het
+  // plaatje houdt zijn verhouding: zo breed als de lijn, de hoogte volgt (nooit boven de muur uit, dan smaller).
+  // Zonder plaatje: Deco 1 een bruine deur (Deurhoogte), Deco 2/3 een grijs vlak. Belicht zoals de muur; geen schaduw.
+  function addWallDeco(worldData, wall, deco, groundY) {
+    const width = Math.max(0.1, deco.width - 0.04);
+    const maxHeight = Math.max(0.1, deco.maxHeight - 0.02);
+    const material = new THREE.MeshStandardMaterial({ color: new THREE.Color(deco.slot === 0 ? "#7a4a24" : "#6b7280"), roughness: 0.85,
+      metalness: 0, transparent: true, alphaTest: 0.02, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material);
-    const bottom = groundY + num(door.baseY, 0);
+    const bottom = groundY + num(deco.baseY, 0) + num(deco.bottom, 0);
     const size = function (w, h) {
       mesh.scale.set(w, h, 1);
-      mesh.position.set(door.x + door.nx * 0.012, bottom + h / 2, door.z + door.nz * 0.012);
+      mesh.position.set(deco.x + deco.nx * 0.012, bottom + h / 2, deco.z + deco.nz * 0.012);
     };
-    size(width, Math.min(maxHeight, Math.max(0.2, door.height)));
-    mesh.rotation.y = Math.atan2(door.nx, door.nz);
-    mesh.name = "wall door " + String(wall.id || "");
+    size(width, Math.min(maxHeight, Math.max(0.1, num(deco.height, 1))));
+    mesh.rotation.y = Math.atan2(deco.nx, deco.nz);
+    mesh.name = "wall deco " + String(wall.id || "");
     mesh.renderOrder = 1;
     mesh.castShadow = false;
     mesh.receiveShadow = staticPropShadowOptions().receiveShadow;
     mesh.userData.runtimeAlive = true;
-    mesh.userData.gkWallDoor = true;
+    mesh.userData.gkWallDeco = true;
+    mesh.userData.decoNormal = { x: deco.nx, z: deco.nz };
+    wallDecoMeshes.push(mesh);
     if (mode === "editor") mesh.userData.entityId = wall.id;
     content.add(mesh);
     runtimeStats.sceneObjects += 1;
     runtimeStats.meshes += 1;
-    const asset = wall.doorTextureAssetId ? assetById(worldData, wall.doorTextureAssetId) : null;
+    const asset = deco.textureAssetId ? assetById(worldData, deco.textureAssetId) : null;
     if (asset) withWallTexture(asset, function (texture) {
       if (mesh.material !== material) return;
       material.map = wallTextureVariant(texture, "single", function (variant) {
@@ -16366,13 +16386,13 @@ function resolveChunkDebugCenter(policy) {
       });
       material.color.setRGB(1, 1, 1);
       material.needsUpdate = true;
-      // Verhouding van het plaatje: past het niet in de hoogte van de muur, dan wordt hij smaller (in het midden).
+      // Verhouding van het plaatje: past het niet tot de bovenkant van de muur, dan wordt hij smaller (in het midden).
       const aspect = imageAspect(texture.image);
       let w = width;
       let h = w / aspect;
       if (h > maxHeight) { h = maxHeight; w = h * aspect; }
       size(w, h);
-      requestRender("wall-door-texture");
+      requestRender("wall-deco-texture");
     });
   }
   function applyWindowLights() {
@@ -16473,7 +16493,8 @@ function resolveChunkDebugCenter(policy) {
     texture.needsUpdate = true;
     const geometry = new THREE.PlaneGeometry(1.6, 2.2);
     geometry.translate(0, 1.1, 0);
-    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.FrontSide, depthWrite: false, toneMapped: false });
+    // Kevin 23-11 (8): alleen in de editor; altijd zichtbaar (ook achter een muur of deco), zodat je hem kunt plaatsen.
+    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.FrontSide, depthWrite: false, depthTest: false, toneMapped: false });
     const resources = { geometry, material };
     doorwayArrowShared.set(key, resources);
     return resources;
@@ -16508,6 +16529,7 @@ function resolveChunkDebugCenter(policy) {
     const { geometry, material } = big ? doorwayArrowResources(color) : doorwayFlatArrowResources(color);
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = "doorway-arrow";
+    if (big) mesh.renderOrder = 5;
     if (!big) {
       // Even groot, wat de schaal van het model ook is.
       const scale = Math.abs(Number(root.scale?.x) || 1);
@@ -17566,6 +17588,149 @@ function resolveChunkDebugCenter(policy) {
   // Afstand telt vanaf je eigen poppetje (niet de camera), zodat uitzoomen geen namen wegknipt.
   const terrainLabelVisibility = new Map();
   let terrainLabelVisibilityUntil = 0;
+  // Kevin 23-11 (8): namen achter een muur niet tonen (anders zag je bij een deur de naam van binnen én van buiten).
+  // De lijn van de camera naar het midden van het ding: snijdt hij een muurstuk (op die hoogte), dan is het verborgen.
+  // Een muur vlak bij het ding zelf (15 cm) telt niet mee. De muurstukken (wallSightPieces) vult addWalls.
+  // Kevin 23-11 (9): zichtveld (game, top view). Achter elk muurstuk (gezien vanaf je poppetje) staat een onzichtbaar
+  // blok tot ver weg en hoog genoeg; alles wat je ziet en in zo'n blok ligt, wordt donker (schaduwvolume met de stencil:
+  // achterkanten tellen op, voorkanten tellen af waar ze achter iets liggen; daarna één donker vlak over het scherm waar de
+  // teller niet 0 is). Zo wordt ook een boom of NPC achter de muur donker, en het werkt ook als de camera achter een
+  // muur hangt. Alleen opnieuw uitrekenen als je een stukje loopt. Ramen, gaten en open stukken laten het zicht door.
+  const VISION_LAYER = 5;
+  let vision = null;
+  let visionStencil = null;
+  function ensureVision() {
+    if (vision) return vision;
+    const volume = (side, op) => new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, depthTest: true, side, transparent: true,
+      stencilWrite: true, stencilFunc: THREE.AlwaysStencilFunc, stencilRef: 0, stencilFail: THREE.KeepStencilOp,
+      stencilZFail: op, stencilZPass: THREE.KeepStencilOp });
+    const shadeMaterial = new THREE.ShaderMaterial({
+      vertexShader: "void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }",
+      fragmentShader: "uniform float shade; void main() { gl_FragColor = vec4(0.0, 0.0, 0.0, shade); }",
+      uniforms: { shade: { value: 0.92 } }, transparent: true, depthTest: false, depthWrite: false,
+      stencilWrite: true, stencilFunc: THREE.NotEqualStencilFunc, stencilRef: 0, stencilWriteMask: 0,
+      stencilFail: THREE.KeepStencilOp, stencilZFail: THREE.KeepStencilOp, stencilZPass: THREE.KeepStencilOp });
+    const group = new THREE.Group();
+    group.name = "GK vision";
+    const state = { group, geometry: null, back: null, front: null, shadeMaterial, capacity: 0, x: NaN, z: NaN, y: NaN, version: -1, far: 0,
+      backMaterial: volume(THREE.BackSide, THREE.IncrementWrapStencilOp), frontMaterial: volume(THREE.FrontSide, THREE.DecrementWrapStencilOp) };
+    const shade = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), shadeMaterial);
+    shade.renderOrder = 9992;
+    shade.frustumCulled = false;
+    shade.layers.set(VISION_LAYER);
+    shade.raycast = function () {};
+    group.add(shade);
+    scene.add(group);
+    camera.layers.enable(VISION_LAYER);
+    vision = state;
+    return state;
+  }
+  function visionCapacity(state, floats) {
+    if (state.capacity >= floats) return;
+    if (state.geometry) { state.group.remove(state.back, state.front); state.geometry.dispose(); }
+    state.capacity = Math.max(4096, Math.ceil(floats * 1.5));
+    state.geometry = new THREE.BufferGeometry();
+    state.geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(state.capacity), 3).setUsage(THREE.DynamicDrawUsage));
+    state.back = new THREE.Mesh(state.geometry, state.backMaterial);
+    state.front = new THREE.Mesh(state.geometry, state.frontMaterial);
+    state.back.renderOrder = 9990;
+    state.front.renderOrder = 9991;
+    for (const mesh of [state.back, state.front]) { mesh.frustumCulled = false; mesh.layers.set(VISION_LAYER); mesh.raycast = function () {}; }
+    state.group.add(state.back, state.front);
+  }
+  function updateVision() {
+    const cam = camConfigSource || world?.camera || {};
+    // Zonder stencil-buffer (zou niet moeten) geen zichtveld: anders werd alles donker.
+    if (visionStencil === null) { try { visionStencil = renderer.getContext().getContextAttributes()?.stencil === true; } catch { visionStencil = false; } }
+    const on = visionStencil && camMode === "top-down" && cam.vision !== false && wallSightPieces.length > 0 && Boolean(player.root || player.pos);
+    if (!on) { if (vision) vision.group.visible = false; return; }
+    const state = ensureVision();
+    state.group.visible = true;
+    state.shadeMaterial.uniforms.shade.value = Number.isFinite(Number(cam.visionDark)) ? Math.max(0, Math.min(1, Number(cam.visionDark))) : 0.92;
+    const pos = player.root ? player.root.position : player.pos;
+    if (state.version === wallSightVersion && state.far === camera.far && Math.hypot(pos.x - state.x, pos.z - state.z) < 0.15 && Math.abs(pos.y - state.y) < 0.5) return;
+    state.version = wallSightVersion;
+    state.far = camera.far;
+    state.x = pos.x; state.z = pos.z; state.y = pos.y;
+    const radius = 60;
+    const reach = Math.max(20, Math.min(90, camera.far * 0.55));
+    const bottom = pos.y - 25;
+    const top = pos.y + 40;
+    const out = [];
+    const corner = [];
+    const center = new THREE.Vector3();
+    const tri = function (a, b, c) {
+      // Altijd met de voorkant naar buiten (weg van het midden van het blok).
+      const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+      const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+      const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      const mx = (a[0] + b[0] + c[0]) / 3 - center.x, my = (a[1] + b[1] + c[1]) / 3 - center.y, mz = (a[2] + b[2] + c[2]) / 3 - center.z;
+      if (nx * mx + ny * my + nz * mz < 0) out.push(a[0], a[1], a[2], c[0], c[1], c[2], b[0], b[1], b[2]);
+      else out.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
+    };
+    for (const piece of wallSightPieces) {
+      if (!piece.sight) continue;
+      const ex = piece.bx - piece.ax, ez = piece.bz - piece.az;
+      const length2 = ex * ex + ez * ez;
+      if (length2 < 1e-6) continue;
+      const t = Math.max(0, Math.min(1, ((pos.x - piece.ax) * ex + (pos.z - piece.az) * ez) / length2));
+      if (Math.hypot(piece.ax + ex * t - pos.x, piece.az + ez * t - pos.z) > radius) continue;
+      const length = Math.sqrt(length2);
+      let nx = -ez / length, nz = ex / length;
+      const side = (pos.x - piece.ax) * nx + (pos.z - piece.az) * nz;
+      if (Math.abs(side) < piece.half + 0.02) continue; // je staat in de muur zelf (bijv. in een deuropening)
+      if (side > 0) { nx = -nx; nz = -nz; }
+      // Het blok begint net achter de muur (de bovenkant van de muur blijft te zien).
+      const off = piece.half + 0.02;
+      const ax = piece.ax + nx * off, az = piece.az + nz * off;
+      const bx = piece.bx + nx * off, bz = piece.bz + nz * off;
+      const far = function (x, z) {
+        const dx = x - pos.x, dz = z - pos.z;
+        const d = Math.max(0.001, Math.hypot(dx, dz));
+        return [x + dx / d * reach, z + dz / d * reach];
+      };
+      const a2 = far(ax, az), b2 = far(bx, bz);
+      const quad = [[ax, az], [bx, bz], b2, a2];
+      center.set((ax + bx + a2[0] + b2[0]) / 4, (bottom + top) / 2, (az + bz + a2[1] + b2[1]) / 4);
+      corner.length = 0;
+      for (const [x, z] of quad) corner.push([x, bottom, z], [x, top, z]);
+      // 0..7: per hoek onder/boven. Zijkanten, onderkant en bovenkant.
+      for (let k = 0; k < 4; k += 1) {
+        const lo1 = corner[k * 2], hi1 = corner[k * 2 + 1], lo2 = corner[((k + 1) % 4) * 2], hi2 = corner[((k + 1) % 4) * 2 + 1];
+        tri(lo1, lo2, hi2); tri(lo1, hi2, hi1);
+      }
+      tri(corner[0], corner[2], corner[4]); tri(corner[0], corner[4], corner[6]);
+      tri(corner[1], corner[3], corner[5]); tri(corner[1], corner[5], corner[7]);
+    }
+    visionCapacity(state, out.length);
+    const attribute = state.geometry.getAttribute("position");
+    attribute.array.set(out);
+    attribute.needsUpdate = true;
+    attribute.clearUpdateRanges?.();
+    state.geometry.setDrawRange(0, out.length / 3);
+    state.back.visible = state.front.visible = out.length > 0;
+  }
+
+  function hiddenBehindWall(from, to) {
+    if (!wallSightPieces.length) return false;
+    const dx = to.x - from.x, dz = to.z - from.z, dy = to.y - from.y;
+    const flat = Math.hypot(dx, dz);
+    if (flat < 0.2) return false;
+    const limit = 1 - 0.15 / flat;
+    for (const piece of wallSightPieces) {
+      const ex = piece.bx - piece.ax, ez = piece.bz - piece.az;
+      const denom = dx * ez - dz * ex;
+      if (Math.abs(denom) < 1e-9) continue;
+      const fx = piece.ax - from.x, fz = piece.az - from.z;
+      const s = (fx * ez - fz * ex) / denom;
+      if (s <= 0 || s >= limit) continue;
+      const r = (fx * dz - fz * dx) / denom;
+      if (r < 0 || r > 1) continue;
+      const y = from.y + dy * s;
+      if (y >= piece.y0 && y <= piece.y1) return true;
+    }
+    return false;
+  }
   function getRuntimeTargetLabelAnchors(maxDistance = 80, maxCount = 40) {
     const list = [];
     if (!camera || !canvas) return list;
@@ -17589,7 +17754,7 @@ function resolveChunkDebugCenter(policy) {
       if (!(distance <= maxDistance)) return;
       point.project(camera);
       if (!(point.z >= -1 && point.z <= 1) || Math.abs(point.x) > 1.05 || Math.abs(point.y) > 1.05) return;
-      if (terrainLayer.active) {
+      if (terrainLayer.active || wallSightPieces.length) {
         // Kijk naar het model zelf: de naam kan nog boven een berg uitsteken.
         // Maximaal tien keer per seconde per doel.
         // Verborgen labels bereiken de DOM-opbouw en plaatsing in de HUD niet.
@@ -17597,7 +17762,8 @@ function resolveChunkDebugCenter(policy) {
         if (visible === undefined) {
           sightDirection.subVectors(sightPoint, camera.position);
           const sightDistance = sightDirection.length();
-          visible = sightDistance <= 1 || !terrainLayer.raycast(camera.position, sightDirection.normalize(), sightDistance - 0.1);
+          visible = sightDistance <= 1 || !terrainLayer.active || !terrainLayer.raycast(camera.position, sightDirection.normalize(), sightDistance - 0.1);
+          if (visible && hiddenBehindWall(camera.position, sightPoint)) visible = false;
           terrainLabelVisibility.set(id, visible);
         }
         if (!visible) return;
@@ -17664,18 +17830,23 @@ function resolveChunkDebugCenter(policy) {
     const rect = canvas.getBoundingClientRect();
     const presentation = runtimeTargetPresentationConfig();
     const point = new THREE.Vector3();
+    const sightPoint = new THREE.Vector3();
     for (const id of entityIds) {
       const root = rootForSelectableId(id);
       if (!root || root.visible === false || !root.parent) continue;
       if (root.userData?.runtimeTarget === true) {
-        runtimeTargetLabelPoint(root, root.userData.runtimeTargetPayload || {}, point);
+        runtimeTargetLabelPoint(root, root.userData.runtimeTargetPayload || {}, point, sightPoint);
       } else {
         const visuals = root.children.filter(function (child) { return child?.userData?.runtimeTargetHitProxy !== true; });
         const measured = runtimeVisualMeasurement(root, visuals, "editorLabelMeasurement", fallbackRuntimeVisualMeasurement(null));
+        sightPoint.set(measured.centerX, measured.centerY, measured.centerZ);
+        root.localToWorld(sightPoint);
         point.set(measured.centerX, measured.topY, measured.centerZ);
         root.localToWorld(point);
         point.y += presentation.labelOffsetMeters;
       }
+      // Kevin 23-11 (8): ook in de editor geen namen door een muur heen.
+      if (hiddenBehindWall(camera.position, sightPoint)) continue;
       const distance = camera.position.distanceTo(point);
       if (!(distance <= maxDistance)) continue;
       point.project(camera);
@@ -17841,7 +18012,7 @@ function resolveChunkDebugCenter(policy) {
     const presentation = runtimeTargetPresentationConfig();
     const factor = 1 + presentation.hitboxMarginPercent / 100;
     const extra = presentation.hitboxMarginMeters * 2;
-    return {
+    const spec = {
       centerX: measured.centerX,
       centerY: measured.centerY,
       centerZ: measured.centerZ,
@@ -17850,6 +18021,14 @@ function resolveChunkDebugCenter(policy) {
       depth: Math.max(0.1, measured.depth * factor + extra),
       resolved: measured.resolved === true
     };
+    // Kevin 23-11 (9): een doorgang is in de game vaak alleen een plat pijltje op de grond; het klikvak is minstens zo
+    // groot als een deur, zodat je er met muis of vinger makkelijk op tikt (en er dan heen loopt).
+    if (target?.targetKind === "doorway" || target?.entityKind === "doorway") {
+      spec.width = Math.max(spec.width, 1.4);
+      spec.depth = Math.max(spec.depth, 1.4);
+      if (spec.height < 2.4) { spec.height = 2.4; spec.centerY = Math.max(spec.centerY, 1.2); }
+    }
+    return spec;
   }
 
   function refreshRuntimeTargetHitProxy(root, target) {
@@ -19077,7 +19256,8 @@ function resolveChunkDebugCenter(policy) {
         }
         object = object.parent || null;
       }
-      if (visibleThroughRoot && targetId && runtimeTargetVisible(targetPayload)) {
+      // Kevin 23-11 (9): niet door een muur heen kiezen (bijv. de doorgang aan de andere kant van de deur).
+      if (visibleThroughRoot && targetId && runtimeTargetVisible(targetPayload) && !hiddenBehindWall(camera.position, hit.point)) {
         return Object.assign({}, targetPayload || {}, { instanceId: targetId });
       }
     }
@@ -19197,6 +19377,12 @@ function resolveChunkDebugCenter(policy) {
     // authored meshes. Prefer the real rendered object so a viewport click
     // selects its complete entity root and G/R/S can transform that object.
     // The target remains selectable as a fallback when no mesh was hit.
+    // Kevin 23-11 (8): de pijl van een doorgang gaat voor (hij staat vaak in of achter een muur of deco).
+    for (const hit of hits) {
+      if (hit.object?.name !== "doorway-arrow") continue;
+      const selectableId = selectableIdFromHit(hit, true, false);
+      if (selectableId) return selectableId;
+    }
     for (const hit of hits) {
       const selectableId = selectableIdFromHit(hit, false, false);
       if (selectableId) return selectableId;
@@ -19210,6 +19396,20 @@ function resolveChunkDebugCenter(policy) {
       if (selectableId) return selectableId;
     }
     return null;
+  }
+
+  // Kevin 23-11 (9): klik op een deco op een muur (bijv. het deur-plaatje): waar en welke kant op. De game zoekt daar de
+  // doorgang bij. Alleen de voorkant telt, en niet als er een andere muur voor zit.
+  function pickWallDecoAt(clientX, clientY) {
+    if (!wallDecoMeshes.length) return null;
+    const rect = canvas.getBoundingClientRect();
+    pointer.x = ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
+    pointer.y = -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1;
+    raycaster.setFromCamera(pointer, camera);
+    const hit = raycaster.intersectObjects(wallDecoMeshes.filter((mesh) => mesh.parent && mesh.visible !== false), false)[0];
+    if (!hit || hiddenBehindWall(camera.position, hit.point)) return null;
+    const normal = hit.object.userData.decoNormal || { x: 0, z: 0 };
+    return { x: hit.point.x, y: hit.point.y, z: hit.point.z, nx: normal.x, nz: normal.z };
   }
 
   function pickEntityAt(clientX, clientY) {
@@ -21452,6 +21652,7 @@ function resolveChunkDebugCenter(policy) {
     setTerrainEditorOverlay: setTerrainEditorOverlay,
     setRoadEditorOverlay: setRoadEditorOverlay,
     pickRoadEditor: pickRoadEditor,
+    pickWallDecoAt: pickWallDecoAt,
     setRouteEditorOverlay: setRouteEditorOverlay,
     flyerSounds: flyerSounds,
     flyerEvents: flyerEvents,
