@@ -99,6 +99,8 @@ export function indoorSettingsOf(area) {
   if (area?.indoor !== true) return null;
   const clampNum = (value, fallback, min, max) => Math.min(max, Math.max(min, Number.isFinite(Number(value)) ? Number(value) : fallback));
   return {
+    // Kevin 23-11: van boven alleen als het deelgebied dat vraagt; anders de eigen camera van de speler.
+    topDown: area.indoorTopDown === true,
     cameraDistance: clampNum(area.indoorCameraDistance, 16, 4, 80),
     cameraPitch: clampNum(area.indoorCameraPitch, 65, 30, 89),
     background: /^#[0-9a-f]{6}$/i.test(String(area.indoorBackground || "")) ? area.indoorBackground : "#000000",

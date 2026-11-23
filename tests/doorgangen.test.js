@@ -132,3 +132,10 @@ test("Kevin 23-11: 🏠 Binnen-zone ver achter de kaart: eigen rand voor lopen, 
   assert.deepEqual(floors.map((floor) => [floor.areaId, floor.floorRef]), [["huis", null]]);
   assert.equal(inIndoorZone(floors[0].x, floors[0].z), true);
 });
+
+test("Kevin 23-11: binnen houdt de speler zijn eigen camera, van boven alleen als het deelgebied dat vraagt", () => {
+  const area = { areaId: "huis", indoor: true, shape: "box", minXMm: 0, maxXMm: 10000, minZMm: 0, maxZMm: 8000 };
+  assert.equal(indoorSettingsOf(area).topDown, false);
+  assert.equal(indoorSettingsOf(Object.assign({}, area, { indoorTopDown: true })).topDown, true);
+  assert.equal(validateDocument("area", { areaId: "huis", displayName: "Huis", shape: "box", minXMm: 0, maxXMm: 1000, minZMm: 0, maxZMm: 1000, indoor: true, indoorTopDown: true }).ok, true);
+});

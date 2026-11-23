@@ -317,15 +317,20 @@ export const CANONICAL_KINDS = {
       // De camera is daar altijd van boven, lucht en mist van buiten staan uit en het licht is van het gebied zelf.
       indoor: { type: "boolean", required: false, audience: "client", label: "Binnen",
         ui: ui("🏠", "toggle", "werkbank", { soorten: ["deelgebied"], group: INDOOR_GROUP }), default: false,
-        help: help("Is dit de binnenkant van een huis, grot of etage? Dan kijkt de camera van boven, en lucht, wolken en mist van buiten staan uit.",
+        help: help("Is dit de binnenkant van een huis, grot of etage? Dan is het een eigen zwarte ruimte: lucht, wolken, mist en alles van buiten staan uit.",
           "Aan voor elke binnenruimte die je met een 🚪 Doorgang bereikt. Teken het vlak om de hele kamer heen.",
-          "Je ziet binnen nog wolken of de camera blijft achter je → zet Binnen aan en kijk of het vlak de hele kamer bedekt.") },
+          "Je ziet binnen nog wolken of gras → zet Binnen aan en kijk of het vlak de hele kamer bedekt.") },
+      // Kevin 23-11: binnen houdt de speler zijn eigen camera; van boven alleen als je dit aanzet.
+      indoorTopDown: { type: "boolean", required: false, audience: "client", label: "Camera van boven",
+        ui: ui("🎥", "toggle", "werkbank", { soorten: ["deelgebied"], group: INDOOR_GROUP, when: { key: "indoor", is: [true] } }), default: false,
+        help: help("Kijkt de camera binnen altijd recht van boven? Uit = de speler houdt zijn eigen camera, net als buiten.",
+          "Meestal uit. Aan voor een doolhof of een kamer waar je alles tegelijk moet zien.", "De camera blijft achter een muur hangen → zet dit aan, of maak die muur lager.") },
       indoorCameraDistance: { type: "number", required: false, min: 4, max: 80, audience: "client", label: "Camera-afstand",
-        ui: ui("🎥", "slider", "werkbank", { step: 1, unit: "m", range: [6, 40], soorten: ["deelgebied"], group: INDOOR_GROUP, when: { key: "indoor", is: [true] } }), default: 16,
+        ui: ui("🎥", "slider", "werkbank", { step: 1, unit: "m", range: [6, 40], soorten: ["deelgebied"], group: INDOOR_GROUP, when: { key: "indoorTopDown", is: [true] } }), default: 16,
         help: help("Hoe ver de camera binnen boven de speler hangt.", "12 tot 20 m voor een kamer, verder voor een grote zaal.",
           "Je ziet de hele kamer niet → verder. Alles is te klein → dichterbij.") },
       indoorCameraPitch: { type: "integer", required: false, min: 30, max: 89, audience: "client", label: "Camera-hoek",
-        ui: ui("📐", "slider", "werkbank", { step: 1, unit: "°", soorten: ["deelgebied"], group: INDOOR_GROUP, when: { key: "indoor", is: [true] } }), default: 65,
+        ui: ui("📐", "slider", "werkbank", { step: 1, unit: "°", soorten: ["deelgebied"], group: INDOOR_GROUP, when: { key: "indoorTopDown", is: [true] } }), default: 65,
         help: help("Hoe schuin de camera binnen naar beneden kijkt. 89 = recht van boven.", "60 tot 75°: je ziet de vloer goed en de muren een beetje.",
           "Muren aan de voorkant staan in de weg → steiler (hoger getal).") },
       indoorBackground: { type: "color", required: false, audience: "client", label: "Achtergrond",
@@ -711,7 +716,7 @@ function shapeIssues(kind, body, issues) {
 }
 
 // Ombouw stap 2: begroeiing, pad, blokkade en loopvlak zijn altijd punten (getekend met de Area tool).
-const DEELGEBIED_ONLY = ["regionRef", "priority", "musicAssetId", "safe", "indoor", "indoorCameraDistance", "indoorCameraPitch", "indoorBackground", "indoorFloorRef", "indoorLight", "indoorSun", "minXMm", "maxXMm", "minZMm", "maxZMm", "centerXMm", "centerZMm", "radiusMm"];
+const DEELGEBIED_ONLY = ["regionRef", "priority", "musicAssetId", "safe", "indoor", "indoorTopDown", "indoorCameraDistance", "indoorCameraPitch", "indoorBackground", "indoorFloorRef", "indoorLight", "indoorSun", "minXMm", "maxXMm", "minZMm", "maxZMm", "centerXMm", "centerZMm", "radiusMm"];
 function areaShapeIssues(body, issues) {
   const soort = areaSoort(body);
   const def = AREA_SOORTEN[soort];

@@ -13686,7 +13686,7 @@ function resolveChunkDebugCenter(policy) {
     } else {
       camTarget.copy(playerCameraTarget());
     }
-    if (mode === "game" && indoorCfg) {
+    if (mode === "game" && indoorCfg?.topDown) {
       camPitch = indoorCfg.cameraPitch;
       camDistance = indoorCfg.cameraDistance;
       camMinDistance = Math.max(3, indoorCfg.cameraDistance * 0.5);
@@ -13711,8 +13711,8 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function resolvedGameCameraMode(cam) {
-    // Binnenruimtes (22-11): binnen kijkt de camera altijd van boven.
-    if (indoorCfg) return "top-down";
+    // Binnenruimtes: van boven alleen als het deelgebied dat vraagt (Kevin 23-11); anders de eigen camera.
+    if (indoorCfg?.topDown) return "top-down";
     const authored = cam?.mode === "third-person" ? "third-person" : "top-down";
     if (cam?.playerChoice === true && (camModeOverride === "third-person" || camModeOverride === "top-down")) return camModeOverride;
     return authored;
@@ -13780,7 +13780,7 @@ function resolveChunkDebugCenter(policy) {
       if (scene.fog?.gkCamera) scene.fog = camFogBackup || null;
       camFogBackup = undefined;
       // Kevin 23-11: binnen tekent de laptop niets verder dan nodig; daarachter is de achtergrond (zwart), net als buiten het gebied.
-      camera.far = indoorCfg ? Math.max(80, indoorCfg.cameraDistance * 5) : 1000000;
+      camera.far = indoorCfg ? Math.max(80, (indoorCfg.topDown ? indoorCfg.cameraDistance : camDistance) * 5) : 1000000;
     }
     camera.updateProjectionMatrix();
   }
@@ -20524,7 +20524,7 @@ function resolveChunkDebugCenter(policy) {
     for (const light of directionalLights) light.intensity = num(light.userData.baseIntensity, light.intensity) * daylightLevel * (indoorCfg ? indoorCfg.sun : 1);
   }
 
-  // Binnenruimtes (22-11): in een deelgebied met 🏠 Binnen kijkt de camera van boven, staan lucht, wolken en mist van
+  // Binnenruimtes (22-11): in een deelgebied met 🏠 Binnen staan lucht, wolken en mist van
   // buiten uit en komt het licht van het gebied zelf (een beetje zon door de ramen volgt dag en nacht). null = buiten.
   // Alleen zichtbaarheid, kleuren en lichtsterkte: geen nieuwe shaders, dus geen haperen bij het wisselen.
   function setIndoor(cfg) {
@@ -20533,6 +20533,7 @@ function resolveChunkDebugCenter(policy) {
       cameraDistance: clamp(num(cfg.cameraDistance, 16), 4, 80), cameraPitch: clamp(num(cfg.cameraPitch, 65), 30, 89),
       background: colorOrDefault(cfg.background, "#000000"), light: clamp(num(cfg.light, 0.8), 0, 2), sun: clamp(num(cfg.sun, 0.2), 0, 1),
       floor: typeof cfg.floor === "string" && cfg.floor ? cfg.floor : null,
+      topDown: cfg.topDown === true,
       outline: Array.isArray(cfg.outline) ? cfg.outline.slice(0, 256).filter(function (point) {
         return Array.isArray(point) && Number.isFinite(Number(point[0])) && Number.isFinite(Number(point[1]));
       }).map(function (point) { return [Number(point[0]), Number(point[1])]; }) : null
