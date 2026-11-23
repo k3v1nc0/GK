@@ -117,7 +117,8 @@ export function createRoadEditor(deps) {
   // ---------- schuiven, draaien, schalen ----------
   function sessionIndices() {
     const set = new Set(selPoints);
-    for (const k of selLinks) for (const i of net.links[k] || []) set.add(i);
+    // Alleen de twee punten van een lijn; het derde getal is de soort (deur, raam ...), geen punt.
+    for (const k of selLinks) for (const i of (net.links[k] || []).slice(0, 2)) set.add(i);
     return [...set];
   }
 
