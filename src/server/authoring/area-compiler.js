@@ -37,7 +37,7 @@ export function compileAreaShapes(known, options = {}) {
         if (!assetTypes.has(assetId)) errors.push({ code: "ASSET_UNKNOWN", docKey: doc.docKey, message: doc.body.displayName + " gebruikt onbekend " + what + " " + assetId });
         else if (!wanted.includes(assetTypes.get(assetId))) errors.push({ code: "ASSET_TYPE", docKey: doc.docKey, message: doc.body.displayName + ": " + assetId + " is geen " + wanted.join("/") });
       };
-      for (const key of ["textureAssetId", "secondaryTextureAssetId", "edgeFadeNoiseAssetId", "wallTextureAssetId", "wallTopTextureAssetId", "windowTextureAssetId"]) check(values[key], ["texture", "image"], "plaatje");
+      for (const key of ["textureAssetId", "secondaryTextureAssetId", "edgeFadeNoiseAssetId", "wallTextureAssetId", "wallTopTextureAssetId", "windowTextureAssetId", "wallDoorTextureAssetId"]) check(values[key], ["texture", "image"], "plaatje");
       for (const assetId of Array.isArray(values.sourceAssetIds) ? values.sourceAssetIds : []) check(assetId, ["model"], "model");
     }
     shapes.push({ areaId: doc.body.areaId, soort, nodeType: def.nodeType, runtimeId, legacy: legacy || null, values });

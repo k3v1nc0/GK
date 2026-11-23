@@ -3,7 +3,7 @@
 // verhuisd pad, bos of blokkade er precies hetzelfde uitziet. De instellingen per soort staan in "settings";
 // hun regels (type, min, max, keuzes) komen uit de oude nodedefinitie, de naam/icoon/hulp staat hier.
 import { NODE_TYPES } from "./node-types.js?v=20261106-perf1";
-import { WALL_DEFAULTS, WALL_EDGE_KEYS, wallNetLinks } from "./walls.js?v=20261123-muur7";
+import { WALL_DEFAULTS, WALL_EDGE_KEYS, wallNetLinks } from "./walls.js?v=20261123-muur11";
 
 // Zelfde vorm als help() in src/shared/authoring/kinds/ui.js (dit bestand draait ook in de browser).
 const help = (waarvoor, goed, probleem) => Object.freeze({ waarvoor, goed, probleem });
@@ -38,6 +38,9 @@ const WALL_FIELDS = [
   wallNumber("windowTop", "Raam tot (m)", "🪟", 0, 50, WALL_DEFAULTS.windowTop, 0.1, [1, 5], true,
     "Tot hoe hoog het raam op een Raam-lijn komt.", "2 tot 2.4 m, lager dan de muurhoogte.", "Raam loopt tot het plafond → lager."),
   // Kevin 23-11 (2): een Raam-lijn is dicht met aan de binnenkant een raam dat licht geeft (geen gat naar het zwart buiten).
+  // Kevin 23-11 (7): het plaatje van een Deur (dicht): aan beide kanten van de muur, doorzichtige stukken laten de muur zien.
+  { key: "wallDoorTextureAssetId", spec: { type: "asset", label: "Deur-textuur", icon: "🚪", default: null, more: true, assetTypes: ["texture", "image"],
+    help: help("Het plaatje van een Deur (dicht), aan beide kanten van de muur. Geen gat: door de deur ga je met een doorgang of portal.", "Sleep een deur-PNG uit de Bibliotheek op dit vak. De hoogte volgt het plaatje. Leeg = een bruine deur zo hoog als Deurhoogte.", "Deur te breed of te smal → maak de deur-lijn korter of langer.") } },
   { key: "windowTextureAssetId", spec: { type: "asset", label: "Raam-textuur", icon: "🖼️", default: null, more: true, assetTypes: ["texture", "image"],
     help: help("Het plaatje van het raam (glas, sponning, tralies). Het gloeit, alsof er daglicht door valt.", "Sleep een raam-textuur uit de Bibliotheek op dit vak. Leeg = een licht vlak.", "Raam te fel of te donker → schuif Raamlicht.") } },
   wallNumber("windowLight", "Raamlicht", "☀️", 0, 3, WALL_DEFAULTS.windowLight, 0.1, [0, 2], true,

@@ -7,7 +7,7 @@ import { convertShape } from "./werkbank-world.js?v=20261122-doorgang1";
 import { renderUsers } from "./werkbank-users.js?v=20261115-fase10";
 import { computeDamage, rollLoot } from "../shared/combat-math.js";
 import { cleanXpCurve, xpCostAt, xpTotals } from "../shared/level-math.js";
-import { areaCenterMm, areaCirclePointsMm, areaRectPointsMm, areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261123-muur7";
+import { areaCenterMm, areaCirclePointsMm, areaRectPointsMm, areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261123-muur11";
 import { QUEST_START_MODES, hasOwnSteps, objectiveText, questGraphIssues, questStartIssues, questStartMode, requirementText, stepsFromSimple } from "../shared/quest-graph.js?v=20261110-fase5";
 import { openQuestBuilder } from "./quest-builder.js?v=20261110-fase5";
 
@@ -1129,13 +1129,13 @@ export function createDocBench(options = {}) {
         more.append(...rows.extra);
         // Kevin 23-11 (2): 🧱 Muur: de gekozen lijnen (in de 3D-view) worden Muur, Deur, Raam of Open, bij de deur- en raaminstellingen.
         if (kind === "area" && !isNew && doc && areaSoort(body) === "muur") {
-          const buttons = [["wall", "🧱 Muur"], ["door", "🚪 Deur"], ["window", "🪟 Raam"], ["open", "Open"]].map(([edgeKind, label]) => {
+          const buttons = [["wall", "🧱 Muur"], ["door", "🚪 Deur (gat)"], ["gate", "🚪 Deur (dicht)"], ["window", "🪟 Raam"], ["open", "Open"]].map(([edgeKind, label]) => {
             const button = el("button", { type: "button", class: "wbdChoice", text: label });
             button.addEventListener("click", () => { if (typeof bench.onWallEdgeKind === "function") bench.onWallEdgeKind(edgeKind, label); });
             return button;
           });
           more.append(fieldRow("wallLinkKind", { label: "Gekozen lijnen", ui: { icon: "〰️" },
-            help: { waarvoor: "Maak de lijnen die je in de 3D-view hebt gekozen een muur, deur, raam of open stuk.", goed: "Klik een lijn van de muur (Shift+klik voor meer) en dan een knop. Oranje = muur, groen = deur, blauw = raam, grijs = open.", probleem: "Er gebeurt niets → kies eerst een lijn in de 3D-view (niet een punt)." } },
+            help: { waarvoor: "Maak de lijnen die je in de 3D-view hebt gekozen een muur, deur, raam of open stuk. Deur (gat) = je loopt erdoor; Deur (dicht) = muur met een deur-plaatje (Deur-textuur), door te gaan met een doorgang of portal.", goed: "Klik een lijn van de muur (Shift+klik voor meer) en dan een knop. Oranje = muur, groen = deur (gat), bruin = deur (dicht), blauw = raam, grijs = open.", probleem: "Er gebeurt niets → kies eerst een lijn in de 3D-view (niet een punt)." } },
             el("div", { class: "wbdInline" }, buttons)));
         }
         continue;

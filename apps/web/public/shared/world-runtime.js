@@ -32,7 +32,7 @@ import { createPlayerPathClient } from "./player-path-client.js?v=20261108-roads
 import { createTerrainLayer, seedTerrainChunk, seedTerrainPaint } from "./terrain-render.js?v=20261123-muur7";
 import { createWaterLayer } from "./water-render.js?v=20261030-terrein6";
 import { createSkyLayer } from "./sky-render.js?v=20261120-sky2";
-import { wallPieces, wallWindows } from "./walls.js?v=20261123-muur7";
+import { wallDoors, wallJoins, wallPieces, wallWindows } from "./walls.js?v=20261123-muur11";
 import { INDOOR_ZONE } from "./indoor-zone.js?v=20261123-binnentab1";
 import { createSrgbTextureLoader } from "./srgb-texture-loader.js?v=20261123-muur7";
 export {
@@ -56,6 +56,48 @@ let minimapBakeChunkOverride = false;
 // Kaart-bake: lage alphaTest-drempel zodat bomen en hekjes ook op de grote (verre) kaarttegels blijven staan.
 const MINIMAP_BAKE_ALPHA_TEST = 0.1;
 let minimapBakeShadowFocusOverride = null;
+
+// Kevin 23-11 (7): het poppetje trilde binnen. Binnenruimtes liggen ver weg (x = 50000) en daar zijn de botten van een
+// figuur in de videokaart (32-bits getallen) maar op 4 mm nauwkeurig; elk bot rondt anders af, dus het lijf trilt.
+// Oplossing: de botten tellen vanaf een ankerpunt bij het figuur zelf (kleine getallen, nauwkeurig), en vlak voor het
+// tekenen krijgt dat ene figuur het anker terug in zijn eigen omrekening (in de processor, 64 bits). Buiten verandert
+// er niets aan wat je ziet; botsen en aanklikken gebruiken de botten zelf en merken er ook niets van.
+const skinIdentity = new THREE.Matrix4();
+const skinOffset = new THREE.Matrix4();
+THREE.Skeleton.prototype.update = function () {
+  const bones = this.bones;
+  const anchor = this.gkAnchor || (this.gkAnchor = [0, 0, 0]);
+  for (let i = 0; i < bones.length; i += 1) {
+    skinOffset.multiplyMatrices(bones[i] ? bones[i].matrixWorld : skinIdentity, this.boneInverses[i]);
+    const e = skinOffset.elements;
+    // Anker = hoe ver het eerste bot verschoven is sinds het inladen (zo ver staat het figuur van het midden af).
+    if (i === 0) { anchor[0] = e[12]; anchor[1] = e[13]; anchor[2] = e[14]; }
+    e[12] -= anchor[0]; e[13] -= anchor[1]; e[14] -= anchor[2];
+    skinOffset.toArray(this.boneMatrices, i * 16);
+  }
+  if (this.boneTexture !== null) this.boneTexture.needsUpdate = true;
+};
+function skinAnchorOn() {
+  const anchor = this.skeleton?.gkAnchor;
+  if (!anchor) return;
+  const e = this.bindMatrixInverse.elements;
+  this.gkSavedBind = this.gkSavedBind || [0, 0, 0];
+  this.gkSavedBind[0] = e[12]; this.gkSavedBind[1] = e[13]; this.gkSavedBind[2] = e[14];
+  this.gkBindShifted = true;
+  e[12] += e[0] * anchor[0] + e[4] * anchor[1] + e[8] * anchor[2];
+  e[13] += e[1] * anchor[0] + e[5] * anchor[1] + e[9] * anchor[2];
+  e[14] += e[2] * anchor[0] + e[6] * anchor[1] + e[10] * anchor[2];
+}
+function skinAnchorOff() {
+  if (!this.gkBindShifted) return;
+  const e = this.bindMatrixInverse.elements;
+  e[12] = this.gkSavedBind[0]; e[13] = this.gkSavedBind[1]; e[14] = this.gkSavedBind[2];
+  this.gkBindShifted = false;
+}
+THREE.SkinnedMesh.prototype.onBeforeRender = skinAnchorOn;
+THREE.SkinnedMesh.prototype.onAfterRender = skinAnchorOff;
+THREE.SkinnedMesh.prototype.onBeforeShadow = skinAnchorOn;
+THREE.SkinnedMesh.prototype.onAfterShadow = skinAnchorOff;
 
 function colorOrDefault(value, fallback) {
   return /^#[0-9a-fA-F]{6}$/.test(String(value || "")) ? value : fallback;
@@ -9775,8 +9817,8 @@ function resolveChunkDebugCenter(policy) {
     };
     const links = Array.isArray(data.links) ? data.links : [];
     if (wall) {
-      // Muur: oranje = muur, groen = deur, blauw = raam, grijs = open (derde getal van de lijn).
-      const colors = [0xffb347, 0x4ade80, 0x60a5fa, 0x9ca3af];
+      // Muur: oranje = muur, groen = deur (gat), blauw = raam, grijs = open, bruin = deur (dicht) (derde getal van de lijn).
+      const colors = [0xffb347, 0x4ade80, 0x60a5fa, 0x9ca3af, 0xb45309];
       for (let code = 0; code < colors.length; code += 1) {
         ribbon(links.filter((link, k) => !selectedLinks.has(k) && (Number.isInteger(link[2]) ? link[2] : 0) === code), 0.35, colors[code], 0.95, 7002);
       }
@@ -15842,13 +15884,16 @@ function resolveChunkDebugCenter(policy) {
     const wallHeight = Math.max(0.2, num(wall.height, 3));
     const across = fitHeight ? 1 : 1 / meters;
     const vOf = function (y) { return fitHeight ? Math.min(0.998, Math.max(0.002, y / wallHeight)) : y / meters; };
-    const quad = function (list, p0, p1, p2, p3, normal, u1, v0, v1) {
+    const quad = function (list, p0, p1, p2, p3, normal, u0, u1, v0, v1) {
       const base = positions.length / 3;
       positions.push(p0[0], p0[1], p0[2], p1[0], p1[1], p1[2], p2[0], p2[1], p2[2], p3[0], p3[1], p3[2]);
       for (let k = 0; k < 4; k += 1) normals.push(normal[0], normal[1], normal[2]);
-      uvs.push(0, v0, u1, v0, u1, v1, 0, v1);
+      uvs.push(u0, v0, u1, v0, u1, v1, u0, v1);
       list.push(base, base + 1, base + 2, base, base + 2, base + 3);
     };
+    // Kevin 23-11 (7): mooie hoeken. Waar twee muurlijnen aan één punt zitten lopen de zijkanten schuin in elkaar door
+    // (verstek, geen kopje meer dat uitsteekt) en loopt de textuur door: u telt de meters langs de muur over de punten heen.
+    const joins = wallJoins(wall);
     for (const piece of wallPieces(wall)) {
       const dx = piece.bx - piece.ax;
       const dz = piece.bz - piece.az;
@@ -15860,26 +15905,41 @@ function resolveChunkDebugCenter(policy) {
       const nz = ux * piece.thickness / 2;
       const y0 = groundY + piece.baseY + piece.from;
       const y1 = groundY + piece.baseY + piece.to;
+      const join = joins[piece.edge] || { a: null, b: null, uStart: 0, flip: false, length, sx: piece.ax, sz: piece.az };
+      // u (in meters) van een punt op de linkerkant, langs de lijn gemeten vanaf punt a. Op een verstek-hoek precies de
+      // waarde van het punt zelf, zodat beide muren daar dezelfde u hebben.
+      const uOf = function (x, z) { return join.uStart + (x - join.sx) * ux + (z - join.sz) * uz; };
+      const endA = join.a;
+      const endB = join.b;
       // A/B links (begin/eind), C/D rechts (eind/begin); de voorkant van elk vlak wijst naar buiten.
-      const at = function (x, z, y) { return [x, y, z]; };
-      const A0 = at(piece.ax + nx, piece.az + nz, y0); const A1 = at(piece.ax + nx, piece.az + nz, y1);
-      const B0 = at(piece.bx + nx, piece.bz + nz, y0); const B1 = at(piece.bx + nx, piece.bz + nz, y1);
-      const C0 = at(piece.bx - nx, piece.bz - nz, y0); const C1 = at(piece.bx - nx, piece.bz - nz, y1);
-      const D0 = at(piece.ax - nx, piece.az - nz, y0); const D1 = at(piece.ax - nx, piece.az - nz, y1);
-      const u = length * across;
+      const at = function (xz, y) { return [xz[0], y, xz[1]]; };
+      const aLeft = endA ? endA.left : [piece.ax + nx, piece.az + nz];
+      const aRight = endA ? endA.right : [piece.ax - nx, piece.az - nz];
+      const bLeft = endB ? endB.left : [piece.bx + nx, piece.bz + nz];
+      const bRight = endB ? endB.right : [piece.bx - nx, piece.bz - nz];
+      const uA = endA ? join.uStart : uOf(piece.ax, piece.az);
+      const uB = endB ? join.uStart + join.length : uOf(piece.bx, piece.bz);
+      const A0 = at(aLeft, y0); const A1 = at(aLeft, y1);
+      const B0 = at(bLeft, y0); const B1 = at(bLeft, y1);
+      const C0 = at(bRight, y0); const C1 = at(bRight, y1);
+      const D0 = at(aRight, y0); const D1 = at(aRight, y1);
       const v0 = vOf(piece.from);
       const v1 = vOf(piece.to);
       const t = piece.thickness * across;
+      // Rechterkant: u loopt andersom (anders staat de textuur in spiegelbeeld), en sluit aan op de buurman.
+      quad(sideIndices, A0, B0, B1, A1, [-uz, 0, ux], uA * across, uB * across, v0, v1);
+      quad(sideIndices, C0, D0, D1, C1, [uz, 0, -ux], -uB * across, -uA * across, v0, v1);
       // Kevin 23-11 (3): boven- en onderkant apart (groep 1): eigen bovenkant-textuur (één keer over de dikte, langs
       // herhalen) of, bij Hele hoogte zonder bovenkant-textuur, donker. Geen smal reepje van de zijkant meer.
-      const topU = topFit ? length / Math.max(0.05, piece.thickness) : u;
+      const topScale = topFit ? 1 / Math.max(0.05, piece.thickness) : across;
       const topV = topFit ? 1 : t;
-      quad(sideIndices, A0, B0, B1, A1, [-uz, 0, ux], u, v0, v1);
-      quad(sideIndices, C0, D0, D1, C1, [uz, 0, -ux], u, v0, v1);
-      quad(topIndices, A1, B1, C1, D1, [0, 1, 0], topU, 0, topV);
-      quad(sideIndices, D0, A0, A1, D1, [-ux, 0, -uz], t, v0, v1);
-      quad(sideIndices, B0, C0, C1, B1, [ux, 0, uz], t, v0, v1);
-      if (piece.from > 0) quad(topIndices, D0, C0, B0, A0, [0, -1, 0], topU, 0, topV);
+      // Ligt de lijn andersom in de rij, dan de bovenkant omdraaien, zodat hij aansluit op de buurman.
+      if (join.flip) quad(topIndices, C1, D1, A1, B1, [0, 1, 0], -uB * topScale, -uA * topScale, 0, topV);
+      else quad(topIndices, A1, B1, C1, D1, [0, 1, 0], uA * topScale, uB * topScale, 0, topV);
+      // Kopjes alleen aan een los eind (of bij een T-splitsing/scherpe hoek); bij een verstek-hoek zit de buurman ertegen.
+      if (!endA) quad(sideIndices, D0, A0, A1, D1, [-ux, 0, -uz], 0, t, v0, v1);
+      if (!endB) quad(sideIndices, B0, C0, C1, B1, [ux, 0, uz], 0, t, v0, v1);
+      if (piece.from > 0) quad(topIndices, D0, C0, B0, A0, [0, -1, 0], uA * topScale, uB * topScale, 0, topV);
     }
     if (!sideIndices.length) return null;
     const geometry = new THREE.BufferGeometry();
@@ -15943,6 +16003,7 @@ function resolveChunkDebugCenter(policy) {
       runtimeStats.sceneObjects += 1;
       runtimeStats.meshes += 1;
       for (const win of wallWindows(wall)) addWallWindow(worldData, wall, win, groundY);
+      for (const door of wallDoors(wall)) addWallDoor(worldData, wall, door, groundY);
     }
     applyWindowLights();
   }
@@ -16264,6 +16325,52 @@ function resolveChunkDebugCenter(policy) {
       requestRender("window-texture");
     });
     windowLightRecords.push({ panelUniforms, patchMaterial, beamMaterial, light: Math.max(0, num(win.light, 1)), rays: Math.max(0, num(win.rays, 1)) });
+  }
+  // Kevin 23-11 (7): Deur (dicht). Een dichte muur met aan beide kanten een deur-plaatje erop (veld Deur-textuur, PNG met
+  // doorzichtige stukken mag). Erdoor ga je met een 🚪 Doorgang (kant A voor de deur, kant B aan de overkant), niet door
+  // een gat. Het plaatje houdt zijn verhouding: zo breed als de lijn, de hoogte volgt (nooit hoger dan de muur).
+  // Zonder plaatje een bruin vlak zo hoog als Deurhoogte. Belicht zoals de muur; geen eigen schaduw.
+  function addWallDoor(worldData, wall, door, groundY) {
+    const width = Math.max(0.1, door.width - 0.04);
+    const maxHeight = Math.max(0.2, door.maxHeight - 0.02);
+    const material = new THREE.MeshStandardMaterial({ color: new THREE.Color("#7a4a24"), roughness: 0.85, metalness: 0,
+      transparent: true, alphaTest: 0.02, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material);
+    const bottom = groundY + num(door.baseY, 0);
+    const size = function (w, h) {
+      mesh.scale.set(w, h, 1);
+      mesh.position.set(door.x + door.nx * 0.012, bottom + h / 2, door.z + door.nz * 0.012);
+    };
+    size(width, Math.min(maxHeight, Math.max(0.2, door.height)));
+    mesh.rotation.y = Math.atan2(door.nx, door.nz);
+    mesh.name = "wall door " + String(wall.id || "");
+    mesh.renderOrder = 1;
+    mesh.castShadow = false;
+    mesh.receiveShadow = staticPropShadowOptions().receiveShadow;
+    mesh.userData.runtimeAlive = true;
+    mesh.userData.gkWallDoor = true;
+    if (mode === "editor") mesh.userData.entityId = wall.id;
+    content.add(mesh);
+    runtimeStats.sceneObjects += 1;
+    runtimeStats.meshes += 1;
+    const asset = wall.doorTextureAssetId ? assetById(worldData, wall.doorTextureAssetId) : null;
+    if (asset) withWallTexture(asset, function (texture) {
+      if (mesh.material !== material) return;
+      material.map = wallTextureVariant(texture, "single", function (variant) {
+        variant.wrapS = THREE.ClampToEdgeWrapping;
+        variant.wrapT = THREE.ClampToEdgeWrapping;
+        variant.repeat.set(1, 1);
+      });
+      material.color.setRGB(1, 1, 1);
+      material.needsUpdate = true;
+      // Verhouding van het plaatje: past het niet in de hoogte van de muur, dan wordt hij smaller (in het midden).
+      const aspect = imageAspect(texture.image);
+      let w = width;
+      let h = w / aspect;
+      if (h > maxHeight) { h = maxHeight; w = h * aspect; }
+      size(w, h);
+      requestRender("wall-door-texture");
+    });
   }
   function applyWindowLights() {
     if (!windowLightRecords.length) return;

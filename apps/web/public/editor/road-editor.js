@@ -5,7 +5,7 @@
 // Wijzigingen staan meteen in beeld; opslaan (met Ctrl+Z) loopt op de achtergrond, één tegelijk.
 // Kevin 23-11 (2): hetzelfde gereedschap bewerkt ook een 🧱 Muur (deps.channel "wall", eigen toNet/toBody): de soort per
 // lijn (muur, deur, raam, open) is het derde getal van een lijn en gaat mee bij alles (setLinkKind zet hem).
-import { areaRoadLinks } from "../shared/area-soorten.js?v=20261123-muur7";
+import { areaRoadLinks } from "../shared/area-soorten.js?v=20261123-muur11";
 import { roadAddPoint, roadClip, roadConnect, roadDelete, roadDuplicate, roadChainOrder, roadHasLink, roadInsertChain, roadMerge, roadParts, roadPaste, roadSplitLink } from "../shared/road-network.js?v=20261123-muur7";
 
 const toRoadNet = (body) => ({ points: (body?.pointsMm || []).map((p) => ({ x: p[0] / 1000, z: p[1] / 1000 })), links: areaRoadLinks(body) });
@@ -277,7 +277,7 @@ export function createRoadEditor(deps) {
 
   // Kevin 23-11 (4): een gekopieerd stuk muur in een rechte rij (bijv. één deur- of raam-lijn) zet Ctrl+V ín de muurlijn
   // onder de muis (of de gekozen lijn), even breed en met dezelfde soorten. Zo krijgen alle ramen dezelfde breedte.
-  const OPENING_NAMES = { 1: "deur", 2: "raam", 3: "opening" };
+  const OPENING_NAMES = { 1: "deur", 2: "raam", 3: "opening", 4: "deur" };
   const meters = (value) => value.toFixed(2).replace(".", ",") + " m";
   function chainOf(clip) {
     const order = channel === "wall" && clip ? roadChainOrder(clip) : null;

@@ -5,7 +5,7 @@ import { validateDocument } from "../src/shared/authoring/kinds.js";
 import { areaBodyFromNodePatch, areaNodeValues } from "../src/shared/authoring/kinds/area.js";
 import { compileAreaShapes } from "../src/server/authoring/area-compiler.js";
 import { applyCanonicalBuild } from "../src/server/authoring/runtime-overlay.js";
-import { editWallEdges, wallBlockers, wallEdgeKinds, wallFromAreaValues, wallNetLinks, wallPieces, wallWindows } from "../apps/web/public/shared/walls.js";
+import { editWallEdges, wallBlockers, wallDoors, wallEdgeKinds, wallFromAreaValues, wallJoins, wallNetLinks, wallPieces, wallWindows } from "../apps/web/public/shared/walls.js";
 import { roadChainOrder, roadDelete, roadInsertChain, roadSplitLink } from "../apps/web/public/shared/road-network.js";
 import { isPointBlockedByBlocker, createWalkabilityIndex } from "../apps/web/public/shared/movement-kernel.js";
 
@@ -114,4 +114,30 @@ test("muur als net: T-splitsing, soort per lijn, geldig en het raam schijnt naar
   assert.equal(roadInsertChain(line, 0, { x: 3, z: 0 }, { points: [{ x: 0, z: 0 }, { x: 20, z: 0 }], links: [[0, 1, 2]] }), null);
   // Een oude muur zonder lijnen is een gesloten ring.
   assert.deepEqual(wallNetLinks(4, undefined, { openEdges: [3] }), [[0, 1], [1, 2], [2, 3], [3, 0, 3]]);
+});
+
+test("hoeken in verstek, textuur loopt door, en Deur (dicht) = muur met deur-plaatje aan beide kanten", () => {
+  // L-vorm: (0,0) -> (4,0) -> (4,3), en de tweede lijn andersom getekend; dikte 0.3.
+  const body = { areaId: "muur.l", displayName: "L", soort: "muur", shape: "polygon", pointsMm: [[0, 0], [4000, 0], [4000, 3000]],
+    links: [[0, 1], [2, 1, 4]], settings: { wallThickness: 0.3 } };
+  assert.equal(validateDocument("area", body).ok, true, "code 4 (Deur dicht) is geldig");
+  const wall = wallFromAreaValues("muur.l", areaNodeValues(body, "muur.l"));
+  assert.deepEqual(wall.links.map((link) => link.kind), ["wall", "gate"]);
+  const joins = wallJoins(wall);
+  // Hoek op (4,0): buitenhoek (4.15,-0.15), binnenhoek (3.85,0.15), voor beide lijnen dezelfde punten.
+  const near = (p, x, z) => Math.abs(p[0] - x) < 1e-9 && Math.abs(p[1] - z) < 1e-9;
+  assert.ok(near(joins[0].b.right, 4.15, -0.15) && near(joins[0].b.left, 3.85, 0.15), "lijn 1: verstek op de hoek");
+  const second = [joins[1].b.left, joins[1].b.right];
+  assert.ok(second.some((p) => near(p, 4.15, -0.15)) && second.some((p) => near(p, 3.85, 0.15)), "lijn 2: dezelfde hoekpunten");
+  assert.equal(joins[0].a, null, "los eind: gewoon kopje");
+  // Textuur: de linkerkant van lijn 1 eindigt op u = 4; lijn 2 ligt andersom, dus daar sluit de rechterkant aan (-(uStart+lengte)).
+  assert.equal(joins[0].uStart + joins[0].length, 4);
+  assert.equal(joins[1].flip, true);
+  assert.equal(-(joins[1].uStart + joins[1].length), 4, "textuur loopt door over de hoek");
+  // Deur (dicht): botst als muur, en een deur-vlak aan beide kanten.
+  assert.equal(wallBlockers(wall).length, 2, "dicht");
+  const doors = wallDoors(wall);
+  assert.equal(doors.length, 2, "aan beide kanten");
+  assert.ok(doors.every((door) => Math.abs(door.width - 3) < 1e-9 && door.height === 2.4));
+  assert.equal(wallPieces(wall).filter((piece) => piece.edge === 1).length, 1, "één dicht stuk muur");
 });
