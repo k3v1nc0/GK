@@ -29,12 +29,12 @@ import {
 } from "./movement-kernel.js";
 import { terrainHeightAt } from "./terrain.js";
 import { createPlayerPathClient } from "./player-path-client.js?v=20261108-roads9";
-import { createTerrainLayer, seedTerrainChunk, seedTerrainPaint } from "./terrain-render.js?v=20261123-muur6";
+import { createTerrainLayer, seedTerrainChunk, seedTerrainPaint } from "./terrain-render.js?v=20261123-muur7";
 import { createWaterLayer } from "./water-render.js?v=20261030-terrein6";
 import { createSkyLayer } from "./sky-render.js?v=20261120-sky2";
-import { wallPieces, wallWindows } from "./walls.js?v=20261123-muur4";
+import { wallPieces, wallWindows } from "./walls.js?v=20261123-muur7";
 import { INDOOR_ZONE } from "./indoor-zone.js?v=20261123-binnentab1";
-import { createSrgbTextureLoader } from "./srgb-texture-loader.js?v=20261123-muur6";
+import { createSrgbTextureLoader } from "./srgb-texture-loader.js?v=20261123-muur7";
 export {
   effectiveGroundBounds,
   effectiveWorldGroundBounds,
@@ -14960,7 +14960,13 @@ function resolveChunkDebugCenter(policy) {
     }
   }
 
+  // Kevin 23-11 (4): kleuren zoals het plaatje (Neutraal, standaard) of filmisch (ACES, zoals eerst). Kaart Wereld.
+  function applyColorStyle(worldData) {
+    const next = worldData?.render?.colorStyle === "filmic" ? THREE.ACESFilmicToneMapping : THREE.NeutralToneMapping;
+    if (renderer.toneMapping !== next) { renderer.toneMapping = next; requestRender("color-style"); }
+  }
   function addLights(worldData) {
+    applyColorStyle(worldData);
     const policy = currentShadowPolicy();
     if (stableSunShadowController?.setPolicy) stableSunShadowController.setPolicy(policy);
     for (const light of worldData?.lights || []) {
@@ -15944,6 +15950,16 @@ function resolveChunkDebugCenter(policy) {
   // Kevin 23-11 (2): een raam op een Raam-lijn. Geen gat naar het zwart buiten en geen echte lamp (te zwaar voor de oude
   // laptop): een gloeiend vlak met de raam-textuur, een zachte zonnevlek op de vloer en een vage lichtbundel ertussen.
   // Alleen doorzichtige vlakken; overdag fel en warm, 's nachts zwak en blauw (applyWindowLights bij dag en nacht).
+  // Een raam zonder PNG: 1x1 wit plaatje (de kleur van het materiaal maakt het lichtblauw), zelfde shader als met PNG.
+  let windowPlain = null;
+  function windowPlainTexture() {
+    if (!windowPlain) {
+      windowPlain = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+      windowPlain.colorSpace = THREE.SRGBColorSpace;
+      windowPlain.needsUpdate = true;
+    }
+    return windowPlain;
+  }
   // Kevin 23-11 (3): de vorm van het licht uit de PNG. Klein plaatje (96x96): alles wat doorzichtig is en de rand raakt
   // is "naast het raam" (geen licht); de rest is het raam. Heeft het raam doorzichtig glas (tussen de spijlen), dan
   // geven de spijlen een zachte schaduw. Eén keer per plaatje, op de processor; daarna gewoon een textuur.
@@ -16026,35 +16042,34 @@ function resolveChunkDebugCenter(policy) {
     };
     // Het raam zelf, 1 cm voor de muur: jouw PNG helemaal te zien (doorzichtige stukken laten de muur zien), met een
     // gloed vanuit het midden die naar de rand uitdooft. De gloed schijnt vooral door de doorzichtige stukken (het glas,
-    // "buiten"); op het raam zelf (sponning, tralies) maar een beetje. Eén kleine shader, één keer gebouwd.
-    const panelMaterial = new THREE.ShaderMaterial({
-      uniforms: {
-        map: { value: null }, hasMap: { value: 0 }, tint: { value: new THREE.Color(1, 1, 1) },
-        glowColor: { value: new THREE.Color("#fff1c9") }, glow: { value: 0.8 }
-      },
-      vertexShader: "varying vec2 vUv;\nvoid main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
-      fragmentShader: [
-        "uniform sampler2D map; uniform float hasMap; uniform vec3 tint; uniform vec3 glowColor; uniform float glow;",
-        "varying vec2 vUv;",
-        "void main() {",
-        "  vec4 tex = hasMap > 0.5 ? texture2D(map, vUv) : vec4(0.72, 0.8, 0.9, 1.0);",
-        "  float fade = 1.0 - smoothstep(0.0, 1.0, length((vUv - 0.5) * 2.0));",
-        "  float g = clamp(glow * fade * fade, 0.0, 1.0);",
-        "  float through = g * (1.0 - tex.a);",
-        "  vec3 color = tex.rgb * tint * tex.a + glowColor * (through + g * tex.a * 0.3);",
-        "  float alpha = clamp(tex.a + through, 0.0, 1.0);",
-        "  if (alpha < 0.02) discard;",
-        "  gl_FragColor = vec4(color / max(alpha, 0.001), alpha);",
-        "  #include <colorspace_fragment>",
-        "}"
-      ].join("\n"),
-      transparent: true,
-      toneMapped: false,
-      side: THREE.FrontSide
-    });
+    // "buiten"); op het raam zelf (sponning, tralies) maar een beetje.
+    // Kevin 23-11 (4): het raam krijgt hetzelfde licht als de muur (gewoon materiaal + gloed erbij), zodat de stenen van
+    // het raam en van de muur dezelfde kleur hebben (eerst was het raam onbelicht en dus feller dan de muur).
+    const panelUniforms = { gkGlowColor: { value: new THREE.Color("#fff1c9") }, gkGlow: { value: 0.8 } };
+    const panelMaterial = new THREE.MeshStandardMaterial({ color: new THREE.Color(0.72, 0.8, 0.9), map: windowPlainTexture(), roughness: 0.92,
+      metalness: 0, transparent: true });
+    panelMaterial.onBeforeCompile = function (shader) {
+      shader.uniforms.gkGlowColor = panelUniforms.gkGlowColor;
+      shader.uniforms.gkGlow = panelUniforms.gkGlow;
+      shader.fragmentShader = "uniform vec3 gkGlowColor;\nuniform float gkGlow;\n" + shader.fragmentShader
+        .replace("#include <map_fragment>", [
+          "#include <map_fragment>",
+          "float gkA = diffuseColor.a;",
+          "float gkFade = 1.0 - smoothstep(0.0, 1.0, length((vMapUv - 0.5) * 2.0));",
+          "float gkG = clamp(gkGlow * gkFade * gkFade, 0.0, 1.0);",
+          "float gkThrough = gkG * (1.0 - gkA);"
+        ].join("\n"))
+        .replace("#include <opaque_fragment>", [
+          "float gkAlpha = clamp(gkA + gkThrough, 0.0, 1.0);",
+          "if (gkAlpha < 0.02) discard;",
+          "gl_FragColor = vec4((outgoingLight * gkA + gkGlowColor * (gkThrough + gkG * gkA * 0.3)) / max(gkAlpha, 0.001), gkAlpha);"
+        ].join("\n"));
+    };
+    panelMaterial.customProgramCacheKey = function () { return "gk-window-panel"; };
     const panel = mark(new THREE.Mesh(new THREE.PlaneGeometry(width, height), panelMaterial), "window", 2, true);
     panel.position.set(win.x + win.nx * 0.012, baseY + (win.sill + win.top) / 2, win.z + win.nz * 0.012);
     panel.rotation.y = yaw;
+    panel.receiveShadow = staticPropShadowOptions().receiveShadow;
     // Zonnevlek op de vloer: van "Raam vanaf" tot iets verder dan "Raam tot" de kamer in (zon schuin van boven), iets breder.
     const near = Math.max(0.15, win.sill * 0.9);
     const far = near + Math.max(0.6, height * 1.25);
@@ -16167,7 +16182,8 @@ function resolveChunkDebugCenter(policy) {
         "  float edge = min(vUv.x, 1.0 - vUv.x);",
         "  float shape = hasMap > 0.5 ? texture2D(map, vUv).r * clamp(edge / 0.03, 0.0, 1.0)",
         "    : pow(clamp(edge / 0.18, 0.0, 1.0), 2.0) * clamp(min(vUv.y, 1.0 - vUv.y) / 0.15, 0.0, 1.0);",
-        "  float alpha = opacity * shape * (1.0 - 0.6 * vSlice) * smoothstep(0.05, 0.45, vFacing);",
+        "  float streak = 0.45 + 0.55 * (0.5 + 0.5 * sin(vUv.x * 23.0 + 0.7)) * (0.5 + 0.5 * sin(vUv.x * 57.0 + 1.9));",
+        "  float alpha = opacity * shape * streak * (1.0 - 0.6 * vSlice) * smoothstep(0.03, 0.3, vFacing);",
         "  if (alpha < 0.002) discard;",
         "  gl_FragColor = vec4(color, alpha);",
         "  #include <colorspace_fragment>",
@@ -16175,17 +16191,19 @@ function resolveChunkDebugCenter(policy) {
       ].join("\n"),
       transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide
     });
-    mark(new THREE.Mesh(beamGeometry, beamMaterial), "window beam", 4);
+    const beam = mark(new THREE.Mesh(beamGeometry, beamMaterial), "window beam", 4);
+    beam.visible = num(win.rays, 1) > 0;
     const asset = wall.windowTextureAssetId ? assetById(worldData, wall.windowTextureAssetId) : null;
     if (asset) withWallTexture(asset, function (texture) {
       if (panel.material !== panelMaterial) return;
       // Eén kopie per plaatje zonder herhalen: het raam is één plaatje over het hele vlak (de muur herhaalt wel).
-      panelMaterial.uniforms.map.value = wallTextureVariant(texture, "single", function (variant) {
+      panelMaterial.map = wallTextureVariant(texture, "single", function (variant) {
         variant.wrapS = THREE.ClampToEdgeWrapping;
         variant.wrapT = THREE.ClampToEdgeWrapping;
         variant.repeat.set(1, 1);
       });
-      panelMaterial.uniforms.hasMap.value = 1;
+      panelMaterial.color.setRGB(1, 1, 1);
+      panelMaterial.needsUpdate = true;
       // Kevin 23-11 (3): de zonnevlek krijgt de vorm van jouw raam (uit de doorzichtigheid van de PNG).
       const mask = windowLightMask(texture);
       if (mask) {
@@ -16196,7 +16214,7 @@ function resolveChunkDebugCenter(policy) {
       }
       requestRender("window-texture");
     });
-    windowLightRecords.push({ panelMaterial, patchMaterial, beamMaterial, light: Math.max(0, num(win.light, 1)) });
+    windowLightRecords.push({ panelUniforms, patchMaterial, beamMaterial, light: Math.max(0, num(win.light, 1)), rays: Math.max(0, num(win.rays, 1)) });
   }
   function applyWindowLights() {
     if (!windowLightRecords.length) return;
@@ -16208,11 +16226,10 @@ function resolveChunkDebugCenter(policy) {
       color.copy(windowNightColor).lerp(windowDayColor, day);
       record.beamMaterial.uniforms.color.value.copy(color);
       record.patchMaterial.uniforms.opacity.value = Math.min(1, 0.45 * strength);
-      record.beamMaterial.uniforms.opacity.value = Math.min(0.12, 0.035 * strength);
-      // Het plaatje zelf: overdag zoals het is, 's nachts donkerder. De gloed volgt Raamlicht en de dag.
-      record.panelMaterial.uniforms.tint.value.setScalar(0.35 + 0.65 * day);
-      record.panelMaterial.uniforms.glowColor.value.copy(color);
-      record.panelMaterial.uniforms.glow.value = Math.min(1.5, 0.8 * strength);
+      record.beamMaterial.uniforms.opacity.value = Math.min(0.6, 0.15 * strength * record.rays);
+      // Het plaatje zelf krijgt het licht van de wereld (net als de muur); de gloed volgt Raamlicht en de dag.
+      record.panelUniforms.gkGlowColor.value.copy(color);
+      record.panelUniforms.gkGlow.value = Math.min(1.5, 0.8 * strength);
     }
     requestRender("window-light");
   }

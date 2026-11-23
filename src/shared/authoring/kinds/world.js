@@ -119,6 +119,11 @@ export const WORLD_KINDS = {
         ui: ui("🏠", "toggle", "instellingen", { group: SUN_GROUP, when: SHADOWS_ON }), default: true,
         help: help("Geven alle geplaatste modellen (huizen, bomen, hekken) in de game schaduw, net als in de editor? NPC's, vijanden en de speler geven altijd schaduw.", "Aan, dan ziet de game eruit als de editor.", "De game hapert in een druk dorp → zet dit uit (alleen figuren geven dan schaduw)."),
         },
+      // Kevin 23-11: kleuren in de 3D zoals het plaatje in Photoshop (Neutraal) of filmisch (ACES, zoals eerst).
+      colorStyle: { type: "select", required: false, options: ["neutral", "filmic"], optionIcons: { neutral: "🎨", filmic: "🎬" },
+        optionLabels: { neutral: "Zoals het plaatje", filmic: "Filmisch (zoals eerst)" }, audience: "client", label: "Kleuren",
+        ui: ui("🎨", "select", "instellingen", { group: SUN_GROUP }), default: "neutral",
+        help: help("Hoe de kleuren van je texturen en modellen in de 3D uitkomen.", "Zoals het plaatje: de kleuren lijken op Photoshop. Filmisch: wat donkerder en minder fel, zoals eerst.", "Kleuren te fel → Filmisch. Kleuren wijken af van Photoshop → Zoals het plaatje.") },
       shadowSharpness: { type: "select", required: false, options: ["low", "medium", "high"], optionIcons: { low: "🐢", medium: "🙂", high: "✨" },
         optionLabels: { low: "Laag (snelst)", medium: "Middel (zoals de editor)", high: "Hoog (scherpst)" }, audience: "client", label: "Scherpte van de schaduw",
         ui: ui("🔍", "select", "instellingen", { group: SUN_GROUP, when: SHADOWS_ON }), default: "low",

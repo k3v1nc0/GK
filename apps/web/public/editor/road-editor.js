@@ -5,8 +5,8 @@
 // Wijzigingen staan meteen in beeld; opslaan (met Ctrl+Z) loopt op de achtergrond, één tegelijk.
 // Kevin 23-11 (2): hetzelfde gereedschap bewerkt ook een 🧱 Muur (deps.channel "wall", eigen toNet/toBody): de soort per
 // lijn (muur, deur, raam, open) is het derde getal van een lijn en gaat mee bij alles (setLinkKind zet hem).
-import { areaRoadLinks } from "../shared/area-soorten.js?v=20261123-muur4";
-import { roadAddPoint, roadClip, roadConnect, roadDelete, roadDuplicate, roadChainOrder, roadHasLink, roadInsertChain, roadMerge, roadParts, roadPaste, roadSplitLink } from "../shared/road-network.js?v=20261123-muur5";
+import { areaRoadLinks } from "../shared/area-soorten.js?v=20261123-muur7";
+import { roadAddPoint, roadClip, roadConnect, roadDelete, roadDuplicate, roadChainOrder, roadHasLink, roadInsertChain, roadMerge, roadParts, roadPaste, roadSplitLink } from "../shared/road-network.js?v=20261123-muur7";
 
 const toRoadNet = (body) => ({ points: (body?.pointsMm || []).map((p) => ({ x: p[0] / 1000, z: p[1] / 1000 })), links: areaRoadLinks(body) });
 const toRoadBody = (body, net) => {

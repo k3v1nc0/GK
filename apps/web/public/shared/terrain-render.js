@@ -13,7 +13,7 @@ import {
   terrainHeightAt, raycastTerrain, parseTerrainChunkKey, createPaintfield, terrainPaintFromPng
 } from "./terrain.js";
 import { decodePng } from "./png.js";
-import { createSrgbTextureLoader } from "./srgb-texture-loader.js?v=20261123-muur6";
+import { createSrgbTextureLoader } from "./srgb-texture-loader.js?v=20261123-muur7";
 
 const SIZE = TERRAIN_CHUNK_METERS;
 const decoded = new Map();

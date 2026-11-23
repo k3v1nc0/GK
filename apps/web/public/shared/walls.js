@@ -5,7 +5,7 @@
 export const WALL_EDGE_KINDS = Object.freeze(["wall", "door", "window", "open"]);
 // Per soort rand een lijst randnummers in de instellingen; een rand die nergens in staat is een muur.
 export const WALL_EDGE_KEYS = Object.freeze({ door: "doorEdges", window: "windowEdges", open: "openEdges" });
-export const WALL_DEFAULTS = Object.freeze({ height: 3, thickness: 0.3, textureMeters: 2, doorHeight: 2.4, windowSill: 1, windowTop: 2.2, windowLight: 1 });
+export const WALL_DEFAULTS = Object.freeze({ height: 3, thickness: 0.3, textureMeters: 2, doorHeight: 2.4, windowSill: 1, windowTop: 2.2, windowLight: 1, windowRays: 1 });
 
 const num = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
@@ -79,6 +79,7 @@ export function wallFromAreaValues(id, values = {}) {
     topTextureAssetId: values.wallTopTextureAssetId || null,
     windowTextureAssetId: values.windowTextureAssetId || null,
     windowLight: clamp(num(values.windowLight, WALL_DEFAULTS.windowLight), 0, 3),
+    windowRays: clamp(num(values.windowRays, WALL_DEFAULTS.windowRays), 0, 3),
     links: wallNetLinks(points.length, values.links, values).map((link) => ({ a: link[0], b: link[1], kind: wallLinkKind(link) }))
   };
 }
@@ -166,7 +167,8 @@ export function wallWindows(wall) {
     const mx = (a.x + b.x) / 2; const mz = (a.z + b.z) / 2;
     if (nx * (cx - mx) + nz * (cz - mz) < 0) { nx = -nx; nz = -nz; }
     out.push({ edge: k, x: mx + nx * half, z: mz + nz * half, baseY: Math.min(num(a.y, 0), num(b.y, 0)), ux, uz, nx, nz,
-      width: length, sill, top, light: num(wall.windowLight, WALL_DEFAULTS.windowLight) });
+      width: length, sill, top, light: num(wall.windowLight, WALL_DEFAULTS.windowLight),
+      rays: num(wall.windowRays, WALL_DEFAULTS.windowRays) });
   });
   return out;
 }

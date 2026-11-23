@@ -341,6 +341,7 @@ export function baseRuntimeWorld(data = {}, options = {}) {
     dayNight: { dayMinutes: Number(settings.dayMinutes), nightMinutes: Number(settings.nightMinutes), nightLightPct: Number(settings.nightLightPct),
       daySkyColor: sky, nightSkyColor: nightSky },
     sky: skyConfig,
+    render: { colorStyle: settings.colorStyle === "filmic" ? "filmic" : "neutral" },
     lights: [
       { id: "ambient_light", type: "ambient", color: "#ffffff", intensity: Number(settings.lightStrength) },
       { id: "sun_light", type: "directional", color: "#ffffff", intensity: Number(settings.sunStrength), position: sunPositionOf(settings) }

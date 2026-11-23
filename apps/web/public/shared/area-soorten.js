@@ -3,7 +3,7 @@
 // verhuisd pad, bos of blokkade er precies hetzelfde uitziet. De instellingen per soort staan in "settings";
 // hun regels (type, min, max, keuzes) komen uit de oude nodedefinitie, de naam/icoon/hulp staat hier.
 import { NODE_TYPES } from "./node-types.js?v=20261106-perf1";
-import { WALL_DEFAULTS, WALL_EDGE_KEYS, wallNetLinks } from "./walls.js?v=20261123-muur4";
+import { WALL_DEFAULTS, WALL_EDGE_KEYS, wallNetLinks } from "./walls.js?v=20261123-muur7";
 
 // Zelfde vorm als help() in src/shared/authoring/kinds/ui.js (dit bestand draait ook in de browser).
 const help = (waarvoor, goed, probleem) => Object.freeze({ waarvoor, goed, probleem });
@@ -41,7 +41,10 @@ const WALL_FIELDS = [
   { key: "windowTextureAssetId", spec: { type: "asset", label: "Raam-textuur", icon: "🖼️", default: null, more: true, assetTypes: ["texture", "image"],
     help: help("Het plaatje van het raam (glas, sponning, tralies). Het gloeit, alsof er daglicht door valt.", "Sleep een raam-textuur uit de Bibliotheek op dit vak. Leeg = een licht vlak.", "Raam te fel of te donker → schuif Raamlicht.") } },
   wallNumber("windowLight", "Raamlicht", "☀️", 0, 3, WALL_DEFAULTS.windowLight, 0.1, [0, 2], true,
-    "Hoe fel het raam en de zonnevlek op de vloer zijn (overdag; 's nachts vanzelf zwakker en blauwer).", "0.8 tot 1.2. 0 = geen licht.", "Vloer te fel → lager. Zie je de vlek niet → hoger.")
+    "Hoe fel het raam en de zonnevlek op de vloer zijn (overdag; 's nachts vanzelf zwakker en blauwer).", "0.8 tot 1.2. 0 = geen licht.", "Vloer te fel → lager. Zie je de vlek niet → hoger."),
+  // Kevin 23-11 (4): de lichtbundels (god rays) tussen raam en vloer apart sterker of zwakker, 0 = uit.
+  wallNumber("windowRays", "Lichtbundels", "🌅", 0, 3, WALL_DEFAULTS.windowRays, 0.1, [0, 2], true,
+    "Hoe goed je de lichtbundels van het raam naar de vloer ziet (in de vorm van het raam).", "1 = zacht. 0 = geen bundels.", "Bundels te fel → lager. Zie je ze niet → hoger.")
 ];
 const EDGE_LIST_KEYS = new Set(["closedEdges"].concat(Object.values(WALL_EDGE_KEYS)));
 
