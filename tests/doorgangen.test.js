@@ -38,6 +38,10 @@ test("de server weigert te ver, eenrichting, level, sleutel en gevecht", () => {
   assert.equal(withinUseRange({ x: 3.4, z: 0 }, door, "a"), true, "2 m + speling");
   const arrive = doorwayArrival(door, "b");
   assert.equal(Math.round(arrive.x * 10) / 10, 1002.5, "voor kant B, de kant waar hij op kijkt");
+  // Kevin 23-11: A buiten (z=-0.5) en B binnen (z=0.5) bij één muur; B kijkt verkeerd om (naar A) = toch binnen aankomen.
+  const wallDoor = { id: "huis", arriveMeters: 2.5, a: { x: 0, z: -0.5, rotationY: 180 }, b: { x: 0, z: 0.5, rotationY: 180 } };
+  assert.equal(Math.round(doorwayArrival(wallDoor, "b").z * 10) / 10, 3, "door A: binnen aankomen, ook als B naar de muur kijkt");
+  assert.equal(Math.round(doorwayArrival(wallDoor, "a").z * 10) / 10, -3, "door B: buiten aankomen");
   assert.deepEqual(parseDoorwayTarget("huis.bram:b"), { id: "huis.bram", side: "b" });
   assert.deepEqual(parseDoorwayTarget("huis"), { id: "huis", side: "a" });
 });

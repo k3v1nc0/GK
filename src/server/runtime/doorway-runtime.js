@@ -42,10 +42,22 @@ export function withinUseRange(position, door, side) {
 }
 
 // Aankomen: een paar meter voor de andere kant (de kant waar hij naartoe kijkt), met je gezicht van de deur af.
+// Kevin 23-11: staan kant A en B vlak bij elkaar (aan weerszijden van één muur) en kijkt de aankomstkant terug naar
+// de kant waar je vandaan komt (dus de muur in), dan draait de aankomst 180°: je komt altijd aan de overkant aan.
+export const DOORWAY_NEAR_M = 8;
 export function doorwayArrival(door, side) {
   const end = door?.[side] || {};
-  const deg = num(end.rotationY);
-  const rad = deg * Math.PI / 180;
+  const from = door?.[otherSide(side)] || null;
+  let deg = num(end.rotationY);
+  let rad = deg * Math.PI / 180;
+  if (from) {
+    const bx = num(end.x) - num(from.x), bz = num(end.z) - num(from.z);
+    const apart = Math.hypot(bx, bz);
+    if (apart > 0.05 && apart <= DOORWAY_NEAR_M && Math.sin(rad) * bx + Math.cos(rad) * bz < 0) {
+      deg = (deg + 180) % 360;
+      rad = deg * Math.PI / 180;
+    }
+  }
   const meters = Math.max(0, num(door?.arriveMeters, 2.5));
   return { x: num(end.x) + Math.sin(rad) * meters, y: num(end.y), z: num(end.z) + Math.cos(rad) * meters, rotationY: deg };
 }
