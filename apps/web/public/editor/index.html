@@ -6,7 +6,7 @@
     <title>GK Game Editor</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <link rel="stylesheet" href="./styles.css?v=20261110-namen1">
-    <link rel="stylesheet" href="./werkbank-docs.css?v=20261118-player-animation1">
+    <link rel="stylesheet" href="./werkbank-docs.css?v=20261124-zoek1">
     <link rel="stylesheet" href="./mini-asset-picker.css?v=20261028-picker1">
     <script type="importmap">
       {
@@ -34,6 +34,10 @@
           </div>
         </details>
       </nav>
+      <div class="edSearch" role="search">
+        <input id="editorSearchInput" type="search" placeholder="🔍 Zoek instelling (Ctrl+K)" autocomplete="off" spellcheck="false" aria-label="Zoek in alle instellingen" title="Zoek in alle instellingen van Instellingen, Werkbank en Terrein, ook in de uitleg (i). Klik een resultaat om erheen te gaan.">
+        <div id="editorSearchResults" class="edSearchResults" hidden></div>
+      </div>
       <div class="topbarRight">
         <button id="connectionButton" type="button" class="connectionButton connectionButton--standby" title="Serverstatus: standby. Klik om opnieuw te verbinden." aria-label="Serverstatus: standby. Klik om opnieuw te verbinden.">
           <span class="connectionLight" aria-hidden="true"></span>
@@ -283,6 +287,6 @@
       <div id="allLayoutRoot" class="allLayoutRoot"></div>
       <div id="allLayoutOverflow" hidden></div>
     </main>
-    <script type="module" src="./editor.js?v=20261124-binnen3"></script>
+    <script type="module" src="./editor.js?v=20261124-zoek1"></script>
   </body>
 </html>

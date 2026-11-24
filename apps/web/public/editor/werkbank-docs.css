@@ -337,3 +337,20 @@
 .wbdRouteLine { flex: 1 1 100%; display: flex; gap: 4px; padding-left: 32px; }
 .wbdRoute .wbdRouteSay { flex: 2 1 120px; min-width: 0; }
 .wbdRoute .wbdRouteSound { flex: 1 1 90px; min-width: 0; }
+
+/* Zoekbalk bovenin (Kevin 24-11): zoekt in alle instellingen; klik = erheen en het veld licht op. */
+.edSearch { position: relative; flex: 0 1 230px; min-width: 120px; }
+.edSearch input { width: 100%; height: 32px; padding: 0 10px; border: 1px solid #2a3744; border-radius: 8px; background: #0b1118; color: var(--wbd-text); font: inherit; font-size: 12px; }
+.edSearch input:focus { outline: none; border-color: var(--wbd-accent); }
+.edSearchResults { position: absolute; top: calc(100% + 6px); left: 0; z-index: 1000; width: min(460px, 92vw); max-height: 65vh; overflow: auto; padding: 6px; background: #111a23; border: 1px solid var(--wbd-line); border-radius: 10px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); }
+.edSearchCount, .edSearchEmpty { padding: 4px 8px 6px; color: var(--wbd-muted); font-size: 11px; }
+.edSearchHit { display: flex; gap: 10px; align-items: flex-start; width: 100%; padding: 7px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--wbd-text); text-align: left; font: inherit; cursor: pointer; }
+.edSearchHit:hover, .edSearchHit.active { background: #1c2a38; }
+.edSearchIcon { flex: 0 0 22px; font-size: 16px; line-height: 20px; text-align: center; }
+.edSearchText { display: grid; gap: 2px; min-width: 0; }
+.edSearchLabel { font-weight: 700; font-size: 13px; }
+.edSearchPath { color: var(--wbd-muted); font-size: 11px; }
+.edSearchSnip { color: #b7c3cc; font-size: 11px; }
+.edSearchSnip mark { background: rgba(255, 180, 84, .3); color: inherit; border-radius: 3px; padding: 0 1px; }
+.wbdFlash { animation: wbdFlash 2.4s ease-out; border-radius: 6px; }
+@keyframes wbdFlash { 0%, 40% { background: rgba(255, 180, 84, .28); box-shadow: 0 0 0 2px var(--wbd-accent); } 100% { background: transparent; box-shadow: 0 0 0 2px transparent; } }

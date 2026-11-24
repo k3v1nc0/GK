@@ -1,6 +1,7 @@
 import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261124-binnen3";
 import { edgeBetweenPoints, editClosedEdges } from "./walkable-edge-tools.js?v=20261031-randen1";
-import { createTerrainEditor } from "./terrain-editor.js?v=20261123-muur14";
+import { createTerrainEditor } from "./terrain-editor.js?v=20261124-zoek1";
+import { createEditorSearch, TERRAIN_TOOL_FOR_KIND } from "./editor-search.js?v=20261124-zoek1";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261106-perf1";
 import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20261106-perf1";
 import {
@@ -1052,6 +1053,14 @@ const terrainEditor = createTerrainEditor({
   importAsset: importAssetFile,
   toolsHost: el.terrainToolsPanel,
   libraryHost: el.terrainLibraryPanel
+});
+
+// Zoekbalk bovenin (Kevin 24-11): alle instellingen van Instellingen, Werkbank en Terrein, ook de Ⓘ-uitleg.
+createEditorSearch({
+  input: document.querySelector("#editorSearchInput"),
+  results: document.querySelector("#editorSearchResults"),
+  getBench: function () { return docBench; },
+  onOpen: function (hit) { void openSearchHit(hit); }
 });
 
 // Een bestand als asset uploaden (stempels uit Terrein). Geeft het nieuwe asset terug.
@@ -16753,6 +16762,65 @@ async function openPublishBlocker(blocker) {
       setTimeout(function () { target.classList.remove("qbFlash"); }, 1200);
     }
   });
+}
+
+// Zoekbalk (Kevin 24-11): naar de kaart van een zoekresultaat, het blok/⚙️ meer open, en het veld laten oplichten.
+// De camera blijft staan; alleen het paneel springt naar de instelling.
+async function openSearchHit(hit) {
+  setGameTabOpen(false);
+  setBibleTabOpen(false);
+  if (!docBench.workspace) await docBench.load();
+  const spec = docBench.spec(hit.kind);
+  if (hit.group) docBench.groupOpen = Object.assign({}, docBench.groupOpen || {}, { [hit.group]: true });
+  if (hit.more) docBench.moreOpen = true;
+  if (hit.place === "instellingen") {
+    docBench.settingsView = hit.kind;
+    // Klassen e.d.: een veld staat pas in beeld als er een kaart gekozen is.
+    if (hit.type === "field" && spec && !spec.singleton && !docBench.childDocKey[hit.kind]) docBench.childDocKey[hit.kind] = docBench.docs(hit.kind)[0]?.docKey || null;
+    setEditorMode("settings");
+  } else if (hit.place === "terrein") {
+    terrainEditor.showTool(TERRAIN_TOOL_FOR_KIND[hit.kind] || "ground");
+    setEditorMode("terrain");
+  } else {
+    setEditorMode("workbench");
+    if (hit.kind === "area" || docBench.libraryKinds().includes(hit.kind)) state.workbenchLibraryType = "doc:" + hit.kind;
+    const fits = function (doc) {
+      if (!doc || doc.kind !== hit.kind || doc.archived) return false;
+      const soort = hit.kind === "area" ? areaSoort(doc.body) : null;
+      return (!hit.soort || soort === hit.soort) && (!hit.soorten || hit.soorten.includes(soort));
+    };
+    const current = docBench.doc(docBench.selectedDocKey);
+    const doc = fits(current) ? current : (hit.type === "field" || hit.soort ? docBench.docs(hit.kind).find(fits) : null);
+    if (!doc) {
+      renderWorkbench();
+      if (hit.type === "field" || hit.soort) setStatus("Nog geen kaart " + (hit.soortName || ((spec?.icon || "") + " " + (spec?.label || ""))) + ". Maak er een; daar staat '" + hit.label + "'.", "");
+      return;
+    }
+    if (hit.kind === "area") selectAreaDoc(doc.docKey);
+    else if (PLACED_DOC_KINDS.has(hit.kind)) selectPlacedDoc(doc.docKey);
+    else focusDoc(doc.docKey);
+    if (doc !== current && hit.type === "field") setStatus("Geopend bij " + docBench.docName(doc) + ". '" + hit.label + "' staat op elke kaart " + (hit.soortName || ((spec?.icon || "") + " " + (spec?.label || ""))) + ".", "");
+  }
+  if (hit.type === "field") setTimeout(function () { flashSearchField(hit, 0); }, 60);
+}
+
+function flashSearchField(hit, tries) {
+  let row = Array.from(document.querySelectorAll(".wbdField[data-field]"))
+    .find(function (node) { return node.dataset.field === hit.key && node.offsetParent !== null; });
+  if (!row && tries < 10) { setTimeout(function () { flashSearchField(hit, tries + 1); }, 150); return; }
+  // Geen eigen regel (bijv. "Op rand" staat in de kop van een blok): dan de kop van dat blok laten oplichten.
+  const ownRow = Boolean(row);
+  if (!row && hit.group) row = Array.from(document.querySelectorAll(".wbdGroupToggle"))
+    .find(function (node) { return node.offsetParent !== null && node.textContent.includes(hit.group); })?.parentElement || null;
+  if (!ownRow) setStatus("'" + hit.label + "' " + (row ? "zit in dit blok" : "staat nu niet in beeld") + (hit.hidden ? ": hij " + hit.hidden : "") + ".", "");
+  if (!row) return;
+  row.scrollIntoView({ block: "center", behavior: "smooth" });
+  // Gevonden in de uitleg: zet de Ⓘ-uitleg meteen open.
+  if (hit.inHelp && !row.querySelector(".wbdHelp")) row.querySelector(".wbdInfo")?.click();
+  row.classList.remove("wbdFlash");
+  void row.offsetWidth;
+  row.classList.add("wbdFlash");
+  setTimeout(function () { row.classList.remove("wbdFlash"); }, 2600);
 }
 
 function afterDocHistory() {

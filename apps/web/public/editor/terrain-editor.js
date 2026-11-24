@@ -1462,6 +1462,12 @@ export function createTerrainEditor(options = {}) {
     activate,
     deactivate,
     isOpen: function () { return open; },
+    // Zoekbalk (24-11): eerst het goede tabblad kiezen (Grond, Water, Verf, Stempel), daarna tekent activate() het.
+    showTool: function (id) {
+      if (!TOOLS.some(function (tool) { return tool.id === id; })) return;
+      settings.tool = id;
+      remember();
+    },
     // Na een documentwijziging (Bibliotheek, Grond): panelen opnieuw tekenen.
     render: function () {
       if (!open) return;
