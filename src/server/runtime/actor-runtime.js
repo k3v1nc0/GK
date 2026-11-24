@@ -37,6 +37,7 @@ const REPATH_INTERVAL_MS = 600;
 const PATH_RETRY_MS = 1000;
 const REPATH_DISTANCE_M = 1.5;
 const PATH_FAILS_BEFORE_RETURN = 3;
+const WALL_GIVE_UP_MS = 3000; // Kevin 24-11: zo lang zoekt een vijand een weg om de muur heen naar zijn doelwit
 const PATROL_PAUSE_MS = 2000;
 // Werkbank Fase 10 (Kevin 15-11): rondwandelen, wilde dieren (rennen weg) en NPC's die rondlopen.
 const WANDER_PAUSE_MIN_MS = 2500;
@@ -665,7 +666,8 @@ export class ActorRuntime {
           for (const player of playerList) {
             if (!this.eligibleTarget(actor, player)) continue;
             const distance = Math.hypot(player.x - actor.x, player.z - actor.z);
-            if (distance <= meters(def.aggroRangeMm) && distance < bestDistance) { best = player; bestDistance = distance; }
+            // Kevin 24-11: niet door een muur heen op je af komen (kamer ernaast).
+            if (distance <= meters(def.aggroRangeMm) && distance < bestDistance && !this.lineBlocked(actor.x, actor.z, player.x, player.z)) { best = player; bestDistance = distance; }
           }
         }
         if (best) this.engage(actor, bestEscort ? best.spawnKey : best.id, bestEscort);
@@ -693,6 +695,17 @@ export class ActorRuntime {
       if (def.groupBoss === true && !target.escort && this.stepSlam(actor, target, ability, nowMs, playerList)) return;
       const reachMm = ability.rangeMm + def.radiusMm + PLAYER_RADIUS_MM;
       if (withinRangeMm(mm(actor.x), mm(actor.z), mm(target.x), mm(target.z), reachMm)) {
+        // Kevin 24-11: niet door een muur heen slaan (bijv. jij ging door een deur naar de kamer ernaast). Hij zoekt een
+        // weg om de muur heen; lukt dat niet binnen een paar seconden, dan een ander doelwit of terug naar zijn plek.
+        if (nowMs >= actor.nextAttackAtMs && this.lineBlocked(actor.x, actor.z, target.x, target.z)) {
+          actor.wallBlockedMs = (actor.wallBlockedMs || 0) + AI_STEP_MS;
+          if (actor.wallBlockedMs >= WALL_GIVE_UP_MS || !this.moveTowards(actor, target, budget, true)) {
+            actor.wallBlockedMs = 0;
+            if (!this.retarget(actor, playerList)) this.startReturn(actor);
+          }
+          return;
+        }
+        actor.wallBlockedMs = 0;
         actor.path = [];
         const facing = Math.atan2(target.x - actor.x, target.z - actor.z);
         if (Math.abs(facing - actor.ry) > 0.05) { actor.ry = facing; actor.rev += 1; }

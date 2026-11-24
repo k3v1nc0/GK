@@ -192,3 +192,14 @@ test("Kevin 24-11: kamers die tegen elkaar liggen zijn één gebouw; deuren tuss
   const rooms = game.indoorDoors.map((door) => [door.a.room, door.b.room].join(">")).sort();
   assert.deepEqual(rooms, [">hal", "hal>gang"]);
 });
+
+test("Kevin 24-11: een vijand slaat niet door een dunne muur heen (zichtlijn ziet de muur)", async () => {
+  const { lineOfSightBlocked } = await import("../src/server/runtime/line-of-sight.js");
+  const { createWalkabilityIndex } = await import("../apps/web/public/shared/movement-kernel.js");
+  const { wallBlockers } = await import("../apps/web/public/shared/walls.js");
+  const wall = { id: "muur", points: [{ x: 1.3, z: -5 }, { x: 1.3, z: 5 }], thickness: 0.2, height: 3 };
+  const index = createWalkabilityIndex({ collision: { blockers: wallBlockers(wall) } });
+  // Van x=0 naar x=3: de muur (1.2 tot 1.4) valt tussen de stapjes van 50 cm, maar telt toch.
+  assert.equal(lineOfSightBlocked({ walkabilityIndex: index }, 0, 0, 3, 0), true);
+  assert.equal(lineOfSightBlocked({ walkabilityIndex: index }, 0, 0, 0, 3), false, "langs de muur: vrij");
+});

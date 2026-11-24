@@ -15996,6 +15996,24 @@ function resolveChunkDebugCenter(policy) {
     return geometry;
   }
 
+  // Kevin 24-11: de vloer schudde binnen, net als eerst het poppetje. Binnenruimtes liggen ver weg (x = 50 km); een vorm
+  // met punten in wereld-meters wordt dan op de videokaart met kleine kommagetallen (float32, ±4 mm) uitgerekend en
+  // springt heen en weer als de camera beweegt. Daarom: de punten rond het midden van de vorm, en het midden in
+  // mesh.position (dat rekent de processor precies uit). Alleen voor vormen ver van het midden van de wereld.
+  function recenterFarMesh(mesh) {
+    const geometry = mesh?.geometry;
+    if (!geometry?.getAttribute?.("position")) return mesh;
+    geometry.computeBoundingBox();
+    const box = geometry.boundingBox;
+    const cx = Math.round((box.min.x + box.max.x) / 2);
+    const cz = Math.round((box.min.z + box.max.z) / 2);
+    if (Math.abs(cx) < 1000 && Math.abs(cz) < 1000) return mesh;
+    geometry.translate(-cx, 0, -cz);
+    mesh.position.x += cx;
+    mesh.position.z += cz;
+    return mesh;
+  }
+
   function addWalls(worldData) {
     const walls = Array.isArray(worldData?.walls) ? worldData.walls : [];
     const groundY = num(worldData?.ground?.y, 0);
@@ -16026,6 +16044,7 @@ function resolveChunkDebugCenter(policy) {
       const materials = topMaterial === material ? material : [material, topMaterial];
       const mesh = new THREE.Mesh(geometry, materials);
       mesh.name = "wall " + String(wall.id || "");
+      recenterFarMesh(mesh);
       mesh.castShadow = shadow.castShadow;
       mesh.receiveShadow = shadow.receiveShadow;
       mesh.userData.runtimeAlive = true;
@@ -16173,6 +16192,7 @@ function resolveChunkDebugCenter(policy) {
       // Alleen het raam is aan te klikken in de editor (kiest de muur); de vlek en de bundel nooit.
       if (mode === "editor" && selectable) mesh.userData.entityId = wall.id;
       else mesh.raycast = function () {};
+      recenterFarMesh(mesh);
       content.add(mesh);
       runtimeStats.sceneObjects += 1;
       runtimeStats.meshes += 1;
@@ -16464,12 +16484,17 @@ function resolveChunkDebugCenter(policy) {
       geometry.rotateX(-Math.PI / 2);
       const uv = geometry.getAttribute("uv");
       const position = geometry.getAttribute("position");
-      for (let index = 0; index < uv.count; index += 1) uv.setXY(index, position.getX(index) / tile, position.getZ(index) / tile);
+      // Kevin 24-11: de textuur-plek klein houden (een veelvoud van de tegel eraf), anders zwemt de textuur op 50 km.
+      const first = outline[0];
+      const offX = Math.floor(Number(first[0]) / tile) * tile;
+      const offZ = Math.floor(Number(first[1]) / tile) * tile;
+      for (let index = 0; index < uv.count; index += 1) uv.setXY(index, (position.getX(index) - offX) / tile, (position.getZ(index) - offZ) / tile);
       uv.needsUpdate = true;
       const material = new THREE.MeshStandardMaterial({ color: new THREE.Color(colorOrDefault(texture?.color, texture ? "#ffffff" : "#6b6b6b")), roughness: 0.95, metalness: 0 });
       const mesh = new THREE.Mesh(geometry, material);
       mesh.name = "indoor floor " + String(floor.areaId || "");
       mesh.position.y = groundY + num(floor.y, 0) + 0.02;
+      recenterFarMesh(mesh);
       mesh.receiveShadow = true;
       mesh.castShadow = false;
       mesh.userData.runtimeAlive = true;

@@ -51,6 +51,19 @@ export function lineOfSightBlocked(worldContext, ax, az, bx, bz, ay = null) {
     if (ay !== null && Math.abs(ay - (Number(wall.ay) + Number(wall.by)) / 2) > WALL_HEIGHT_REACH) continue;
     if (crosses(ax, az, bx, bz, wall.ax, wall.az, wall.bx, wall.bz)) return true;
   }
+  // Kevin 24-11: muren (Area soort muur) zijn dun (±30 cm); de stapjes van 50 cm hieronder kunnen daar tussendoor.
+  // Daarom eerst precies: snijdt de lijn een rand van een muurstuk?
+  for (const blocker of Array.isArray(index.blockers) ? index.blockers : []) {
+    if (blocker?.reason !== "wall" || !Array.isArray(blocker.points) || blocker.points.length < 3) continue;
+    const pts = blocker.points;
+    let bx0 = Infinity, bx1 = -Infinity, bz0 = Infinity, bz1 = -Infinity;
+    for (const p of pts) { bx0 = Math.min(bx0, p.x); bx1 = Math.max(bx1, p.x); bz0 = Math.min(bz0, p.z); bz1 = Math.max(bz1, p.z); }
+    if (maxX < bx0 || minX > bx1 || maxZ < bz0 || minZ > bz1) continue;
+    for (let i = 0; i < pts.length; i += 1) {
+      const p = pts[i]; const q = pts[(i + 1) % pts.length];
+      if (crosses(ax, az, bx, bz, p.x, p.z, q.x, q.z)) return true;
+    }
+  }
   // 3. Blokkades (muren uit de Area tool): stapjes langs de lijn, niet vlak bij jou of het doel.
   const hasBlockers = (Array.isArray(index.blockers) && index.blockers.length) || (Array.isArray(index.surfaceBlockers) && index.surfaceBlockers.length);
   if (!hasBlockers) return false;
