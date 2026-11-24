@@ -167,3 +167,28 @@ test("Kevin 24-11: elke kant heet naar het deelgebied aan de andere kant; zelf i
   assert.ok(["10,10", "20,20"].includes(Math.round(hal.out.x) + "," + Math.round(hal.out.z)), "buiten: bij een deur (kant A)");
   assert.ok(["50005,5", "50006,6"].includes(Math.round(hal.in.x) + "," + Math.round(hal.in.z)), "binnen: bij een deur (kant B)");
 });
+
+test("Kevin 24-11: kamers die tegen elkaar liggen zijn één gebouw; deuren tussen de kamers staan in de minimap", async () => {
+  const { compileCanonical } = await import("../src/server/authoring/build-service.js");
+  const { buildRuntimeWorld } = await import("../src/server/authoring/world-builder.js");
+  const doc = (kind, key, body) => ({ docKey: key, kind, body, archived: false, revision: 1 });
+  const room = (id, minX, maxX) => doc("area", "area:" + id, { areaId: id, displayName: id, shape: "box", minXMm: minX * 1000, maxXMm: maxX * 1000, minZMm: 0, maxZMm: 10000, indoor: true });
+  const docs = [
+    doc("project_settings", "project_settings", { gameName: "GK" }),
+    room("hal", 50000, 50010), room("gang", 50010, 50020), room("zaal", 50020, 50030), room("schuur", 50100, 50110),
+    // buiten -> hal, hal -> gang met een deur; gang -> zaal is een open gat (geen deur).
+    doc("doorway", "doorway:poort", { doorwayId: "poort", displayName: "Poort", x: 10, z: 10, bX: 50002, bZ: 5 }),
+    doc("doorway", "doorway:binnen", { doorwayId: "binnen", displayName: "Binnendeur", x: 50009, z: 5, bX: 50011, bZ: 5 })
+  ];
+  const compiled = compileCanonical(docs, {});
+  assert.deepEqual(compiled.errors, []);
+  const game = buildRuntimeWorld(JSON.parse(compiled.files["server.json"].text)).minimap.game;
+  const byId = Object.fromEntries(game.indoors.map((entry) => [entry.id, entry]));
+  assert.equal(byId.hal.group, byId.gang.group);
+  assert.equal(byId.gang.group, byId.zaal.group);
+  assert.notEqual(byId.schuur.group, byId.hal.group, "los gebouw");
+  assert.deepEqual(byId.gang.walk, ["zaal"], "open gat: zo doorlopen");
+  assert.deepEqual(byId.hal.walk, [], "met een deur ertussen geen open gat");
+  const rooms = game.indoorDoors.map((door) => [door.a.room, door.b.room].join(">")).sort();
+  assert.deepEqual(rooms, [">hal", "hal>gang"]);
+});

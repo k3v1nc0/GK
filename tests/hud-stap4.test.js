@@ -254,7 +254,7 @@ test("Kaartinstellingen: mist en afstand van questpijlen volgen de editor, ook b
   assert.equal(authoredMap.presentation.bigSpanMeters, 500);
   assert.equal(authoredMap.presentation.bigShowMarkerNames, true);
   assert.deepEqual(authoredMap.presentation.styles.npc, {
-    label: "Bewoners", color: "#123456", shape: "triangle", showMini: false, showBig: true, size: 1.5, namesMini: false, namesBig: false, edgeMini: true
+    label: "Bewoners", color: "#123456", shape: "triangle", showMini: false, showBig: true, size: 1.5, namesMini: false, namesBig: false, edgeMini: true, door: false
   });
   assert.equal(authoredMap.fogOfWar.fogColor, "#112233");
 

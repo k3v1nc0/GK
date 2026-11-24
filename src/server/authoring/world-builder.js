@@ -18,7 +18,7 @@ import { economyValues } from "../../shared/authoring/kinds/economy.js";
 import { tradeValues } from "../../shared/authoring/kinds/trade.js";
 import { chatValues } from "../../shared/authoring/kinds/chat.js";
 import { areaBoundsMm, areaContains, areaOutlineMeters } from "../../../apps/web/public/shared/spatial.js";
-import { outsidePointsByArea } from "../runtime/doorway-runtime.js";
+import { DOORWAY_NEAR_M, outsidePointsByArea } from "../runtime/doorway-runtime.js";
 import { heightfieldForWorld } from "../../../apps/web/public/shared/movement-kernel.js";
 import { normalizeTerrainWater, terrainHeightAt, terrainSlopeDegAt, terrainUnderWater, TERRAIN_CHUNK_METERS } from "../../../apps/web/public/shared/terrain.js";
 
@@ -509,7 +509,7 @@ function indoorMap(section, doorways) {
     if (!outline || outline.length < 3) continue;
     indoor.set(area.areaId, { id: area.areaId, name: String(area.displayName || "").trim().slice(0, 40), points: outline, out: null, in: null });
   }
-  if (!indoor.size) return [];
+  if (!indoor.size) return { rooms: [], doors: [] };
   const areaIdAt = (x, z) => smallestAreaAt(section, x, z)?.area?.areaId || null;
   const doors = (doorways || []).filter((door) => door && door.a && door.b).map((door) => ({ id: door.doorwayId, a: door.a, b: door.b, arriveMeters: 0 }));
   const outside = outsidePointsByArea(doors, new Set(indoor.keys()), areaIdAt);
@@ -526,7 +526,77 @@ function indoorMap(section, doorways) {
     const point = outside.get(areaId);
     if (point) entry.out = { x: Number(point.x) || 0, z: Number(point.z) || 0 };
   }
-  return Array.from(indoor.values());
+  // Kevin 24-11: elke kamer is een eigen deelgebied. Kamers die tegen elkaar liggen (of met een deur vlakbij verbonden zijn)
+  // horen bij één gebouw (group): de minimap laat binnen het hele gebouw zien. walk = buurkamers zonder deur ertussen
+  // (open gat in de muur), daar loop je zo naartoe.
+  const list = Array.from(indoor.values());
+  const roomAt = (x, z) => {
+    let best = null;
+    for (const entry of list) {
+      if (!pointInOutline(entry.points, Number(x), Number(z))) continue;
+      const size = outlineSize(entry.points);
+      if (!best || size < best.size) best = { entry, size };
+    }
+    return best ? best.entry.id : null;
+  };
+  const parent = new Map(list.map((entry) => [entry.id, entry.id]));
+  const find = (id) => { while (parent.get(id) !== id) id = parent.get(id); return id; };
+  const join = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent.set(ra < rb ? rb : ra, ra < rb ? ra : rb); };
+  const doorPairs = new Set();
+  const doorList = [];
+  for (const door of doors) {
+    const ax = Number(door.a.x) || 0, az = Number(door.a.z) || 0, bx = Number(door.b.x) || 0, bz = Number(door.b.z) || 0;
+    const roomA = roomAt(ax, az), roomB = roomAt(bx, bz);
+    if (roomA === roomB || (!roomA && !roomB)) continue;
+    doorList.push({ a: { x: ax, z: az, room: roomA }, b: { x: bx, z: bz, room: roomB } });
+    if (roomA && roomB) {
+      doorPairs.add(roomA + "|" + roomB).add(roomB + "|" + roomA);
+      if (Math.hypot(ax - bx, az - bz) <= DOORWAY_NEAR_M) join(roomA, roomB);
+    }
+  }
+  for (let i = 0; i < list.length; i += 1) {
+    list[i].walk = [];
+    for (let j = 0; j < i; j += 1) {
+      if (outlineDistance(list[i].points, list[j].points) > 1.5) continue;
+      join(list[i].id, list[j].id);
+      if (!doorPairs.has(list[i].id + "|" + list[j].id)) { list[i].walk.push(list[j].id); list[j].walk.push(list[i].id); }
+    }
+  }
+  for (const entry of list) entry.group = find(entry.id);
+  return { rooms: list, doors: doorList };
+}
+function indoorMinimap(section, doorways) {
+  const map = indoorMap(section, doorways);
+  return { indoors: map.rooms, indoorDoors: map.doors };
+}
+// Punten [[x, z]] in meters.
+function pointInOutline(points, x, z) {
+  let inside = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i, i += 1) {
+    const a = points[i], b = points[j];
+    if ((a[1] > z) !== (b[1] > z) && x < ((b[0] - a[0]) * (z - a[1])) / (b[1] - a[1]) + a[0]) inside = !inside;
+  }
+  return inside;
+}
+function outlineSize(points) {
+  const xs = points.map((p) => p[0]), zs = points.map((p) => p[1]);
+  return (Math.max(...xs) - Math.min(...xs)) * (Math.max(...zs) - Math.min(...zs));
+}
+function segmentPointDistance(p, a, b) {
+  const dx = b[0] - a[0], dz = b[1] - a[1];
+  const t = dx || dz ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / (dx * dx + dz * dz))) : 0;
+  return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dz));
+}
+// Kleinste afstand tussen twee vormen (0 als ze overlappen).
+function outlineDistance(left, right) {
+  if (left.some((p) => pointInOutline(right, p[0], p[1])) || right.some((p) => pointInOutline(left, p[0], p[1]))) return 0;
+  let best = Infinity;
+  for (const [one, two] of [[left, right], [right, left]]) {
+    for (const p of one) {
+      for (let i = 0; i < two.length; i += 1) best = Math.min(best, segmentPointDistance(p, two[i], two[(i + 1) % two.length]));
+    }
+  }
+  return best;
 }
 // Getal uit Game-scherm (0 is ook een geldige keuze), anders de standaard; begrensd tot 0..max.
 function fogPercent(value, fallback, max = 100) {
@@ -1048,7 +1118,9 @@ function withGame(world, source, options) {
       // Kevin 8-11: namen naast de iconen per soort (de oude schakelaar "alle namen" blijft ook werken).
       namesMini: hud["map" + key + "NamesMini"] === true,
       namesBig: hud["map" + key + "NamesBig"] === true,
-      edgeMini: hud["map" + key + "EdgeMini"] !== undefined ? hud["map" + key + "EdgeMini"] === true : fallback.edgeMini === true
+      edgeMini: hud["map" + key + "EdgeMini"] !== undefined ? hud["map" + key + "EdgeMini"] === true : fallback.edgeMini === true,
+      // Kevin 24-11: in een andere ruimte (binnen/buiten) het icoon bij de deur.
+      door: hud["map" + key + "Door"] !== undefined ? hud["map" + key + "Door"] === true : fallback.door === true
     };
   };
   const mapStyles = {
@@ -1058,13 +1130,13 @@ function withGame(world, source, options) {
     resource: mapStyle("Resource", { label: "Grondstoffen", color: "#63d65f", shape: "dot" }),
     pickup: mapStyle("Pickup", { label: "Oppakken", color: "#8fe3ff", shape: "dot" }),
     player: mapStyle("Player", { label: "Spelers", color: "#4da3ff", shape: "dot" }),
-    party: mapStyle("Party", { label: "Groepsleden", color: "#5ee07a", shape: "dot" }),
+    party: mapStyle("Party", { label: "Groepsleden", color: "#5ee07a", shape: "dot", door: true }),
     portal: mapStyle("Portal", { label: "Portals", color: "#c77dff", shape: "portal" }),
     portal_locked: mapStyle("PortalLocked", { label: "Portal: nog niet vrij", color: "#8a7d99", shape: "portal" }),
-    questgiver_available: mapStyle("QuestgiverAvailable", { label: "Questgever: quest te halen", color: "#ffe08a", shape: "star", edgeMini: true }),
+    questgiver_available: mapStyle("QuestgiverAvailable", { label: "Questgever: quest te halen", color: "#ffe08a", shape: "star", edgeMini: true, door: true }),
     questgiver: mapStyle("Questgiver", { label: "Questgever: geen nieuwe quest", color: "#d4a84a", shape: "star" }),
-    quest: mapStyle("Quest", { label: "Quest-doel", color: "#ffb020", shape: "star", edgeMini: true }),
-    pin: mapStyle("Pin", { label: "Jouw pin", color: "#ff4fd8", shape: "pin", edgeMini: true })
+    quest: mapStyle("Quest", { label: "Quest-doel", color: "#ffb020", shape: "star", edgeMini: true, door: true }),
+    pin: mapStyle("Pin", { label: "Jouw pin", color: "#ff4fd8", shape: "pin", edgeMini: true, door: true })
   };
   const mapDefaultZoom = { near: 0, normal: 1, far: 2 }[hud.mapMiniDefaultZoom] ?? 1;
   const mapPresentation = {
@@ -1170,11 +1242,13 @@ function withGame(world, source, options) {
     terrain: Object.assign({}, world.terrain || {}, { waterWalk: game?.waterWalk || null }),
     // Stap 4 (HUD): fog of war op de minimap. De server onthoudt per speler welke vakjes van 8 m ontdekt zijn.
     minimap: editor ? world.minimap : Object.assign({}, world.minimap || {}, { game: Object.assign({}, world.minimap?.game || {}, {
-      enabled: true, sourceMinimapId: "world", areaLabels: areaLabels(source.world), indoors: indoorMap(source.world, game?.doorways || []),
+      enabled: true, sourceMinimapId: "world", areaLabels: areaLabels(source.world), ...indoorMinimap(source.world, game?.doorways || []),
       clickToMove: hud.mapMiniClickToMove !== false,
       questArrowDistanceMeters: fogPercent(hud.questArrowDistanceMeters, 200, 2000),
       presentation: mapPresentation,
       fogOfWar: { enabled: hud.fogOfWar !== false, cellSize: FOG_CELL_M, revealRadius: Math.max(1, Math.min(64, Math.round((Number(hud.fogRevealMeters) || 40) / FOG_CELL_M))),
+        // Kevin 24-11: binnen fijne vakjes van 1 m, eigen zicht, alleen in de kamer waar je bent.
+        indoor: { cellSize: 1, revealRadius: Math.max(1, Math.min(40, Math.round(Number(hud.fogRevealIndoorMeters) || 6))) },
         fogColor: mapPresentation.fogColor, fogOpacity: fogPercent(hud.fogDarkness, 100) / 100, fogFeatherRadius: fogPercent(hud.fogFadeMeters, 8, 64) / FOG_CELL_M,
         revealShape: "circle", saveIntervalMs: 1000, movementThreshold: 1 }
     }) })

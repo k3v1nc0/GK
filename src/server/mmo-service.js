@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { buildRuntimeWorld } from "./authoring/world-builder.js";
-import { createSpatialIndex, metersToMm, resolveMembership } from "../../apps/web/public/shared/spatial.js";
+import { areaBoundsMm, areaContains, cellKeyForPointMm, createSpatialIndex, metersToMm, resolveMembership } from "../../apps/web/public/shared/spatial.js";
 import { doorwaysOf, indoorSettingsOf, outsidePointsByArea } from "./runtime/doorway-runtime.js";
 import { buildWalkabilityIndex, groundHeightAt, localMovementSource, resolveMovement, solidCollisionEntriesForWorld, walkabilityForFlags } from "../../apps/web/public/shared/movement-kernel.js";
 import { mmoNetworkPresetValues } from "../shared/node-types.js";
@@ -301,8 +301,29 @@ function normalizeFogConfig(world) {
     revealShape: ["circle", "roundedCells", "hardCells"].includes(raw.revealShape) ? raw.revealShape : DEFAULT_FOG_CONFIG.revealShape,
     debugOverlay: raw.debugOverlay === true,
     mapLayer: fogMapLayerForMinimap(raw.mapLayer, world?.minimap?.game?.sourceMinimapId, cellSize),
-    heightThreshold: num(raw.heightThreshold ?? raw.revealHeight, DEFAULT_FOG_CONFIG.heightThreshold)
+    heightThreshold: num(raw.heightThreshold ?? raw.revealHeight, DEFAULT_FOG_CONFIG.heightThreshold),
+    // Kevin 24-11: binnen (deelgebied met 🏠 Binnen) vakjes van 1 m en een eigen zicht, alleen in de kamer waar je bent.
+    indoor: { cellSize: 1, revealRadius: clamp(Math.round(num(raw.indoor?.revealRadius, 6)), 1, 40) }
   };
+}
+// Eigen laag voor de mist binnen (vakjes van 1 m), los van de wereldkaart.
+function indoorFogLayer(config) {
+  return String(config?.mapLayer || DEFAULT_FOG_CONFIG.mapLayer) + ":indoor";
+}
+// De vakjes (1 m) binnen het zicht rond position, alleen als het midden in deze kamer ligt (niet door de muur).
+function indoorRevealCellKeys(area, position, radius) {
+  const keys = [];
+  const cx = Math.floor(num(position?.x, 0));
+  const cz = Math.floor(num(position?.z, 0));
+  const r = Math.max(1, Math.floor(num(radius, 6)));
+  const limit = (r + 0.35) * (r + 0.35);
+  for (let dz = -r; dz <= r; dz += 1) {
+    for (let dx = -r; dx <= r; dx += 1) {
+      if (dx * dx + dz * dz > limit) continue;
+      if (areaContains(area, Math.round((cx + dx + 0.5) * 1000), Math.round((cz + dz + 0.5) * 1000))) keys.push(fogCellKey(cx + dx, cz + dz));
+    }
+  }
+  return keys;
 }
 
 function fogMapLayerForMinimap(rawLayer, sourceMinimapId, cellSize) {
@@ -1452,6 +1473,9 @@ export class MmoService {
     const centerKey = fogCellKey(center.x, center.z);
     const force = options.force === true;
     const currentMs = nowMs();
+    // Kevin 24-11: binnen een eigen mist (vakjes van 1 m) die alleen in de kamer waar je bent weggaat.
+    const room = this.indoorFogAreaAt(position);
+    if (room) return this.processIndoorFog(profile, worldContext, position, room, config, runtime, force, currentMs, options);
     const previousCell = runtime.lastCellKey ? parseFogCellKey(runtime.lastCellKey) : null;
     const movedCells = previousCell
       ? Math.max(Math.abs(center.x - previousCell.x), Math.abs(center.z - previousCell.z))
@@ -1531,6 +1555,47 @@ export class MmoService {
     };
   }
 
+  // Het kleinste deelgebied met 🏠 Binnen op deze plek (meters), of null.
+  indoorFogAreaAt(position) {
+    const index = this.spatialIndex().index;
+    if (!index) return null;
+    const xMm = metersToMm(position?.x);
+    const zMm = metersToMm(position?.z);
+    if (!Number.isFinite(xMm) || !Number.isFinite(zMm)) return null;
+    let best = null;
+    let bestSize = Infinity;
+    for (const areaId of index.cells[cellKeyForPointMm(xMm, zMm)]?.areas || []) {
+      const area = index.areas.get(areaId);
+      if (area?.indoor !== true) continue;
+      try {
+        if (!areaContains(area, xMm, zMm)) continue;
+        const box = areaBoundsMm(area);
+        const size = (box.maxXMm - box.minXMm) * (box.maxZMm - box.minZMm);
+        if (size < bestSize) { best = area; bestSize = size; }
+      } catch { /* kapotte vorm */ }
+    }
+    return best;
+  }
+
+  processIndoorFog(profile, worldContext, position, room, config, runtime, force, currentMs, options) {
+    const layer = indoorFogLayer(config);
+    const key = Math.floor(num(position.x)) + ":" + Math.floor(num(position.z)) + "@" + room.areaId;
+    let inserted = [];
+    // Hooguit 4x per seconde, en alleen als je een vakje verder bent (of in een andere kamer).
+    if (force || (runtime.indoorKey !== key && currentMs - Number(runtime.indoorAtMs || 0) >= 250)) {
+      runtime.indoorKey = key;
+      runtime.indoorAtMs = currentMs;
+      inserted = this.insertFogDiscoveryCells(profile.id, worldContext.worldId, layer, indoorRevealCellKeys(room, position, config.indoor?.revealRadius), "movement", room.areaId);
+    }
+    const result = { ok: true, enabled: true, indoor: true, worldId: worldContext.worldId, playerId: profile.id, mapLayer: layer,
+      newlyDiscoveredCellKeys: inserted, discoveredCount: null, movementCellKey: key, areaReveals: [], config };
+    if (inserted.length && options.broadcast !== false && profile.user_id) {
+      const payload = Object.assign({ type: "fog:discovery" }, result);
+      this.broadcastToUser(profile.user_id, eventMessage("fog:discovery", payload, this.stampServerPayload(worldContext.worldId, payload)));
+    }
+    return result;
+  }
+
   getFogDiscoverySnapshot(req) {
     const sessionContext = this.getSessionContextFromRequest(req);
     this.authService.touchSession(sessionContext.session.id, false);
@@ -1556,6 +1621,7 @@ export class MmoService {
       config: config,
       discoveredCellKeys: cells,
       discoveredCount: cells.length,
+      indoorDiscoveredCellKeys: config.enabled ? this.listFogDiscoveryCells(profile.id, worldContext.worldId, indoorFogLayer(config)) : [],
       stateSemantics: {
         discovered: "persisted cells in discoveredCellKeys",
         currentlyVisible: "not implemented in NODE-02.5",
@@ -1573,7 +1639,8 @@ export class MmoService {
     const config = this.fogConfigForWorld(worldContext.world);
     const mapLayer = config.mapLayer || "overworld";
     if (payload?.reset === true) {
-      const deletedCount = this.clearFogDiscoveryCells(profile.id, worldContext.worldId, mapLayer);
+      const deletedCount = this.clearFogDiscoveryCells(profile.id, worldContext.worldId, mapLayer)
+        + this.clearFogDiscoveryCells(profile.id, worldContext.worldId, indoorFogLayer(config));
       return {
         ok: true,
         reset: true,
@@ -1599,7 +1666,7 @@ export class MmoService {
     const clientInserted = result.enabled === true
       ? this.insertFogDiscoveryCells(profile.id, worldContext.worldId, mapLayer, clientCellKeys, "client", null)
       : [];
-    const newlyDiscoveredCellKeys = Array.from(new Set([].concat(result.newlyDiscoveredCellKeys || [], clientInserted)));
+    const newlyDiscoveredCellKeys = Array.from(new Set([].concat(result.indoor ? [] : result.newlyDiscoveredCellKeys || [], clientInserted)));
     const discoveredCount = result.enabled === true
       ? this.countFogDiscoveryCells(profile.id, worldContext.worldId, mapLayer)
       : 0;
@@ -1619,6 +1686,7 @@ export class MmoService {
       this.broadcastToUser(profile.user_id, eventMessage("fog:discovery", eventPayload, this.stampServerPayload(worldContext.worldId, eventPayload)));
     }
     return Object.assign({}, result, {
+      mapLayer: mapLayer,
       newlyDiscoveredCellKeys: newlyDiscoveredCellKeys,
       discoveredCount: discoveredCount,
       discoveredCellKeys: payload?.includeAll === true && result.enabled

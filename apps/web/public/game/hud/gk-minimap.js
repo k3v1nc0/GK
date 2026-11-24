@@ -343,13 +343,181 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
   let baseWorld = null;
   let texture = null;
   let textureSrc = "";
-  // Kevin 24-11: sta je binnen (deelgebied met 🏠 Binnen), dan is de kaart alleen die ruimte (eigen tegels uit de bake),
-  // zonder mist. null = buiten: de hele wereld.
+  // Kevin 24-11: sta je binnen (deelgebied met 🏠 Binnen), dan is de kaart het hele gebouw (alle kamers, eigen tegels uit
+  // de bake) met een eigen mist van vakjes van 1 m: een kamer waar je nog niet was is zwart. null = buiten: de hele wereld.
   let indoorBox = null;
-  function setIndoor(box) {
+  let indoorRooms = [];
+  let indoorRoomsKey = "";
+  function setIndoor(box, rooms) {
     const next = box && [box.minX, box.maxX, box.minZ, box.maxZ].every(function (v) { return Number.isFinite(Number(v)); }) && box.maxX > box.minX && box.maxZ > box.minZ
       ? { minX: num(box.minX), maxX: num(box.maxX), minZ: num(box.minZ), maxZ: num(box.maxZ) } : null;
     indoorBox = next;
+    const list = next && Array.isArray(rooms) ? rooms.filter(function (room) { return room && room.id && Array.isArray(room.points) && room.points.length >= 3; }) : [];
+    const key = list.map(function (room) { return room.id; }).join("|");
+    if (key !== indoorRoomsKey) {
+      indoorRoomsKey = key;
+      indoorRooms = list;
+      if (indoorFog) indoorFogRooms();
+    }
+  }
+  function insidePoints(points, x, z) {
+    let inside = false;
+    for (let i = 0, j = points.length - 1; i < points.length; j = i, i += 1) {
+      const a = points[i], b = points[j];
+      if ((a[1] > z) !== (b[1] > z) && x < ((b[0] - a[0]) * (z - a[1])) / (b[1] - a[1]) + a[0]) inside = !inside;
+    }
+    return inside;
+  }
+
+  // ---- mist binnen: vakjes van 1 m; elk vakje hoort bij de kamer waar zijn midden in ligt en wordt alleen binnen die
+  // kamer uitgegumd (de mist gaat nooit door een muur). Buiten de kamers blijft het altijd donker.
+  let indoorFog = null;
+  function setIndoorFog(config) {
+    if (!config || !config.enabled) { indoorFog = null; return; }
+    if (!indoorFog) indoorFog = { cells: new Set(), roomOf: new Map(), seen: new Set(), canvas: null, boundsKey: "", dirty: true, pending: [], lastKey: "", stamp: null };
+    indoorFog.color = config.color || "#05070a";
+    indoorFog.opacity = Math.max(0, Math.min(1, num(config.opacity, 1)));
+    indoorFogRooms();
+  }
+  function indoorRoomOfCell(key) {
+    const parts = key.split(":");
+    const x = Number(parts[0]) + 0.5;
+    const z = Number(parts[1]) + 0.5;
+    for (const room of indoorRooms) if (insidePoints(room.points, x, z)) return room.id;
+    return "";
+  }
+  // Andere kamers (ander gebouw): bij elk vakje opnieuw uitzoeken in welke kamer het ligt.
+  function indoorFogRooms() {
+    indoorFog.roomOf = new Map();
+    indoorFog.seen = new Set();
+    for (const key of indoorFog.cells) indoorFogAssign(key);
+    indoorFog.pending = [];
+    indoorFog.dirty = true;
+  }
+  function indoorFogAssign(key) {
+    const room = indoorRoomOfCell(key);
+    if (!room) return;
+    indoorFog.roomOf.set(key, room);
+    indoorFog.seen.add(room);
+  }
+  function addIndoorFogCells(keys) {
+    if (!indoorFog) return false;
+    let added = false;
+    for (const key of Array.isArray(keys) ? keys : []) {
+      const text = String(key || "");
+      if (!/^-?\d+:-?\d+$/.test(text) || indoorFog.cells.has(text)) continue;
+      indoorFog.cells.add(text);
+      indoorFogAssign(text);
+      indoorFog.pending.push(text);
+      added = true;
+    }
+    return added;
+  }
+  // Direct zichtbaar rond de speler, alleen in de kamer waar je staat (de server bewaart het zelf ook).
+  function revealIndoor(x, z, radius, room) {
+    if (!indoorFog || !room || !Array.isArray(room.points)) return false;
+    const cx = Math.floor(num(x));
+    const cz = Math.floor(num(z));
+    const key = cx + ":" + cz + "@" + room.id;
+    if (key === indoorFog.lastKey) return false;
+    indoorFog.lastKey = key;
+    const r = Math.max(1, Math.floor(num(radius, 6)));
+    const limit = (r + 0.35) * (r + 0.35);
+    const keys = [];
+    for (let dz = -r; dz <= r; dz += 1) {
+      for (let dx = -r; dx <= r; dx += 1) {
+        if (dx * dx + dz * dz <= limit && insidePoints(room.points, cx + dx + 0.5, cz + dz + 0.5)) keys.push((cx + dx) + ":" + (cz + dz));
+      }
+    }
+    return addIndoorFogCells(keys);
+  }
+  // Ben je al eens in deze kamer geweest? (zonder mist: altijd ja)
+  function indoorRoomSeen(id) {
+    return !indoorFog || indoorFog.seen.has(id);
+  }
+  function indoorFogErase(g, keys) {
+    const f = indoorFog;
+    const px = f.px;
+    if (!f.stamp || f.stamp.px !== px) {
+      const core = px * 0.75;
+      const radius = core + px * 0.9;
+      const side = Math.ceil(radius * 2) + 2;
+      const canvas = document.createElement("canvas");
+      canvas.width = side;
+      canvas.height = side;
+      const sg = canvas.getContext("2d");
+      const mid = side / 2;
+      const gradient = sg.createRadialGradient(mid, mid, 0, mid, mid, radius);
+      gradient.addColorStop(0, "rgba(0,0,0,1)");
+      gradient.addColorStop(core / radius, "rgba(0,0,0,1)");
+      gradient.addColorStop(1, "rgba(0,0,0,0)");
+      sg.fillStyle = gradient;
+      sg.beginPath();
+      sg.arc(mid, mid, radius, 0, Math.PI * 2);
+      sg.fill();
+      f.stamp = { canvas, mid, px };
+    }
+    const byRoom = new Map();
+    for (const key of keys) {
+      const room = f.roomOf.get(key);
+      if (!room) continue;
+      if (!byRoom.has(room)) byRoom.set(room, []);
+      byRoom.get(room).push(key);
+    }
+    g.globalCompositeOperation = "destination-out";
+    for (const room of indoorRooms) {
+      const list = byRoom.get(room.id);
+      if (!list) continue;
+      g.save();
+      g.beginPath();
+      room.points.forEach(function (p, index) {
+        const x = (num(p[0]) - f.minX) * px;
+        const y = (num(p[1]) - f.minZ) * px;
+        if (index) g.lineTo(x, y); else g.moveTo(x, y);
+      });
+      g.closePath();
+      g.clip();
+      for (const key of list) {
+        const parts = key.split(":");
+        g.drawImage(f.stamp.canvas, (Number(parts[0]) + 0.5 - f.minX) * px - f.stamp.mid, (Number(parts[1]) + 0.5 - f.minZ) * px - f.stamp.mid);
+      }
+      g.restore();
+    }
+    g.globalCompositeOperation = "source-over";
+  }
+  function indoorFogFor(bounds) {
+    const f = indoorFog;
+    if (!f || !bounds) return null;
+    const boundsKey = [bounds.minX, bounds.maxX, bounds.minZ, bounds.maxZ].join(",");
+    if (f.boundsKey !== boundsKey || !f.canvas) {
+      const w = Math.max(1, bounds.maxX - bounds.minX);
+      const h = Math.max(1, bounds.maxZ - bounds.minZ);
+      // Hooguit 8 pixels per meter en niet groter dan ±1600 pixels (oude laptop).
+      f.px = Math.max(1, Math.min(8, Math.floor(1600 / Math.max(w, h))));
+      f.minX = bounds.minX;
+      f.minZ = bounds.minZ;
+      f.w = w;
+      f.h = h;
+      f.canvas = document.createElement("canvas");
+      f.canvas.width = Math.ceil(w * f.px);
+      f.canvas.height = Math.ceil(h * f.px);
+      f.boundsKey = boundsKey;
+      f.dirty = true;
+    }
+    const g = f.canvas.getContext("2d");
+    if (f.dirty) {
+      g.globalCompositeOperation = "source-over";
+      g.clearRect(0, 0, f.canvas.width, f.canvas.height);
+      g.fillStyle = f.color;
+      g.fillRect(0, 0, f.canvas.width, f.canvas.height);
+      indoorFogErase(g, f.cells);
+      f.pending = [];
+      f.dirty = false;
+    } else if (f.pending.length) {
+      indoorFogErase(g, f.pending);
+      f.pending = [];
+    }
+    return f;
   }
 
   // ---- kaarttegels (gemaakt bij SAVE TO GAME): puzzelstukjes in lagen; laag 0 is het scherpst ----
@@ -516,7 +684,8 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
     return addFogCells(keys);
   }
   function discovered(x, z) {
-    if (!fog || indoorBox) return true;
+    if (indoorBox) return !indoorFog || indoorFog.cells.has(Math.floor(num(x)) + ":" + Math.floor(num(z)));
+    if (!fog) return true;
     return fog.cells.has(Math.floor(num(x) / fog.size) + ":" + Math.floor(num(z) / fog.size));
   }
   // Het gum-rondje: helemaal weg tot net over de hoeken van het vakje, daarna zacht uitlopend over feather vakjes.
@@ -635,7 +804,16 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
       }
     }
     g.restore();
-    const mist = indoorBox ? null : fogFor(bounds);
+    if (indoorBox) {
+      const inner = indoorFogFor(bounds);
+      if (inner) {
+        g.globalAlpha = inner.opacity;
+        g.drawImage(inner.canvas, 0, 0, inner.canvas.width, inner.canvas.height, inner.minX, inner.minZ, inner.canvas.width / inner.px, inner.canvas.height / inner.px);
+        g.globalAlpha = 1;
+      }
+      return;
+    }
+    const mist = fogFor(bounds);
     if (mist) {
       g.globalAlpha = mist.opacity;
       g.drawImage(mist.canvas, 0, 0, mist.canvas.width, mist.canvas.height, mist.minCX * mist.size, mist.minCZ * mist.size, mist.cw * mist.size, mist.ch * mist.size);
@@ -671,7 +849,8 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
     g.strokeStyle = "rgba(0,0,0,0.7)";
     g.fillStyle = color || "#f3e2b3";
     for (const area of areas) {
-      if (!area || !area.name || !discovered(area.x, area.z)) continue;
+      // Binnen: de naam van een kamer zodra je er geweest bent.
+      if (!area || !area.name || !(indoorBox && indoorFog && indoorFog.seen.has(area.id)) && !discovered(area.x, area.z)) continue;
       const p = toScreen(num(area.x), num(area.z));
       if (!inside(p)) continue;
       g.strokeText(area.name, p.x, p.y);
@@ -962,5 +1141,5 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
     );
   }
 
-  return { draw, drawFull, setTiles, setFog, setIndoor, addFogCells, revealAround, discovered, worldAtClientPoint, invalidate() { baseWorld = null; } };
+  return { draw, drawFull, setTiles, setFog, setIndoor, setIndoorFog, addIndoorFogCells, revealIndoor, indoorRoomSeen, addFogCells, revealAround, discovered, worldAtClientPoint, invalidate() { baseWorld = null; } };
 }

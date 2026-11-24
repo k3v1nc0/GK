@@ -96,6 +96,7 @@ const MAP_ICON_LABELS = Object.freeze({ dot: "Rondje", diamond: "Ruit", square: 
 const MAP_START_GROUP = "🗺️ Kaart: begin en vorm";
 const MAP_SIZE_GROUP = "📐 Kaart: maten en tekst";
 const MAP_COLOR_GROUP = "🎨 Kaart: algemene kleuren";
+const MAP_DOOR_DEFAULTS = new Set(["Party", "QuestgiverAvailable", "Quest", "Pin"]);
 const mapLegendFields = (key, label, color, shape, mini = true, big = true, names = false, edgeMini = false) => {
   const group = "📍 Legenda: " + label;
   const title = label.replace(/:.*$/, "");
@@ -121,6 +122,11 @@ const mapLegendFields = (key, label, color, shape, mini = true, big = true, name
   };
   if (key !== "Self") fields["map" + key + "EdgeMini"] = toggle("Op rand van minimap", "↗️", edgeMini, "instellingen",
     help("Blijft het icoon aan de rand van de minimap zichtbaar wanneer de echte plek buiten beeld valt?", edgeMini ? "Aan: het icoon blijft de richting aanwijzen." : "Uit: buiten beeld is het icoon verborgen.", "Je wilt deze soort ook buiten beeld kunnen volgen → zet aan."), { group });
+  // Kevin 24-11: staat het ergens anders (binnen in een gebouw, of buiten terwijl jij binnen bent), dan het icoon bij de deur waar je heen moet.
+  const door = MAP_DOOR_DEFAULTS.has(key);
+  if (key !== "Self") fields["map" + key + "Door"] = toggle("Op deur", "🚪", door, "instellingen",
+    help("Staat dit in een andere ruimte dan jij (binnen in een gebouw, of buiten terwijl jij binnen bent)? Dan staat het icoon op de minimap bij de deur waar je heen moet.",
+      door ? "Aan: je ziet bij welke deur je moet zijn." : "Uit: in een andere ruimte is het icoon verborgen.", "De deur staat vol met icoontjes → zet dit uit bij minder belangrijke soorten."), { group });
   return fields;
 };
 const MAP_LEGEND_FIELDS = Object.freeze(Object.assign({},
@@ -673,6 +679,10 @@ export const GAME_KINDS = {
       fogOfWar: toggle("Mist op de kaart", "🌫️", true, "instellingen", help("Fog of war: op de minimap en de grote kaart is alles donker tot je er geweest bent. Ontdekte plekken blijven bewaard.", "Aan voor een avontuurgevoel.", "Spelers zien meteen de hele kaart → zet aan."), { more: true }),
       fogRevealMeters: int("Zicht in de mist", "👁️", 40, 8, 400, "instellingen", { range: [10, 150], more: true },
         help("Hoe ver om je heen de mist weggaat terwijl je loopt (in meters).", "30-60 m.", "De kaart gaat te langzaam open → hoger.")),
+      // Kevin 24-11: binnen een eigen, kleiner zicht; de mist gaat alleen weg in de kamer waar je bent (niet door de muren).
+      fogRevealIndoorMeters: int("Zicht in de mist (binnen)", "🏠", 6, 1, 40, "instellingen", { range: [1, 20], unit: "m", more: true },
+        help("Hoe ver om je heen de mist binnen weggaat terwijl je loopt (in meters). Alleen in de kamer waar je bent, nooit door een muur heen.",
+          "3 tot 8 m voor kleine kamers; groter = een kamer is meteen helemaal te zien.", "Een kamer gaat te langzaam open → hoger. Je ziet een grote hal meteen helemaal → lager.")),
       questArrowDistanceMeters: int("Questpijl binnen afstand", "⭐", 200, 0, 2000, "instellingen", { step: 10, range: [0, 2000], unit: "m", more: true },
         help("Binnen deze afstand tot een questgever of quest-doel verschijnt de richtingspijl aan de rand van de minimap of grote kaart als het punt buiten beeld ligt. De queststerren blijven zichtbaar volgens hun eigen mistregels.", "200 m. 0 m = geen questpijlen; de sterren blijven op de kaart.", "Questpijlen verschijnen te vroeg → lager. Je wilt eerder de richting zien → hoger.")),
       fogDarkness: int("Donkerte van de mist", "🌑", 100, 0, 100, "instellingen", { range: [0, 100], more: true },
@@ -697,7 +707,7 @@ export const GAME_KINDS = {
 // De kaartvelden staan hierboven bij elkaar met de andere HUD-presentatievelden,
 // maar vormen in de editor bewust een zelfstandige instellingenpagina.
 for (const key of Object.keys(GAME_KINDS.hud_settings.fields)) {
-  if (!key.startsWith("map") && !["fogOfWar", "fogRevealMeters", "questArrowDistanceMeters", "fogDarkness", "fogFadeMeters"].includes(key)) continue;
+  if (!key.startsWith("map") && !["fogOfWar", "fogRevealMeters", "fogRevealIndoorMeters", "questArrowDistanceMeters", "fogDarkness", "fogFadeMeters"].includes(key)) continue;
   GAME_KINDS.minimap_settings.fields[key] = GAME_KINDS.hud_settings.fields[key];
   delete GAME_KINDS.hud_settings.fields[key];
 }

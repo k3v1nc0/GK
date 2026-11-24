@@ -6,7 +6,7 @@
 //   herlaad) sta je weer precies waar je was: zelfde paneel, tabblad, filter, item en scrollplek.
 // Dit bestand tekent alleen. Alle spelregels blijven op de server; game.js geeft de data en de acties (api).
 import { ICON_PATHS } from "./gk-icon-paths.js?v=20261110-fase5b";
-import { createHudMinimap } from "./gk-minimap.js?v=20261124-binnen1";
+import { createHudMinimap } from "./gk-minimap.js?v=20261124-binnen2";
 import { formatDuration } from "../../shared/effect-math.js?v=20261102-heal2";
 import { labelOffset } from "./label-placement.js?v=20261118-label-lock1";
 
@@ -118,13 +118,13 @@ const MAP_STYLE_DEFAULTS = Object.freeze({
   resource: { label: "Grondstoffen", color: "#63d65f", shape: "dot" },
   pickup: { label: "Oppakken", color: "#8fe3ff", shape: "dot" },
   player: { label: "Spelers", color: "#4da3ff", shape: "dot" },
-  party: { label: "Groepsleden", color: "#5ee07a", shape: "dot" },
+  party: { label: "Groepsleden", color: "#5ee07a", shape: "dot", door: true },
   portal: { label: "Portals", color: "#c77dff", shape: "portal" },
   portal_locked: { label: "Portal: nog niet vrij", color: "#8a7d99", shape: "portal" },
-  questgiver_available: { label: "Questgever: quest te halen", color: "#ffe08a", shape: "star", edgeMini: true },
+  questgiver_available: { label: "Questgever: quest te halen", color: "#ffe08a", shape: "star", edgeMini: true, door: true },
   questgiver: { label: "Questgever: geen nieuwe quest", color: "#d4a84a", shape: "star" },
-  quest: { label: "Quest-doel", color: "#ffb020", shape: "star", edgeMini: true },
-  pin: { label: "Jouw pin", color: "#ff4fd8", shape: "pin", edgeMini: true }
+  quest: { label: "Quest-doel", color: "#ffb020", shape: "star", edgeMini: true, door: true },
+  pin: { label: "Jouw pin", color: "#ff4fd8", shape: "pin", edgeMini: true, door: true }
 });
 const MAP_DEFAULTS = { span: 160, bigIcon: 0.8, miniIcon: 1, bigText: 1, miniText: 1, rotate: false, pin: null, big: {}, mini: { pickup: false, resource: false } };
 // Alles wat op de kaarten kan staan: [soort, meervoud (legenda), enkelvoud (naamlabel)].
@@ -148,7 +148,9 @@ function mapPresentation(raw) {
       size: Math.max(0.3, Math.min(3, num(source.size, 1))),
       namesMini: source.namesMini === true,
       namesBig: source.namesBig === true,
-      edgeMini: source.edgeMini !== undefined ? source.edgeMini === true : fallback.edgeMini === true
+      edgeMini: source.edgeMini !== undefined ? source.edgeMini === true : fallback.edgeMini === true,
+      // Kevin 24-11: in een andere ruimte (binnen/buiten, kamer verderop) het icoon bij de deur waar je heen moet.
+      door: source.door !== undefined ? source.door === true : fallback.door === true
     };
     big[kind] = source.showBig !== false;
     mini[kind] = source.showMini !== false;
@@ -4747,8 +4749,7 @@ export function createGkHud(api) {
     const position = live.position;
     if (!position) return;
     const where = mapHere(live);
-    minimap.setIndoor(indoorBoxOf(where.here));
-    if (fogConfig && !where.here) minimap.revealAround(position.x, position.z, fogConfig.revealRadius);
+    mapIndoorView(where, position);
     const markers = mapMarkers(live, where);
     const questTarget = mapQuestTarget(where);
     const sm = store.map;
@@ -4758,7 +4759,7 @@ export function createGkHud(api) {
     // Meedraaien = jouw kijkrichting staat altijd boven (zoals in WoW); uit = noorden boven.
     const facing = num(live.facingDeg) * Math.PI / 180;
     const north = minimap.draw({ world: live.world, center: position, facingDeg: live.facingDeg, forward: sm.rotate === false ? { x: 0, z: -1 } : { x: Math.sin(facing), z: Math.cos(facing) },
-      radius: zoom, markers, quest: questTarget, questArea: mapQuestArea(), questMarks: mapQuestMarks(live, where), pin: sm.allowPin ? sm.pin : null,
+      radius: zoom, markers, quest: questTarget, questArea: mapQuestArea(), questMarks: mapQuestMarks(live, where), pin: sm.allowPin ? mapPin(where) : null,
       show: sm.mini, iconScale: sm.miniIcon, areas: areaLabels(live), textScale: sm.miniText, styles: sm.styles, shape: sm.shape,
       fixedIconSize: sm.miniFixedIconSize, iconReferenceSpan: sm.zoomLevels[Math.max(0, Math.min(sm.zoomLevels.length - 1, sm.defaultZoomIndex))],
       areaColor: sm.area.color, showNames: sm.miniShowMarkerNames, nameFontPx: sm.miniMarkerNameSizePx,
@@ -4785,11 +4786,51 @@ export function createGkHud(api) {
     return Array.isArray(list) ? list : [];
   }
   // ---- Kevin 24-11: binnenruimtes op de kaart ----
-  // Buiten: wat binnen is (teamgenoot, quest, NPC) staat bij de deur buiten. Binnen: de kaart is alleen die ruimte en
-  // wat buiten (of in een ander huis) is, staat bij de deur binnen.
-  function indoorList(live) {
-    const list = live.world?.minimap?.game?.indoors;
-    return Array.isArray(list) ? list : [];
+  // Elke kamer is een deelgebied met 🏠 Binnen; kamers die tegen elkaar liggen horen bij één gebouw (group). Binnen is de
+  // kaart het hele gebouw. Wat in een andere ruimte is (buiten, een ander gebouw of een kamer achter een deur waar je nog niet
+  // was) staat bij de deur waar je heen moet; per soort aan of uit met het vinkje "Op deur".
+  const INDOOR_OUT = "";
+  let indoorCache = null;
+  function indoorData(live) {
+    const game = live.world?.minimap?.game || null;
+    if (indoorCache && indoorCache.game === game) return indoorCache;
+    const boxOf = function (points, pad) {
+      const xs = points.map(function (p) { return num(p[0]); });
+      const zs = points.map(function (p) { return num(p[1]); });
+      return { minX: Math.min.apply(null, xs) - pad, maxX: Math.max.apply(null, xs) + pad, minZ: Math.min.apply(null, zs) - pad, maxZ: Math.max.apply(null, zs) + pad };
+    };
+    // Kleinste kamer eerst: ligt een kamer in een groter binnen-vlak, dan telt de kamer.
+    const list = (Array.isArray(game?.indoors) ? game.indoors : []).filter(function (entry) {
+      return entry && entry.id && Array.isArray(entry.points) && entry.points.length >= 3;
+    }).map(function (entry) {
+      const box = boxOf(entry.points, 0);
+      return Object.assign({}, entry, { size: (box.maxX - box.minX) * (box.maxZ - box.minZ) });
+    }).sort(function (a, b) { return a.size - b.size; });
+    const byId = new Map(list.map(function (entry) { return [entry.id, entry]; }));
+    const groups = new Map();
+    for (const entry of list) {
+      const id = entry.group || entry.id;
+      if (!groups.has(id)) groups.set(id, { id, rooms: [], box: null });
+      groups.get(id).rooms.push(entry);
+    }
+    for (const group of groups.values()) group.box = boxOf([].concat.apply([], group.rooms.map(function (room) { return room.points; })), 3);
+    // Ruimtes: een kamer (id) of buiten (""). Een deur kost 1 stap, een open gat naar de buurkamer 0.
+    const links = new Map();
+    const link = function (from, to, cost, spot) {
+      if (!links.has(from)) links.set(from, []);
+      links.get(from).push({ to, cost, spot });
+    };
+    for (const door of Array.isArray(game?.indoorDoors) ? game.indoorDoors : []) {
+      if (!door?.a || !door?.b) continue;
+      const ra = byId.has(door.a.room) ? door.a.room : INDOOR_OUT;
+      const rb = byId.has(door.b.room) ? door.b.room : INDOOR_OUT;
+      if (ra === rb) continue;
+      link(ra, rb, 1, { x: num(door.a.x), z: num(door.a.z) });
+      link(rb, ra, 1, { x: num(door.b.x), z: num(door.b.z) });
+    }
+    for (const entry of list) for (const other of Array.isArray(entry.walk) ? entry.walk : []) if (byId.has(other)) link(entry.id, other, 0, null);
+    indoorCache = { game, list, byId, groups, links, dist: new Map(), walk: new Map() };
+    return indoorCache;
   }
   function insidePoints(points, x, z) {
     let inside = false;
@@ -4801,33 +4842,101 @@ export function createGkHud(api) {
   }
   function indoorAt(list, x, z) {
     if (!list.length || !Number.isFinite(Number(x)) || !Number.isFinite(Number(z))) return null;
-    for (const entry of list) if (Array.isArray(entry?.points) && entry.points.length >= 3 && insidePoints(entry.points, num(x), num(z))) return entry;
+    for (const entry of list) if (insidePoints(entry.points, num(x), num(z))) return entry;
     return null;
   }
-  function indoorBoxOf(entry) {
-    if (!entry) return null;
-    const xs = entry.points.map(function (p) { return num(p[0]); });
-    const zs = entry.points.map(function (p) { return num(p[1]); });
-    const pad = 3;
-    return { minX: Math.min.apply(null, xs) - pad, maxX: Math.max.apply(null, xs) + pad, minZ: Math.min.apply(null, zs) - pad, maxZ: Math.max.apply(null, zs) + pad };
-  }
-  // Waar iets op de kaart staat, gezien vanaf waar jij bent (here = jouw binnenruimte of null).
-  function mapPlace(list, here, x, z) {
-    if (!list.length) return null;
-    const at = indoorAt(list, x, z);
-    if (here) {
-      if (at && at.id === here.id) return null;
-      return here.in ? { x: num(here.in.x), z: num(here.in.z) } : null;
+  // Hoeveel deuren elke ruimte van ruimte "to" af ligt (open gaten tellen niet).
+  function indoorDist(d, to) {
+    if (d.dist.has(to)) return d.dist.get(to);
+    const dist = new Map([[to, 0]]);
+    const queue = [to];
+    while (queue.length) {
+      const node = queue.shift();
+      const base = dist.get(node);
+      for (const edge of d.links.get(node) || []) {
+        const next = base + edge.cost;
+        if (dist.has(edge.to) && dist.get(edge.to) <= next) continue;
+        dist.set(edge.to, next);
+        if (edge.cost) queue.push(edge.to); else queue.unshift(edge.to);
+      }
     }
-    return at && at.out ? { x: num(at.out.x), z: num(at.out.z) } : null;
+    d.dist.set(to, dist);
+    return dist;
+  }
+  // Alle kamers waar je vanaf "from" zonder deur komt.
+  function indoorWalk(d, from) {
+    if (d.walk.has(from)) return d.walk.get(from);
+    const area = new Set([from]);
+    const queue = [from];
+    while (queue.length) {
+      for (const edge of d.links.get(queue.shift()) || []) {
+        if (edge.cost || area.has(edge.to)) continue;
+        area.add(edge.to);
+        queue.push(edge.to);
+      }
+    }
+    d.walk.set(from, area);
+    return area;
+  }
+  // De deur waar je heen moet om van ruimte from naar ruimte to te komen: {x, z}; null = je loopt er zo heen; false = geen weg.
+  function indoorRoute(d, from, to, position) {
+    const dist = indoorDist(d, to);
+    const steps = dist.get(from);
+    if (steps === undefined) return false;
+    if (steps === 0) return null;
+    const area = indoorWalk(d, from);
+    let best = null;
+    let bestScore = Infinity;
+    for (const room of area) {
+      for (const edge of d.links.get(room) || []) {
+        if (!edge.cost || area.has(edge.to) || dist.get(edge.to) !== steps - 1) continue;
+        const score = position ? Math.hypot(edge.spot.x - num(position.x), edge.spot.z - num(position.z)) : 0;
+        if (score < bestScore) { best = edge.spot; bestScore = score; }
+      }
+    }
+    return best || false;
   }
   function mapHere(live) {
-    const list = indoorList(live);
-    const position = live.position;
-    return { list, here: position ? indoorAt(list, position.x, position.z) : null };
+    const data = indoorData(live);
+    const position = live.position || null;
+    const here = position ? indoorAt(data.list, position.x, position.z) : null;
+    return { data, list: data.list, here, group: here ? data.groups.get(here.group || here.id) || null : null, position };
+  }
+  // De kaart binnen = het hele gebouw; de mist gaat weg rond jou (buiten in de wereld, binnen alleen in jouw kamer).
+  function mapIndoorView(where, position) {
+    minimap.setIndoor(where.group ? where.group.box : null, where.group ? where.group.rooms : null);
+    if (!fogConfig) return;
+    if (!where.here) minimap.revealAround(position.x, position.z, fogConfig.revealRadius);
+    else if (fogConfig.indoor) minimap.revealIndoor(position.x, position.z, fogConfig.indoor.revealRadius, where.here);
+  }
+  function mapStyleOf(kind) {
+    return store.map?.styles?.[kind] || MAP_STYLE_DEFAULTS[kind] || {};
+  }
+  // Waar iets op de kaart staat, gezien vanaf jou: null = op zijn eigen plek, {x, z} = bij de deur waar je heen moet,
+  // false = niet op deze kaart.
+  function mapPlace(where, x, z, kind) {
+    return where.data.list.length ? mapPlaceRoom(where, indoorAt(where.data.list, x, z), kind) : null;
+  }
+  // Hetzelfde, voor iets in kamer "at" (null = buiten).
+  function mapPlaceRoom(where, at, kind) {
+    const d = where.data;
+    const here = where.here;
+    if (!here && !at) return null;
+    // In hetzelfde gebouw: in jouw kamer, of een kamer waar je al was, staat het gewoon op zijn plek.
+    if (here && at && at.group === here.group && (at.id === here.id || minimap.indoorRoomSeen(at.id))) return null;
+    const spot = indoorRoute(d, here ? here.id : INDOOR_OUT, at ? at.id : INDOOR_OUT, where.position);
+    if (spot === null) return null;
+    if (spot === false) return here ? false : null;
+    return mapStyleOf(kind).door === false ? false : spot;
   }
   function placedCopy(item, spot) {
-    return spot ? Object.assign({}, item, { x: spot.x, z: spot.z, atDoor: true }) : item;
+    return spot ? Object.assign({}, item, { x: spot.x, z: spot.z, atDoor: true, alwaysVisible: true }) : item;
+  }
+  function mapPin(where) {
+    const pin = store.map.pin;
+    if (!pin) return null;
+    const spot = mapPlace(where, pin.x, pin.z, "pin");
+    return spot === false ? null : spot || pin;
   }
   function markerKind(target) {
     const action = String(target.action || "");
@@ -4870,27 +4979,23 @@ export function createGkHud(api) {
     }
     if (!where.list.length) return markers;
     // Kevin 24-11: teamgenoten die de game niet ziet (ver weg in een binnenruimte, of buiten terwijl jij binnen bent):
-    // de server zegt in welke binnenruimte ze zijn; zij staan bij de deur.
+    // de server zegt in welke kamer ze zijn; zij staan bij de deur waar je heen moet (of midden in hun kamer).
     const seen = new Set((live.remotes || []).map(function (remote) { return String(remote.id || ""); }));
-    const byId = new Map(where.list.map(function (entry) { return [entry.id, entry]; }));
     for (const member of partyMates()) {
       if (!member.online || seen.has(String(member.id))) continue;
-      const room = member.indoorAreaId ? byId.get(member.indoorAreaId) || null : null;
-      let spot = null;
-      if (where.here) { if (!room || room.id !== where.here.id) spot = where.here.in; }
-      else if (room) spot = room.out;
-      if (spot) markers.push({ x: num(spot.x), z: num(spot.z), kind: "party", name: member.name || "", mateId: String(member.id), atDoor: true });
+      const room = member.indoorAreaId ? where.data.byId.get(member.indoorAreaId) || null : null;
+      if (!room && !where.here) continue;
+      const spot = mapPlaceRoom(where, room, "party");
+      if (spot === false || (!spot && !where.here)) continue;
+      const at = spot || { x: room.points.reduce(function (sum, p) { return sum + num(p[0]); }, 0) / room.points.length,
+        z: room.points.reduce(function (sum, p) { return sum + num(p[1]); }, 0) / room.points.length };
+      markers.push({ x: num(at.x), z: num(at.z), kind: "party", name: member.name || "", mateId: String(member.id), atDoor: true, alwaysVisible: true });
     }
-    // Wat in een andere ruimte is dan jij: bij de deur. Binnen alleen teamgenoten en quests (geen hele wereld bij de deur).
-    const atDoorInside = new Set(["party", "questgiver_available"]);
     const out = [];
     for (const marker of markers) {
       if (marker.atDoor) { out.push(marker); continue; }
-      const spot = mapPlace(where.list, where.here, marker.x, marker.z);
-      if (!spot) {
-        if (where.here && indoorAt(where.list, marker.x, marker.z)?.id !== where.here.id) continue;
-        out.push(marker);
-      } else if (!where.here || atDoorInside.has(marker.kind)) out.push(placedCopy(marker, spot));
+      const spot = mapPlace(where, marker.x, marker.z, marker.kind);
+      if (spot !== false) out.push(placedCopy(marker, spot));
     }
     return out;
   }
@@ -4915,7 +5020,8 @@ export function createGkHud(api) {
       const seen = byId.get(String(mark.id || ""));
       if (seen && seen.available === false) return null;
       const spot = seen && Number.isFinite(Number(seen.x)) ? { x: num(seen.x), z: num(seen.z) } : { x: num(mark.x), z: num(mark.z) };
-      return mapPlace(where.list, where.here, spot.x, spot.z) || spot;
+      const placed = mapPlace(where, spot.x, spot.z, "quest");
+      return placed === false ? null : placed || spot;
     }).filter(Boolean);
   }
   function mapQuestTarget(where = null) {
@@ -4925,20 +5031,20 @@ export function createGkHud(api) {
     if (target && (data().s04?.questGivers || []).some(function (giver) { return sameMapSpot(giver, target); })) return null;
     if (!target || !where) return target || null;
     // Kevin 24-11: een quest verderop in een gebouw (of buiten terwijl jij binnen bent) wijst naar de deur.
-    return placedCopy(target, mapPlace(where.list, where.here, target.x, target.z));
+    const spot = mapPlace(where, target.x, target.z, "quest");
+    return spot === false ? null : placedCopy(target, spot);
   }
   function drawBigMap() {
     const live = api.live();
     const sm = store.map;
     const where = mapHere(live);
-    minimap.setIndoor(indoorBoxOf(where.here));
-    if (live.position && fogConfig && !where.here) minimap.revealAround(live.position.x, live.position.z, fogConfig.revealRadius);
+    if (live.position) mapIndoorView(where, live.position);
     if ((ui.bigFollow || !ui.bigFocus) && live.position) ui.bigFocus = { x: num(live.position.x), z: num(live.position.z) };
     const markers = mapMarkers(live, where);
     const quest = mapQuestTarget(where);
     const result = minimap.drawFull(bigCanvas, { world: live.world, center: live.position, facingDeg: live.facingDeg, markers,
       quest: quest ? Object.assign({ name: trackedQuest()?.displayName || "" }, quest) : null, questArea: mapQuestArea(), questMarks: mapQuestMarks(live, where),
-      pin: sm.allowPin ? sm.pin : null, span: sm.span, focus: ui.bigFocus, show: sm.big, iconScale: sm.bigIcon, areas: areaLabels(live), textScale: sm.bigText,
+      pin: sm.allowPin ? mapPin(where) : null, span: sm.span, focus: ui.bigFocus, show: sm.big, iconScale: sm.bigIcon, areas: areaLabels(live), textScale: sm.bigText,
       styles: sm.styles, areaColor: sm.area.color, showNames: sm.bigShowMarkerNames, nameFontPx: sm.bigMarkerNameSizePx,
       fixedIconSize: sm.bigFixedIconSize, iconReferenceSpan: sm.bigSpanMeters,
       nameColor: sm.markerNameColor, backgroundColor: sm.backgroundColor, showScale: sm.bigShowScale, showCoordinates: sm.bigShowCoordinates });
@@ -5233,10 +5339,13 @@ export function createGkHud(api) {
   let fogConfig = null;
   function loadFog() {
     Promise.resolve(api.fetchJson("/api/game/fog/discovery")).then(function (result) {
-      if (!result || result.enabled !== true) { fogConfig = null; minimap.setFog(null); return; }
+      if (!result || result.enabled !== true) { fogConfig = null; minimap.setFog(null); minimap.setIndoorFog(null); return; }
       fogConfig = result.config || {};
       minimap.setFog({ enabled: true, cellSize: fogConfig.cellSize, color: fogConfig.fogColor, opacity: fogConfig.fogOpacity, feather: fogConfig.fogFeatherRadius });
       minimap.addFogCells(result.discoveredCellKeys || []);
+      // Kevin 24-11: binnen een eigen mist van vakjes van 1 m (alleen in de kamer waar je bent).
+      minimap.setIndoorFog(fogConfig.indoor ? { enabled: true, color: fogConfig.fogColor, opacity: fogConfig.fogOpacity } : null);
+      minimap.addIndoorFogCells(result.indoorDiscoveredCellKeys || []);
       ui.mapAt = 0;
       ui.bigAt = 0;
     }).catch(function () {});
@@ -6432,7 +6541,9 @@ export function createGkHud(api) {
     chatNotice,
     // Nieuw ontdekte stukken kaart (netwerkbericht fog:discovery).
     fogDiscovered(payload) {
-      if (minimap.addFogCells(payload?.newlyDiscoveredCellKeys || [])) { ui.mapAt = 0; ui.bigAt = 0; }
+      const keys = payload?.newlyDiscoveredCellKeys || [];
+      const indoor = payload?.indoor === true || /:indoor$/.test(String(payload?.mapLayer || ""));
+      if (indoor ? minimap.addIndoorFogCells(keys) : minimap.addFogCells(keys)) { ui.mapAt = 0; ui.bigAt = 0; }
     },
     element: root
   };
