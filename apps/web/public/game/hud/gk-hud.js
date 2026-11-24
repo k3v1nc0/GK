@@ -6,7 +6,7 @@
 //   herlaad) sta je weer precies waar je was: zelfde paneel, tabblad, filter, item en scrollplek.
 // Dit bestand tekent alleen. Alle spelregels blijven op de server; game.js geeft de data en de acties (api).
 import { ICON_PATHS } from "./gk-icon-paths.js?v=20261110-fase5b";
-import { createHudMinimap } from "./gk-minimap.js?v=20261117-minimap-edge1";
+import { createHudMinimap } from "./gk-minimap.js?v=20261124-binnen1";
 import { formatDuration } from "../../shared/effect-math.js?v=20261102-heal2";
 import { labelOffset } from "./label-placement.js?v=20261118-label-lock1";
 
@@ -4746,9 +4746,11 @@ export function createGkHud(api) {
     const live = api.live();
     const position = live.position;
     if (!position) return;
-    if (fogConfig) minimap.revealAround(position.x, position.z, fogConfig.revealRadius);
-    const markers = mapMarkers(live);
-    const questTarget = mapQuestTarget();
+    const where = mapHere(live);
+    minimap.setIndoor(indoorBoxOf(where.here));
+    if (fogConfig && !where.here) minimap.revealAround(position.x, position.z, fogConfig.revealRadius);
+    const markers = mapMarkers(live, where);
+    const questTarget = mapQuestTarget(where);
     const sm = store.map;
     const zooms = Array.isArray(sm.zoomLevels) && sm.zoomLevels.length ? sm.zoomLevels : ZOOMS;
     const zoomIndex = Math.max(0, Math.min(zooms.length - 1, Math.round(num(store.zoom, 1))));
@@ -4756,7 +4758,7 @@ export function createGkHud(api) {
     // Meedraaien = jouw kijkrichting staat altijd boven (zoals in WoW); uit = noorden boven.
     const facing = num(live.facingDeg) * Math.PI / 180;
     const north = minimap.draw({ world: live.world, center: position, facingDeg: live.facingDeg, forward: sm.rotate === false ? { x: 0, z: -1 } : { x: Math.sin(facing), z: Math.cos(facing) },
-      radius: zoom, markers, quest: questTarget, questArea: mapQuestArea(), questMarks: mapQuestMarks(live), pin: sm.allowPin ? sm.pin : null,
+      radius: zoom, markers, quest: questTarget, questArea: mapQuestArea(), questMarks: mapQuestMarks(live, where), pin: sm.allowPin ? sm.pin : null,
       show: sm.mini, iconScale: sm.miniIcon, areas: areaLabels(live), textScale: sm.miniText, styles: sm.styles, shape: sm.shape,
       fixedIconSize: sm.miniFixedIconSize, iconReferenceSpan: sm.zoomLevels[Math.max(0, Math.min(sm.zoomLevels.length - 1, sm.defaultZoomIndex))],
       areaColor: sm.area.color, showNames: sm.miniShowMarkerNames, nameFontPx: sm.miniMarkerNameSizePx,
@@ -4782,6 +4784,51 @@ export function createGkHud(api) {
     const list = live.world?.minimap?.game?.areaLabels;
     return Array.isArray(list) ? list : [];
   }
+  // ---- Kevin 24-11: binnenruimtes op de kaart ----
+  // Buiten: wat binnen is (teamgenoot, quest, NPC) staat bij de deur buiten. Binnen: de kaart is alleen die ruimte en
+  // wat buiten (of in een ander huis) is, staat bij de deur binnen.
+  function indoorList(live) {
+    const list = live.world?.minimap?.game?.indoors;
+    return Array.isArray(list) ? list : [];
+  }
+  function insidePoints(points, x, z) {
+    let inside = false;
+    for (let i = 0, j = points.length - 1; i < points.length; j = i, i += 1) {
+      const a = points[i], b = points[j];
+      if ((a[1] > z) !== (b[1] > z) && x < ((b[0] - a[0]) * (z - a[1])) / (b[1] - a[1]) + a[0]) inside = !inside;
+    }
+    return inside;
+  }
+  function indoorAt(list, x, z) {
+    if (!list.length || !Number.isFinite(Number(x)) || !Number.isFinite(Number(z))) return null;
+    for (const entry of list) if (Array.isArray(entry?.points) && entry.points.length >= 3 && insidePoints(entry.points, num(x), num(z))) return entry;
+    return null;
+  }
+  function indoorBoxOf(entry) {
+    if (!entry) return null;
+    const xs = entry.points.map(function (p) { return num(p[0]); });
+    const zs = entry.points.map(function (p) { return num(p[1]); });
+    const pad = 3;
+    return { minX: Math.min.apply(null, xs) - pad, maxX: Math.max.apply(null, xs) + pad, minZ: Math.min.apply(null, zs) - pad, maxZ: Math.max.apply(null, zs) + pad };
+  }
+  // Waar iets op de kaart staat, gezien vanaf waar jij bent (here = jouw binnenruimte of null).
+  function mapPlace(list, here, x, z) {
+    if (!list.length) return null;
+    const at = indoorAt(list, x, z);
+    if (here) {
+      if (at && at.id === here.id) return null;
+      return here.in ? { x: num(here.in.x), z: num(here.in.z) } : null;
+    }
+    return at && at.out ? { x: num(at.out.x), z: num(at.out.z) } : null;
+  }
+  function mapHere(live) {
+    const list = indoorList(live);
+    const position = live.position;
+    return { list, here: position ? indoorAt(list, position.x, position.z) : null };
+  }
+  function placedCopy(item, spot) {
+    return spot ? Object.assign({}, item, { x: spot.x, z: spot.z, atDoor: true }) : item;
+  }
   function markerKind(target) {
     const action = String(target.action || "");
     if (action === "travel" || target.entityKind === "zone_link" || target.entityKind === "portal" || target.targetKind === "zone_link") return "portal";
@@ -4789,7 +4836,7 @@ export function createGkHud(api) {
     if (action === "node04:start_dialogue" || action === "node05:focus_service" || action === "npc_walker") return "npc";
     return target.entityKind === "enemy" ? "enemy" : target.entityKind === "resource" ? "resource" : target.entityKind === "pickup" ? "pickup" : "";
   }
-  function mapMarkers(live) {
+  function mapMarkers(live, where = mapHere(live)) {
     const markers = [];
     const npcSpots = [];
     const givers = data().s04?.questGivers || [];
@@ -4821,7 +4868,31 @@ export function createGkHud(api) {
       markers.push({ x: giver.x, z: giver.z, kind: giver.hasAvailableQuest ? "questgiver_available" : "questgiver",
         name: giver.displayName || "Questgever", target: giver });
     }
-    return markers;
+    if (!where.list.length) return markers;
+    // Kevin 24-11: teamgenoten die de game niet ziet (ver weg in een binnenruimte, of buiten terwijl jij binnen bent):
+    // de server zegt in welke binnenruimte ze zijn; zij staan bij de deur.
+    const seen = new Set((live.remotes || []).map(function (remote) { return String(remote.id || ""); }));
+    const byId = new Map(where.list.map(function (entry) { return [entry.id, entry]; }));
+    for (const member of partyMates()) {
+      if (!member.online || seen.has(String(member.id))) continue;
+      const room = member.indoorAreaId ? byId.get(member.indoorAreaId) || null : null;
+      let spot = null;
+      if (where.here) { if (!room || room.id !== where.here.id) spot = where.here.in; }
+      else if (room) spot = room.out;
+      if (spot) markers.push({ x: num(spot.x), z: num(spot.z), kind: "party", name: member.name || "", mateId: String(member.id), atDoor: true });
+    }
+    // Wat in een andere ruimte is dan jij: bij de deur. Binnen alleen teamgenoten en quests (geen hele wereld bij de deur).
+    const atDoorInside = new Set(["party", "questgiver_available"]);
+    const out = [];
+    for (const marker of markers) {
+      if (marker.atDoor) { out.push(marker); continue; }
+      const spot = mapPlace(where.list, where.here, marker.x, marker.z);
+      if (!spot) {
+        if (where.here && indoorAt(where.list, marker.x, marker.z)?.id !== where.here.id) continue;
+        out.push(marker);
+      } else if (!where.here || atDoorInside.has(marker.kind)) out.push(placedCopy(marker, spot));
+    }
+    return out;
   }
   function sameMapSpot(left, right) {
     return Boolean(left.targetId && left.targetId === right.targetId)
@@ -4836,32 +4907,37 @@ export function createGkHud(api) {
     return map && map.show === "area" && Array.isArray(map.points) && map.points.length >= 3 ? map : null;
   }
   // Kevin 5-11: ⭐ waar de vijand die je moet verslaan nu loopt. Ziet de game hem zelf (dichtbij), dan de vloeiende plek.
-  function mapQuestMarks(live) {
+  function mapQuestMarks(live, where = mapHere(live)) {
     const marks = trackedQuest()?.activeStep?.marks;
     if (!Array.isArray(marks) || !marks.length) return [];
     const byId = new Map((live.targets || []).map(function (target) { return [String(target.instanceId || ""), target]; }));
     return marks.map(function (mark) {
       const seen = byId.get(String(mark.id || ""));
       if (seen && seen.available === false) return null;
-      return seen && Number.isFinite(Number(seen.x)) ? { x: num(seen.x), z: num(seen.z) } : { x: num(mark.x), z: num(mark.z) };
+      const spot = seen && Number.isFinite(Number(seen.x)) ? { x: num(seen.x), z: num(seen.z) } : { x: num(mark.x), z: num(mark.z) };
+      return mapPlace(where.list, where.here, spot.x, spot.z) || spot;
     }).filter(Boolean);
   }
-  function mapQuestTarget() {
+  function mapQuestTarget(where = null) {
     const quest = trackedQuest();
     const target = quest ? (data().s04?.questTargets || []).find(function (t) { return t.questId === quest.questId; }) : null;
     // Ook bij terugkeren naar de gever blijft diens eigen ster (en fog-regel) leidend.
     if (target && (data().s04?.questGivers || []).some(function (giver) { return sameMapSpot(giver, target); })) return null;
-    return target || null;
+    if (!target || !where) return target || null;
+    // Kevin 24-11: een quest verderop in een gebouw (of buiten terwijl jij binnen bent) wijst naar de deur.
+    return placedCopy(target, mapPlace(where.list, where.here, target.x, target.z));
   }
   function drawBigMap() {
     const live = api.live();
     const sm = store.map;
-    if (live.position && fogConfig) minimap.revealAround(live.position.x, live.position.z, fogConfig.revealRadius);
+    const where = mapHere(live);
+    minimap.setIndoor(indoorBoxOf(where.here));
+    if (live.position && fogConfig && !where.here) minimap.revealAround(live.position.x, live.position.z, fogConfig.revealRadius);
     if ((ui.bigFollow || !ui.bigFocus) && live.position) ui.bigFocus = { x: num(live.position.x), z: num(live.position.z) };
-    const markers = mapMarkers(live);
-    const quest = mapQuestTarget();
+    const markers = mapMarkers(live, where);
+    const quest = mapQuestTarget(where);
     const result = minimap.drawFull(bigCanvas, { world: live.world, center: live.position, facingDeg: live.facingDeg, markers,
-      quest: quest ? Object.assign({ name: trackedQuest()?.displayName || "" }, quest) : null, questArea: mapQuestArea(), questMarks: mapQuestMarks(live),
+      quest: quest ? Object.assign({ name: trackedQuest()?.displayName || "" }, quest) : null, questArea: mapQuestArea(), questMarks: mapQuestMarks(live, where),
       pin: sm.allowPin ? sm.pin : null, span: sm.span, focus: ui.bigFocus, show: sm.big, iconScale: sm.bigIcon, areas: areaLabels(live), textScale: sm.bigText,
       styles: sm.styles, areaColor: sm.area.color, showNames: sm.bigShowMarkerNames, nameFontPx: sm.bigMarkerNameSizePx,
       fixedIconSize: sm.bigFixedIconSize, iconReferenceSpan: sm.bigSpanMeters,

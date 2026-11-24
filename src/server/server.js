@@ -164,12 +164,12 @@ function sendRedirect(res, location, headers) {
   res.end();
 }
 
-async function readJson(req) {
+async function readJson(req, maxBytes = 1024 * 1024) {
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 1024 * 1024) {
+    if (size > maxBytes) {
       const error = new Error("Request body is te groot.");
       error.status = 413;
       throw error;
@@ -1058,7 +1058,8 @@ async function handleApi(req, res, url) {
     }
     if (req.method === "POST" && url.pathname === "/api/editor/world-minimap-tiles/commit") {
       authService.requireEditor(req);
-      const body = await readJson(req);
+      // Kevin 24-11: met een vingerafdruk per tegel wordt dit bericht groter (veel tegels).
+      const body = await readJson(req, 8 * 1024 * 1024);
       body.mapHash = worldMapHash(mmoService.getPublishedWorldContext().world);
       return sendJson(res, 201, Object.assign({ ok: true }, assetService.commitMinimapTiles(body)));
     }
@@ -1184,7 +1185,10 @@ async function handleApi(req, res, url) {
       return sendJson(res, 200, mmoService.getPublishedWorldContext().world);
     }
     if (req.method === "GET" && url.pathname === "/api/game/minimap") {
-      return sendJson(res, 200, { ok: true, tiles: assetService.minimapTiles() });
+      // Kevin 24-11: de vingerafdrukken per tegel heeft alleen de editor nodig (BAKE), niet de game.
+      const manifest = assetService.minimapTiles();
+      const tiles = manifest && url.searchParams.get("sigs") !== "1" ? Object.assign({}, manifest, { tileSigs: undefined }) : manifest;
+      return sendJson(res, 200, { ok: true, tiles });
     }
     if (req.method === "GET" && url.pathname === "/api/game/version") {
       return sendJson(res, 200, { ok: true, publishedAt: mmoService.getPublishedWorldContext().publishedAt });

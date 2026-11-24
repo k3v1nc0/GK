@@ -371,8 +371,9 @@ export function compileGameSection(documents, options = {}) {
       keyItemId: doc.body.keyItemRef ? idFromRef(doc.body.keyItemRef) : null,
       minLevel: Math.round(clampNum(doc.body.minLevel, 1, 1, 1000)), combatBlockSeconds: Math.round(clampNum(doc.body.combatBlockSeconds, 5, 0, 120)),
       a: { x: Number(doc.body.x) || 0, y: Number(doc.body.y) || 0, z: Number(doc.body.z) || 0, rotationY: Number(doc.body.rotationY) || 0,
-        modelAssetId: doc.body.modelAssetId || null, scale: Number(doc.body.scale) || 1 },
-      b: { x: b.x, y: b.y, z: b.z, rotationY: Number(doc.body.bRotationY) || 0, modelAssetId: doc.body.bModelAssetId || null, scale: Number(doc.body.bScale) || 1 }
+        modelAssetId: doc.body.modelAssetId || null, scale: Number(doc.body.scale) || 1, name: String(doc.body.sideName || "").trim().slice(0, 80) || null },
+      b: { x: b.x, y: b.y, z: b.z, rotationY: Number(doc.body.bRotationY) || 0, modelAssetId: doc.body.bModelAssetId || null, scale: Number(doc.body.bScale) || 1,
+        name: String(doc.body.bSideName || "").trim().slice(0, 80) || null }
     }, flagGateOf(doc.body));
   });
   const portalDoc = of("portal_settings")[0] || null;

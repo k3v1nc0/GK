@@ -825,7 +825,14 @@ export class AssetService {
       baseMeters,
       levels,
       bounds: { minX: Number(bounds.minX), maxX: Number(bounds.maxX), minZ: Number(bounds.minZ), maxZ: Number(bounds.maxZ) },
+      // Kevin 24-11: de binnenruimtes (ver weg) met eigen tegels; de game toont ze als je binnen bent.
+      extraBounds: (Array.isArray(input?.extraBounds) ? input.extraBounds : []).slice(0, 200).filter(function (box) {
+        return box && keys.every(function (key) { return Number.isFinite(Number(box[key])); }) && Number(box.maxX) > Number(box.minX) && Number(box.maxZ) > Number(box.minZ);
+      }).map(function (box) { return { minX: Number(box.minX), maxX: Number(box.maxX), minZ: Number(box.minZ), maxZ: Number(box.maxZ) }; }),
       tiles,
+      // Kevin 24-11: vingerafdruk per tegel; de volgende BAKE maakt alleen tegels met een andere opnieuw.
+      tileSigs: input?.tileSigs && typeof input.tileSigs === "object" ? Object.fromEntries(Object.entries(input.tileSigs)
+        .filter(function (pair) { return Object.prototype.hasOwnProperty.call(tiles, pair[0]) && /^[0-9a-f]{16}$/.test(String(pair[1])); })) : null,
       buildId: String(input.buildId || "").slice(0, 120) || null,
       // Vingerafdruk van de wereld (grond, terrein, water, modellen) toen de kaart gebakken werd; zo ziet de editor
       // na SAVE TO GAME of de kaart verouderd is. De server vult hem in, niet de browser.

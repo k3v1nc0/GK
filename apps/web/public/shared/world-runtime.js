@@ -28,6 +28,7 @@ import {
   ensureEdgeField
 } from "./movement-kernel.js";
 import { terrainHeightAt } from "./terrain.js";
+import { minimapTileSignatures } from "./minimap-tile-sigs.js?v=20261124-bake1";
 import { createPlayerPathClient } from "./player-path-client.js?v=20261123-deur1";
 import { createTerrainLayer, seedTerrainChunk, seedTerrainPaint } from "./terrain-render.js?v=20261123-muur7";
 import { createWaterLayer } from "./water-render.js?v=20261030-terrein6";
@@ -11522,6 +11523,35 @@ function resolveChunkDebugCenter(policy) {
     };
   }
 
+  // Kevin 24-11: de binnenruimtes (🏠 Binnen) die buiten de wereld-kaart liggen, elk als eigen stuk kaart (meters).
+  function getIndoorBakeBoxes() {
+    const main = getMinimapBakeBounds();
+    const out = [];
+    for (const floor of Array.isArray(world?.indoorFloors) ? world.indoorFloors : []) {
+      const outline = Array.isArray(floor?.outline) ? floor.outline : [];
+      if (outline.length < 3) continue;
+      const xs = outline.map(function (p) { return num(p[0], 0); });
+      const zs = outline.map(function (p) { return num(p[1], 0); });
+      const box = { minX: Math.min.apply(null, xs) - 4, maxX: Math.max.apply(null, xs) + 4, minZ: Math.min.apply(null, zs) - 4, maxZ: Math.max.apply(null, zs) + 4, areaId: floor.areaId || null };
+      if (main && box.minX >= main.minX && box.maxX <= main.maxX && box.minZ >= main.minZ && box.maxZ <= main.maxZ) continue;
+      out.push(box);
+    }
+    return out;
+  }
+
+  // Kevin 24-11: per kaarttegel een vingerafdruk van wat erop staat (grond, verf, modellen, begroeiing, muren, ...).
+  // BAKE maakt dan alleen de tegels opnieuw waarvan de vingerafdruk anders is dan bij de vorige bake.
+  // tiles = [{ key: "laag:tx:tz", minX, maxX, minZ, maxZ }] -> { key: "16 hex" }.
+  async function getMinimapTileSignatures(tiles) {
+    if (terrainLayer.active) await terrainLayer.whenLoaded();
+    return minimapTileSignatures({
+      world,
+      heightChunks: terrainLayer.active ? terrainLayer.heightfield?.chunks || null : null,
+      paintChunks: terrainLayer.active ? terrainLayer.paintfield?.chunks || null : null,
+      tiles
+    });
+  }
+
   function createTemporaryMinimapGroundPlane(worldData = world) {
     const ground = worldData?.ground;
     const bounds = effectiveGroundBounds(ground);
@@ -21819,6 +21849,8 @@ function resolveChunkDebugCenter(policy) {
     getLoadErrors: function () { return loadErrors.slice(); },
     bakeMinimapImage: bakeMinimapImage,
     getMinimapBakeBounds: getMinimapBakeBounds,
+    getIndoorBakeBoxes: getIndoorBakeBoxes,
+    getMinimapTileSignatures: getMinimapTileSignatures,
     getMinimapMarkerSnapshot: getMinimapMarkerSnapshot,
     // Wereld tekenen (ronde 1): de terreinlaag voor de knop Terrein in de editor.
     terrainActive: function () { return terrainLayer.active; },

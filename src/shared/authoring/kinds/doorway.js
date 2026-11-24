@@ -34,6 +34,14 @@ const turn = (group) => ({ type: "number", required: false, min: 0, max: 359, au
     "Schuif tot de voorkant naar het pad of de kamer wijst, of klik de kant in de 3D-view en druk R.",
     "Je komt in een muur of buiten de kamer aan → draai deze kant 180°.") });
 
+// Kevin 24-11: elke kant heeft in de game een eigen naam: waar je naartoe gaat. Leeg = de naam van het deelgebied
+// waar de andere kant staat (kant B in "Kasteel Hal" = kant A heet "Kasteel Hal").
+const sideName = (group, side, other) => ({ type: "text", required: false, maxLength: 80, audience: "client", label: "Naam in de game",
+  ui: ui("🏷️", "text", "werkbank", { group }), default: "",
+  help: help("De naam boven kant " + side + " in de game: waar je naartoe gaat als je hier doorheen gaat.",
+    "Leeg laten = vanzelf de naam van het deelgebied waar kant " + other + " staat. Iets anders (bijv. Kasteel)? Vul het hier in.",
+    "Er staat een verkeerde naam boven de deur → vul hier zelf een naam in, of zet kant " + other + " in het goede deelgebied.") });
+
 export const DOORWAY_USE_MODES = Object.freeze(["click", "walk"]);
 
 export const DOORWAY_KINDS = {
@@ -66,9 +74,11 @@ export const DOORWAY_KINDS = {
         help: help("Kun je alleen van kant A naar kant B? Kant B is dan alleen een aankomstplek.",
           "Uit voor een huis (heen en terug). Aan voor een val of een glijbaan naar beneden.",
           "Je kunt niet meer terug → zet dit uit.") },
+      sideName: sideName(SIDE_A, "A", "B"),
       modelAssetId: model("Model", SIDE_A),
       scale: scale(SIDE_A),
       rotationY: turn(SIDE_A),
+      bSideName: sideName(SIDE_B, "B", "A"),
       bModelAssetId: model("Model", SIDE_B),
       bScale: scale(SIDE_B),
       bRotationY: turn(SIDE_B),

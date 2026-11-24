@@ -1,4 +1,4 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261123-muur17";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261124-binnen1";
 import { edgeBetweenPoints, editClosedEdges } from "./walkable-edge-tools.js?v=20261031-randen1";
 import { createTerrainEditor } from "./terrain-editor.js?v=20261123-muur14";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261106-perf1";
@@ -11,7 +11,7 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261106-perf1";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261106-perf1";
-import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261123-muur14";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261124-binnen1";
 import { createAssetPicker } from "./mini-asset-picker.js?v=20261106-thumbs150";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
 import { createDocDrop, docKeyFromRuntimeId, docSideFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261122-doorgang1";
@@ -31436,7 +31436,7 @@ async function reconnectEditor() {
 if (el.connectionButton) el.connectionButton.addEventListener("click", reconnectEditor);
 el.saveDraftButton.addEventListener("click", saveDraft);
 el.publishButton.addEventListener("click", publish);
-if (el.bakeButton) el.bakeButton.addEventListener("click", bakeMap);
+if (el.bakeButton) el.bakeButton.addEventListener("click", function (event) { bakeMap({ full: event.shiftKey === true }); });
 if (el.undoButton) el.undoButton.addEventListener("click", undoGraphMutation);
 if (el.redoButton) el.redoButton.addEventListener("click", redoGraphMutation);
 el.logoutButton.addEventListener("click", async function () {
@@ -31503,18 +31503,56 @@ function minimapTilePlan(bounds) {
   return { tiles, levels };
 }
 
-async function bakeWorldMinimapForGame(buildId, onProgress) {
+async function bakeWorldMinimapForGame(buildId, onProgress, options = {}) {
   if (!runtime || typeof runtime.bakeMinimapImage !== "function" || typeof runtime.getMinimapBakeBounds !== "function") return "Minimap niet gemaakt (geen 3D-beeld).";
   const bounds = runtime.getMinimapBakeBounds();
   if (!bounds) return "Minimap niet gemaakt: de wereld heeft geen grond.";
   const progress = typeof onProgress === "function" ? onProgress : function () {};
   try {
     const plan = minimapTilePlan(bounds);
+    // Kevin 24-11: elke binnenruimte (ver weg, 🏠 Binnen) krijgt eigen tegels in alle lagen; de game toont ze als je binnen bent.
+    const indoorBoxes = typeof runtime.getIndoorBakeBoxes === "function" ? runtime.getIndoorBakeBoxes() : [];
+    const known = new Set(plan.tiles.map(function (tile) { return tile.key; }));
+    for (const box of indoorBoxes) {
+      for (let level = 0; level < plan.levels; level += 1) {
+        const size = MINIMAP_TILE_METERS * Math.pow(2, level);
+        for (let tz = Math.floor(box.minZ / size); tz <= Math.floor((box.maxZ - 0.001) / size); tz += 1) {
+          for (let tx = Math.floor(box.minX / size); tx <= Math.floor((box.maxX - 0.001) / size); tx += 1) {
+            const key = level + ":" + tx + ":" + tz;
+            if (known.has(key)) continue;
+            known.add(key);
+            plan.tiles.push({ key, minX: tx * size, maxX: (tx + 1) * size, minZ: tz * size, maxZ: (tz + 1) * size });
+          }
+        }
+      }
+    }
+    // Kevin 24-11: alleen tegels opnieuw maken waar iets veranderd is (vingerafdruk per tegel). Shift+BAKE = alles opnieuw.
+    progress("Kaart: kijken wat er veranderd is...");
+    const sigs = typeof runtime.getMinimapTileSignatures === "function" ? await runtime.getMinimapTileSignatures(plan.tiles) : null;
+    let previous = null;
+    if (sigs && options.full !== true) {
+      try {
+        const response = await fetch("/api/game/minimap?sigs=1", { credentials: "same-origin", cache: "no-store" });
+        const data = await response.json().catch(function () { return null; });
+        previous = data?.tiles || null;
+      } catch { previous = null; }
+      const sameGrid = previous && previous.tileSigs && Number(previous.tilePx) === MINIMAP_TILE_PX && Number(previous.baseMeters) === MINIMAP_TILE_METERS
+        && Number(previous.levels) === plan.levels && ["minX", "maxX", "minZ", "maxZ"].every(function (key) { return Number(previous.bounds?.[key]) === Number(bounds[key]); });
+      if (!sameGrid) previous = null;
+    }
+    const reused = {};
+    const todo = [];
+    for (const tile of plan.tiles) {
+      const oldName = previous?.tiles?.[tile.key];
+      if (oldName && sigs && previous.tileSigs[tile.key] === sigs[tile.key]) reused[tile.key] = oldName;
+      else todo.push(tile);
+    }
     const baked = [];
-    progress("Kaart maken: 0 van " + plan.tiles.length + " tegels...");
+    if (todo.length) {
+    progress("Kaart maken: 0 van " + todo.length + " tegels" + (previous ? " (" + Object.keys(reused).length + " zijn hetzelfde gebleven)" : "") + "...");
     await runtime.bakeMinimapImage({
       bounds,
-      tiles: plan.tiles,
+      tiles: todo,
       tileResolution: MINIMAP_TILE_PX,
       quality: 0.85,
       hideEditorHelpers: true,
@@ -31523,10 +31561,11 @@ async function bakeWorldMinimapForGame(buildId, onProgress) {
       includeStaticModels: true,
       onTile: function (tile, blob, index) {
         baked.push({ key: tile.key, blob });
-        if ((index + 1) % 10 === 0) progress("Kaart maken: " + (index + 1) + " van " + plan.tiles.length + " tegels...");
+        if ((index + 1) % 10 === 0) progress("Kaart maken: " + (index + 1) + " van " + todo.length + " tegels...");
       }
     });
-    const names = {};
+    }
+    const names = Object.assign({}, reused);
     for (let i = 0; i < baked.length; i += MINIMAP_UPLOAD_BATCH) {
       progress("Kaart uploaden: " + Math.min(baked.length, i + MINIMAP_UPLOAD_BATCH) + " van " + baked.length + " tegels...");
       const formData = new FormData();
@@ -31540,11 +31579,12 @@ async function bakeWorldMinimapForGame(buildId, onProgress) {
       method: "POST",
       timeoutMs: 60000,
       body: JSON.stringify({ tilePx: MINIMAP_TILE_PX, baseMeters: MINIMAP_TILE_METERS, levels: plan.levels, buildId: buildId || null,
-        bounds: { minX: bounds.minX, maxX: bounds.maxX, minZ: bounds.minZ, maxZ: bounds.maxZ }, tiles: names })
+        bounds: { minX: bounds.minX, maxX: bounds.maxX, minZ: bounds.minZ, maxZ: bounds.maxZ }, tiles: names, tileSigs: sigs || null,
+        extraBounds: indoorBoxes.map(function (box) { return { minX: box.minX, maxX: box.maxX, minZ: box.minZ, maxZ: box.maxZ }; }) })
     }, "POST");
     const data = await response.json().catch(function () { return {}; });
     if (!response.ok || !data.ok) throw new Error(data.message || "opslaan mislukt");
-    return "Minimap bijgewerkt (" + plan.tiles.length + " tegels in " + plan.levels + " lagen).";
+    return "Minimap bijgewerkt (" + todo.length + " van " + plan.tiles.length + " tegels opnieuw gemaakt, " + plan.levels + " lagen).";
   } catch (error) {
     return "Minimap niet gemaakt: " + (error?.message || error) + ".";
   }
@@ -31603,7 +31643,7 @@ async function refreshBakeStatus() {
   }
 }
 
-async function bakeMap() {
+async function bakeMap(options = {}) {
   if (!el.bakeButton || el.bakeButton.disabled) return;
   el.bakeButton.disabled = true;
   el.publishButton.disabled = true;
@@ -31612,7 +31652,7 @@ async function bakeMap() {
     const pending = docBench.pendingCount() + notLiveGraphActions();
     const note = pending ? " (Let op: " + pending + " wijziging(en) staan nog niet in de game; doe ook SAVE TO GAME.)" : "";
     setStatus("Kaart maken...", "");
-    const text = await bakeWorldMinimapForGame(null, function (progress) { setStatus(progress, ""); });
+    const text = await bakeWorldMinimapForGame(null, function (progress) { setStatus(progress, ""); }, { full: options.full === true });
     await refreshBakeStatus();
     setStatus(text + note, text.startsWith("Minimap bijgewerkt") ? "success" : "error");
   } finally {

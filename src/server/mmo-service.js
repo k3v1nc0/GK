@@ -987,7 +987,9 @@ export class MmoService {
       playerStates: (worldId) => this.getWorldPlayerStates(worldId),
       connectionFor: (playerId, worldId) => this.getConnectionForPlayer(playerId, worldId || null),
       sendToPlayer: (playerId, payload) => this.sendToPlayer(playerId, payload),
-      modelFor: (profile) => this.characterModel(profile)
+      modelFor: (profile) => this.characterModel(profile),
+      // Kevin 24-11: teamgenoot binnen = op de minimap bij de deur buiten.
+      indoorAreaFor: (playerId) => this.indoorAreaForPlayer(playerId)
     });
     // MMO stap 2 (3-11): chat (Buurt, Groep, Fluisteren) en blokkeren. De server kiest wie het bericht krijgt.
     this.chatRuntime = new ChatRuntime({
@@ -1213,6 +1215,15 @@ export class MmoService {
       this.outsideCache = { buildId: spatial.buildId, world, points: outsidePointsByArea(doorwaysOf(world), indoor, areaIdAt) };
     }
     return this.outsideCache.points.get(areaId) || null;
+  }
+
+  // Kevin 24-11: in welk deelgebied met 🏠 Binnen staat deze speler (null = buiten)? Voor de minimap van de groep.
+  indoorAreaForPlayer(playerId) {
+    const worldId = this.getPublishedWorldContext()?.worldId;
+    const state = worldId ? this.playerStateCache.get(this.getPlayerStateCacheKey(playerId, worldId)) : null;
+    const areaId = state?.current_area_id || null;
+    if (!areaId) return null;
+    return this.spatialIndex().index?.areas.get(areaId)?.indoor === true ? areaId : null;
   }
 
   sendSpatialMembership(connection, state, worldId, toUser = false) {

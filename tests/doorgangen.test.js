@@ -143,3 +143,27 @@ test("Kevin 23-11: binnen houdt de speler zijn eigen camera, van boven alleen al
   assert.equal(indoorSettingsOf(Object.assign({}, area, { indoorTopDown: true })).topDown, true);
   assert.equal(validateDocument("area", { areaId: "huis", displayName: "Huis", shape: "box", minXMm: 0, maxXMm: 1000, minZMm: 0, maxZMm: 1000, indoor: true, indoorTopDown: true }).ok, true);
 });
+
+test("Kevin 24-11: elke kant heet naar het deelgebied aan de andere kant; zelf invullen gaat voor; binnen op de minimap", async () => {
+  const { compileCanonical } = await import("../src/server/authoring/build-service.js");
+  const { buildRuntimeWorld } = await import("../src/server/authoring/world-builder.js");
+  const doc = (kind, key, body) => ({ docKey: key, kind, body, archived: false, revision: 1 });
+  const docs = [
+    doc("project_settings", "project_settings", { gameName: "GK" }),
+    doc("area", "area:dorp", { areaId: "dorp", displayName: "Dorp 1", shape: "box", minXMm: 0, maxXMm: 100000, minZMm: 0, maxZMm: 100000 }),
+    doc("area", "area:hal", { areaId: "hal", displayName: "Kasteel Hal", shape: "box", minXMm: 50000000, maxXMm: 50020000, minZMm: 0, maxZMm: 20000, indoor: true }),
+    doc("doorway", "doorway:poort", { doorwayId: "poort", displayName: "Poort", x: 10, z: 10, bX: 50005, bZ: 5 }),
+    doc("doorway", "doorway:eigen", { doorwayId: "eigen", displayName: "Eigen", x: 20, z: 20, bX: 50006, bZ: 6, sideName: "Kasteel" })
+  ];
+  const compiled = compileCanonical(docs, {});
+  assert.deepEqual(compiled.errors, []);
+  const world = buildRuntimeWorld(JSON.parse(compiled.files["server.json"].text));
+  const poort = world.doorways.find((door) => door.id === "poort");
+  assert.deepEqual([poort.a.name, poort.b.name], ["Kasteel Hal", "Dorp 1"]);
+  const eigen = world.doorways.find((door) => door.id === "eigen");
+  assert.deepEqual([eigen.a.name, eigen.b.name], ["Kasteel", "Dorp 1"], "zelf ingevuld gaat voor");
+  const hal = world.minimap.game.indoors.find((entry) => entry.id === "hal");
+  assert.ok(hal, "binnenruimte op de minimap");
+  assert.ok(["10,10", "20,20"].includes(Math.round(hal.out.x) + "," + Math.round(hal.out.z)), "buiten: bij een deur (kant A)");
+  assert.ok(["50005,5", "50006,6"].includes(Math.round(hal.in.x) + "," + Math.round(hal.in.z)), "binnen: bij een deur (kant B)");
+});

@@ -118,7 +118,9 @@ export class PartyRuntime {
           leader: row.player_id === party.leader_player_id,
           online: this.online(row.player_id),
           hp: Math.round(hp.cur), hpMax: Math.round(hp.max),
-          mp: Math.round(mp.cur), mpMax: Math.round(mp.max)
+          mp: Math.round(mp.cur), mpMax: Math.round(mp.max),
+          // Kevin 24-11: binnen (deelgebied met 🏠 Binnen) = op de minimap bij de deur.
+          indoorAreaId: (() => { try { return this.host.indoorAreaFor ? this.host.indoorAreaFor(row.player_id) || null : null; } catch { return null; } })()
         };
       })
     };

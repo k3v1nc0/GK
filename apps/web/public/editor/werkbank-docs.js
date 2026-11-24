@@ -1601,7 +1601,9 @@ export function createDocBench(options = {}) {
         const name = docName(doc);
         if (q && !name.toLowerCase().includes(q)) continue;
         const tile = el("button", { type: "button", class: "wbdTile" + (bench.selectedDocKey === doc.docKey ? " active" : ""), draggable: "true", title: spec.label + ": " + name });
-        tile.append(thumb(doc, spec.icon), el("span", { class: "wbdTileName", text: name }), el("span", { class: "wbdTileKind", text: spec.icon }));
+        // Kevin 24-11: een vlak toont het icoon van zijn soort (🧱 muur, 🛣️ weg, ...), niet voor allemaal de blauwe ruit.
+        const tileIcon = kind === "area" ? (spec.fields?.soort?.optionIcons?.[areaSoort(doc.body || {})] || spec.icon) : spec.icon;
+        tile.append(thumb(doc, tileIcon), el("span", { class: "wbdTileName", text: name }), el("span", { class: "wbdTileKind", text: tileIcon }));
         tile.addEventListener("dragstart", (event) => {
           event.dataTransfer.setData(DOC_MIME, doc.docKey);
           event.dataTransfer.setData("text/plain", name);

@@ -343,6 +343,14 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
   let baseWorld = null;
   let texture = null;
   let textureSrc = "";
+  // Kevin 24-11: sta je binnen (deelgebied met 🏠 Binnen), dan is de kaart alleen die ruimte (eigen tegels uit de bake),
+  // zonder mist. null = buiten: de hele wereld.
+  let indoorBox = null;
+  function setIndoor(box) {
+    const next = box && [box.minX, box.maxX, box.minZ, box.maxZ].every(function (v) { return Number.isFinite(Number(v)); }) && box.maxX > box.minX && box.maxZ > box.minZ
+      ? { minX: num(box.minX), maxX: num(box.maxX), minZ: num(box.minZ), maxZ: num(box.maxZ) } : null;
+    indoorBox = next;
+  }
 
   // ---- kaarttegels (gemaakt bij SAVE TO GAME): puzzelstukjes in lagen; laag 0 is het scherpst ----
   // manifest van /api/game/minimap: { baseUrl, tilePx, baseMeters, levels, bounds, tiles { "laag:tx:tz": bestandsnaam } }
@@ -401,7 +409,7 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
   // fn(key, naam, x, z, grootte) voor elke ontdekte tegel van deze laag in rect; fn geeft false = stoppen.
   function tileVisit(level, rect, fn) {
     const size = tiles.base * Math.pow(2, level);
-    const b = tiles.bounds;
+    const b = indoorBox || tiles.bounds;
     const x0 = Math.floor(Math.max(rect.minX, b.minX) / size);
     const x1 = Math.floor((Math.min(rect.maxX, b.maxX) - 0.001) / size);
     const z0 = Math.floor(Math.max(rect.minZ, b.minZ) / size);
@@ -410,7 +418,7 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
       for (let tx = x0; tx <= x1; tx += 1) {
         const key = level + ":" + tx + ":" + tz;
         const name = tiles.names[key];
-        if (!name || (tiles.seen && !tiles.seen[level].has(tx + ":" + tz))) continue;
+        if (!name || (!indoorBox && tiles.seen && !tiles.seen[level].has(tx + ":" + tz))) continue;
         if (fn(key, name, tx * size, tz * size, size) === false) return false;
       }
     }
@@ -508,7 +516,7 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
     return addFogCells(keys);
   }
   function discovered(x, z) {
-    if (!fog) return true;
+    if (!fog || indoorBox) return true;
     return fog.cells.has(Math.floor(num(x) / fog.size) + ":" + Math.floor(num(z) / fog.size));
   }
   // Het gum-rondje: helemaal weg tot net over de hoeken van het vakje, daarna zacht uitlopend over feather vakjes.
@@ -597,6 +605,7 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
   }
   // De grenzen van de kaart (wereld-meters): van de tegels, of van de reservekaart.
   function mapBounds(world) {
+    if (indoorBox) return indoorBox;
     if (tiles) return tiles.bounds;
     const layer = ensureBase(world);
     if (!layer) return null;
@@ -626,7 +635,7 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
       }
     }
     g.restore();
-    const mist = fogFor(bounds);
+    const mist = indoorBox ? null : fogFor(bounds);
     if (mist) {
       g.globalAlpha = mist.opacity;
       g.drawImage(mist.canvas, 0, 0, mist.canvas.width, mist.canvas.height, mist.minCX * mist.size, mist.minCZ * mist.size, mist.cw * mist.size, mist.ch * mist.size);
@@ -953,5 +962,5 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
     );
   }
 
-  return { draw, drawFull, setTiles, setFog, addFogCells, revealAround, discovered, worldAtClientPoint, invalidate() { baseWorld = null; } };
+  return { draw, drawFull, setTiles, setFog, setIndoor, addFogCells, revealAround, discovered, worldAtClientPoint, invalidate() { baseWorld = null; } };
 }

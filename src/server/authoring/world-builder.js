@@ -17,7 +17,8 @@ import { balanceValues, equipmentSlotsFrom, respawnPoliciesFrom } from "../../sh
 import { economyValues } from "../../shared/authoring/kinds/economy.js";
 import { tradeValues } from "../../shared/authoring/kinds/trade.js";
 import { chatValues } from "../../shared/authoring/kinds/chat.js";
-import { areaBoundsMm } from "../../../apps/web/public/shared/spatial.js";
+import { areaBoundsMm, areaContains, areaOutlineMeters } from "../../../apps/web/public/shared/spatial.js";
+import { outsidePointsByArea } from "../runtime/doorway-runtime.js";
 import { heightfieldForWorld } from "../../../apps/web/public/shared/movement-kernel.js";
 import { normalizeTerrainWater, terrainHeightAt, terrainSlopeDegAt, terrainUnderWater, TERRAIN_CHUNK_METERS } from "../../../apps/web/public/shared/terrain.js";
 
@@ -478,6 +479,55 @@ function areaLabels(section) {
   }
   return labels;
 }
+// Kevin 24-11: de naam van het kleinste deelgebied op een plek (meters), of "" (voor de naam van een doorgang-kant).
+function areaNameAt(section, x, z) {
+  return smallestAreaAt(section, x, z, true)?.name || "";
+}
+function smallestAreaAt(section, x, z, named = false) {
+  let best = null;
+  const xMm = Math.round(Number(x) * 1000), zMm = Math.round(Number(z) * 1000);
+  if (!Number.isFinite(xMm) || !Number.isFinite(zMm)) return null;
+  for (const area of Array.isArray(section?.areas) ? section.areas : []) {
+    const name = String(area?.displayName || "").trim();
+    if (named && !name) continue;
+    try {
+      if (!areaContains(area, xMm, zMm)) continue;
+      const box = areaBoundsMm(area);
+      const size = (box.maxXMm - box.minXMm) * (box.maxZMm - box.minZMm);
+      if (!best || size < best.size) best = { name: name.slice(0, 80), size, area };
+    } catch { /* kapotte vorm */ }
+  }
+  return best;
+}
+// Kevin 24-11 (minimap): elk deelgebied met 🏠 Binnen, met zijn vorm, de deur buiten (out) en de deur binnen (in).
+// Buiten staat wat binnen is (teamgenoot, quest) op de kaart bij de deur; binnen staat wat buiten is bij de deur.
+function indoorMap(section, doorways) {
+  const indoor = new Map();
+  for (const area of Array.isArray(section?.areas) ? section.areas : []) {
+    if (area?.indoor !== true || !area.areaId) continue;
+    const outline = areaOutlineMeters(area);
+    if (!outline || outline.length < 3) continue;
+    indoor.set(area.areaId, { id: area.areaId, name: String(area.displayName || "").trim().slice(0, 40), points: outline, out: null, in: null });
+  }
+  if (!indoor.size) return [];
+  const areaIdAt = (x, z) => smallestAreaAt(section, x, z)?.area?.areaId || null;
+  const doors = (doorways || []).filter((door) => door && door.a && door.b).map((door) => ({ id: door.doorwayId, a: door.a, b: door.b, arriveMeters: 0 }));
+  const outside = outsidePointsByArea(doors, new Set(indoor.keys()), areaIdAt);
+  for (const door of doors) {
+    for (const side of ["a", "b"]) {
+      const areaId = areaIdAt(door[side].x, door[side].z);
+      const entry = areaId ? indoor.get(areaId) : null;
+      const other = side === "a" ? door.b : door.a;
+      if (!entry || entry.in || areaIdAt(other.x, other.z) === areaId) continue;
+      entry.in = { x: Number(door[side].x) || 0, z: Number(door[side].z) || 0 };
+    }
+  }
+  for (const [areaId, entry] of indoor) {
+    const point = outside.get(areaId);
+    if (point) entry.out = { x: Number(point.x) || 0, z: Number(point.z) || 0 };
+  }
+  return Array.from(indoor.values());
+}
 // Getal uit Game-scherm (0 is ook een geldige keuze), anders de standaard; begrensd tot 0..max.
 function fogPercent(value, fallback, max = 100) {
   const number = value === "" || value === null || value === undefined ? NaN : Number(value);
@@ -876,10 +926,15 @@ function withGame(world, source, options) {
   // pijltje op de grond. De server zet je van de ene kant naar de andere.
   const doorways = [];
   for (const door of game?.doorways || []) {
+    // Kevin 24-11: elke kant heet naar waar je heen gaat: zelf ingevuld, anders het deelgebied van de andere kant.
+    const sideNames = {
+      a: door.a?.name || areaNameAt(source.world, door.b?.x, door.b?.z) || door.displayName,
+      b: door.b?.name || areaNameAt(source.world, door.a?.x, door.a?.z) || door.displayName
+    };
     for (const side of ["a", "b"]) {
       const end = door[side] || {};
       const entityId = editor ? EDITOR_DOC_PREFIX + "doorway:" + door.doorwayId + (side === "b" ? "#b" : "") : "doorway_entity." + door.doorwayId + "." + side;
-      entities.push(Object.assign(modelEntity({ id: entityId, label: door.displayName + (editor ? (side === "a" ? " (A)" : " (B)") : ""), modelAssetId: end.modelAssetId, x: end.x, y: end.y, z: end.z,
+      entities.push(Object.assign(modelEntity({ id: entityId, label: sideNames[side] + (editor ? (side === "a" ? " (A)" : " (B)") : ""), modelAssetId: end.modelAssetId, x: end.x, y: end.y, z: end.z,
         rotationY: end.rotationY, scale: end.scale, flagId: editor ? null : door.flagId, flagOn: door.flagOn }),
       // Kevin 23-11: de pijl blijft ook bij een model (klein en plat); het grote vlak alleen in de editor zonder model.
       { doorwayArrow: side === "b" && door.oneWay === true ? "red" : "green", doorwayArrowBig: editor && !end.modelAssetId }));
@@ -887,8 +942,8 @@ function withGame(world, source, options) {
     }
     doorways.push(Object.assign({ id: door.doorwayId, displayName: door.displayName, useMode: door.useMode, useMeters: door.useMeters, arriveMeters: door.arriveMeters,
       oneWay: door.oneWay === true, keyItemId: door.keyItemId || null, minLevel: door.minLevel || 1, combatBlockSeconds: door.combatBlockSeconds,
-      a: { x: Number(door.a?.x) || 0, y: Number(door.a?.y) || 0, z: Number(door.a?.z) || 0, rotationY: Number(door.a?.rotationY) || 0, hasModel: Boolean(door.a?.modelAssetId) },
-      b: { x: Number(door.b?.x) || 0, y: Number(door.b?.y) || 0, z: Number(door.b?.z) || 0, rotationY: Number(door.b?.rotationY) || 0, hasModel: Boolean(door.b?.modelAssetId) } },
+      a: { x: Number(door.a?.x) || 0, y: Number(door.a?.y) || 0, z: Number(door.a?.z) || 0, rotationY: Number(door.a?.rotationY) || 0, hasModel: Boolean(door.a?.modelAssetId), name: sideNames.a },
+      b: { x: Number(door.b?.x) || 0, y: Number(door.b?.y) || 0, z: Number(door.b?.z) || 0, rotationY: Number(door.b?.rotationY) || 0, hasModel: Boolean(door.b?.modelAssetId), name: sideNames.b } },
     door.flagId ? { flag: { id: door.flagId, on: door.flagOn !== false } } : {}));
   }
   // In de editor: vijand- en grondstofplekken als model (de game toont ze via de vijandenserver).
@@ -1115,7 +1170,7 @@ function withGame(world, source, options) {
     terrain: Object.assign({}, world.terrain || {}, { waterWalk: game?.waterWalk || null }),
     // Stap 4 (HUD): fog of war op de minimap. De server onthoudt per speler welke vakjes van 8 m ontdekt zijn.
     minimap: editor ? world.minimap : Object.assign({}, world.minimap || {}, { game: Object.assign({}, world.minimap?.game || {}, {
-      enabled: true, sourceMinimapId: "world", areaLabels: areaLabels(source.world),
+      enabled: true, sourceMinimapId: "world", areaLabels: areaLabels(source.world), indoors: indoorMap(source.world, game?.doorways || []),
       clickToMove: hud.mapMiniClickToMove !== false,
       questArrowDistanceMeters: fogPercent(hud.questArrowDistanceMeters, 200, 2000),
       presentation: mapPresentation,

@@ -1,4 +1,4 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261123-muur17";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261124-binnen1";
 import { nextPlayerRouteWaypoint } from "../shared/player-path-client.js?v=20261123-deur1";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20261106-perf1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
@@ -7,7 +7,7 @@ import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolatio
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createWorldSounds } from "./world-sounds.js?v=20261116-herstel1";
 import { createActorPresentation } from "./actor-presentation.js?v=20261116-herstel1";
-import { createGkHud } from "./hud/gk-hud.js?v=20261123-fix3";
+import { createGkHud } from "./hud/gk-hud.js?v=20261124-binnen1";
 import { dayNightState, mixColor } from "../shared/day-night.js?v=20261115-fase10";
 import { node05ActionBody, node05OperationId } from "./node05-request.js?v=20261113-fase8d";
 import {
@@ -8611,7 +8611,7 @@ function doorwayRuntimeTargets() {
       const entityId = "doorway_entity." + door.id + "." + side;
       out.push(node03TargetWithClientRange(Object.assign({
         instanceId: "door_target." + door.id + "." + side, doorwayId: door.id, side: side, entityKind: "doorway", targetKind: "doorway",
-        action: "door_use_target", prompt: door.useMode === "walk" ? "Erheen" : "Naar binnen", displayName: door.displayName || "Doorgang",
+        action: "door_use_target", prompt: door.useMode === "walk" ? "Erheen" : "Naar binnen", displayName: end.name || door.displayName || "Doorgang",
         x: num(end.x, 0), y: num(end.y, 0), z: num(end.z, 0), radius: 1, range: doorUseRange(door), useMeters: doorUseRange(door), available: true
       }, {
         visualEntityId: entityId, linkedEntityId: entityId, entityRef: entityId, linkedEntity: { entityId: entityId, nodeId: entityId }
