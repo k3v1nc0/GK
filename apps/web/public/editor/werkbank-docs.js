@@ -10,6 +10,7 @@ import { cleanXpCurve, xpCostAt, xpTotals } from "../shared/level-math.js";
 import { areaCenterMm, areaCirclePointsMm, areaRectPointsMm, areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261123-muur14";
 import { QUEST_START_MODES, hasOwnSteps, objectiveText, questGraphIssues, questStartIssues, questStartMode, requirementText, stepsFromSimple } from "../shared/quest-graph.js?v=20261110-fase5";
 import { openQuestBuilder } from "./quest-builder.js?v=20261110-fase5";
+import { ATTACH_POINTS, attachPointDef, attachPointForItem } from "../shared/equipment-attach.js?v=20261125-u1a";
 
 const DOC_MIME = "application/x-gk-doc";
 
@@ -587,6 +588,10 @@ export function createDocBench(options = {}) {
     return wrap;
   }
 
+  const BODY_GROUP = "👕 Aan het lichaam";
+  const BODY_FIT_FIELD = { label: "Passen", ui: { icon: "🧍" },
+    help: { waarvoor: "Zet een uiterlijk met dit item aan zijn punt in de 3D-view, zodat je het goed kunt zetten.", goed: "Kies een uiterlijk, druk 🧍 Passen, en zet het item met G (schuiven), R (draaien) en T (grootte) goed in de hand. Zit het bij alle items van één uiterlijk scheef, kies dan ✋ Punt.", probleem: "Je ziet geen item in de hand → geef het item eerst een Model (of Model in de hand)." } };
+
   // Klassen: ieder uiterlijk kan een andere rig en andere clipnamen hebben. Daarom staan de
   // speleranimaties per model, in plaats van één set animaties voor de hele wereld of klasse.
   function animationProfilesControl(field, value, body, onChange) {
@@ -627,6 +632,94 @@ export function createDocBench(options = {}) {
       ]));
     }
     return box;
+  }
+
+  // Uitrusting U1a (25-11): per uiterlijk de 4 bevestigpunten. Hier alleen zien en terugzetten; afstellen doe je op een
+  // item: blok 👕 Aan het lichaam > 🧍 Passen, met ✋ Punt aan.
+  function attachPointsControl(field, value, body, onChange) {
+    const modelIds = Array.isArray(body.models) ? body.models : [];
+    if (!modelIds.length) return el("div", { class: "wbdNote", text: "Voeg eerst één of meer modellen toe bij Uiterlijk." });
+    const all = value && typeof value === "object" && !Array.isArray(value) ? clone(value) : {};
+    const box = el("div", { class: "wbdAnimationProfiles" });
+    for (const assetId of modelIds) {
+      const asset = getAssets().find((entry) => entry.id === assetId) || null;
+      const rows = el("div", { class: "wbdAnimationProfileRows" });
+      for (const point of ATTACH_POINTS) {
+        const entry = all[assetId]?.[point.key] || null;
+        const moved = entry && ["x", "y", "z", "rx", "ry", "rz"].some((name) => Number(entry[name]));
+        const text = (entry?.bone ? "bot " + entry.bone : "bot vanzelf (" + point.bones[0] + ")") + (moved ? " · aangepast" : "");
+        const reset = el("button", { type: "button", class: "wbdMini", title: "Terug naar vanzelf", text: "↺" });
+        reset.disabled = !entry;
+        reset.addEventListener("click", () => {
+          const points = Object.assign({}, all[assetId] || {});
+          delete points[point.key];
+          if (Object.keys(points).length) all[assetId] = points; else delete all[assetId];
+          onChange(Object.keys(all).length ? all : null);
+        });
+        rows.append(el("div", { class: "wbdAnimationProfileRow" }, [
+          el("span", { class: "wbdAnimationProfileState", text: point.icon + " " + point.name }),
+          el("span", { class: "wbdMuted", text }), reset
+        ]));
+      }
+      box.append(el("section", { class: "wbdAnimationProfile" }, [el("div", { class: "wbdAnimationProfileTitle", text: "🧍 " + (asset?.name || assetId) }), rows]));
+    }
+    box.append(el("div", { class: "wbdNote", text: "Afstellen: open een item met een model, blok 👕 Aan het lichaam, en druk 🧍 Passen." }));
+    return box;
+  }
+
+  // Uitrusting U1a (25-11): in het blok 👕 Aan het lichaam van een item: uiterlijk kiezen en 🧍 Passen in de 3D-view.
+  function bodyFitRow(doc) {
+    const fit = bench.bodyFit && bench.bodyFit.itemKey === doc.docKey ? bench.bodyFit : null;
+    const looks = typeof bench.bodyFitLooks === "function" ? bench.bodyFitLooks() : [];
+    const wrap = el("div", { class: "wbdBodyFit" });
+    if (!looks.length) {
+      wrap.append(el("div", { class: "wbdNote", text: "Er is nog geen uiterlijk: zet eerst een model bij Instellingen > Klasse > Uiterlijk." }));
+      return fieldRow("bodyFit", BODY_FIT_FIELD, wrap, true);
+    }
+    const select = el("select", { class: "wbdSelect", title: "Op welk uiterlijk je past" }, looks.map((look) => el("option", { value: look.assetId, text: look.name })));
+    select.value = fit?.lookAssetId || bench.bodyFitLook || looks[0].assetId;
+    if (!looks.some((look) => look.assetId === select.value)) select.value = looks[0].assetId;
+    const go = el("button", { type: "button", class: "wbdChoice" + (fit ? " active" : ""), text: fit ? "✓ Klaar" : "🧍 Passen" });
+    go.addEventListener("click", () => {
+      bench.bodyFitLook = select.value;
+      if (typeof bench.onBodyFit === "function") bench.onBodyFit(fit ? "stop" : "start", select.value);
+    });
+    select.addEventListener("change", () => {
+      bench.bodyFitLook = select.value;
+      if (fit && typeof bench.onBodyFit === "function") bench.onBodyFit("start", select.value);
+    });
+    wrap.append(el("div", { class: "wbdInline" }, [select, go]));
+    if (!doc.body?.bodyModelAssetId && !doc.body?.worldModelAssetId) {
+      wrap.append(el("div", { class: "wbdNote", text: "Dit item heeft nog geen model: sleep eerst een model op 🧊 Model of 🗡️ Model in de hand." }));
+    }
+    if (!attachPointForItem(doc.body)) {
+      wrap.append(el("div", { class: "wbdNote", text: "Dit item heeft geen wapenhand of andere hand als plek. Kies bij 📍 Waar op het lichaam een punt (anders past het in de rechterhand)." }));
+    }
+    if (fit) {
+      const target = (value, label) => {
+        const button = el("button", { type: "button", class: "wbdChoice" + (fit.target === value ? " active" : ""), text: label });
+        button.addEventListener("click", () => bench.onBodyFit?.("target", value));
+        return button;
+      };
+      const pointName = attachPointDef(attachPointForItem(doc.body) || "right_hand")?.name || "";
+      wrap.append(el("div", { class: "wbdInline", title: "Wat G/R/T verschuift" }, [target("item", "🗡️ Item"), target("point", "✋ Punt " + pointName.toLowerCase() + " (alle items)")]));
+      if (fit.failed) wrap.append(el("div", { class: "wbdNote", text: "⚠️ Dit uiterlijk kon niet laden." }));
+      else if (!fit.ready) wrap.append(el("div", { class: "wbdNote", text: "Laden…" }));
+      else {
+        if (fit.bones.length) {
+          const bone = el("select", { class: "wbdSelect", title: "Aan welk bot het punt hangt" },
+            [el("option", { value: "", text: "Bot: vanzelf" })].concat(fit.bones.map((name) => el("option", { value: name, text: "Bot: " + name }))));
+          const lookDoc = bench.docs("player_class").find((entry) => Array.isArray(entry.body?.models) && entry.body.models.includes(fit.lookAssetId));
+          const ownBone = lookDoc?.body?.attachPoints?.[fit.lookAssetId]?.[attachPointForItem(doc.body) || "right_hand"]?.bone || "";
+          bone.value = fit.bones.includes(ownBone) ? ownBone : "";
+          bone.addEventListener("change", () => bench.onBodyFit?.("bone", bone.value));
+          wrap.append(bone);
+        }
+        if (fit.boneMissing) wrap.append(el("div", { class: "wbdNote", text: "⚠️ Geen handbot gevonden: kies hierboven een bot." }));
+        wrap.append(el("div", { class: "wbdNote", text: "In de 3D-view: G = schuiven, R = draaien, T = groter/kleiner. Daarna X/Y/Z = langs de rode/groene/blauwe pijl. Klik of Enter = vast, Esc = terug, nog eens Esc = klaar." }));
+      }
+    }
+    return fieldRow("bodyFit", BODY_FIT_FIELD, wrap, true);
   }
 
   function lootControl(field, value, onChange) {
@@ -912,6 +1005,7 @@ export function createDocBench(options = {}) {
     if (type === "refList") return refListControl(field, value, onChange);
     if (type === "assetList") return modelListControl(field, value, onChange);
     if (type === "animationProfiles") return animationProfilesControl(field, value, body, onChange);
+    if (type === "attachPoints") return attachPointsControl(field, value, body, onChange);
     if (type === "color") {
       const input = el("input", { type: "color", class: "wbdColor" });
       input.value = emptyValue(value) ? (field.default || "#888888") : value;
@@ -1105,6 +1199,11 @@ export function createDocBench(options = {}) {
           const profiles = Object.fromEntries(Object.entries(body.animationProfiles).filter(([assetId]) => allowed.has(assetId)));
           if (Object.keys(profiles).length) body.animationProfiles = profiles; else delete body.animationProfiles;
         }
+        if (kind === "player_class" && key === "models" && body.attachPoints) {
+          const allowed = new Set(Array.isArray(next) ? next : []);
+          const points = Object.fromEntries(Object.entries(body.attachPoints).filter(([assetId]) => allowed.has(assetId)));
+          if (Object.keys(points).length) body.attachPoints = points; else delete body.attachPoints;
+        }
         if (isNew && key === spec.idField) bench.draft.idTouched = true;
         if (key === "displayName" && isNew && spec.idField && !bench.draft.idTouched) {
           const prefix = { item_definition: "item", ability: "ability", loot_table: "loot", resource_definition: "resource", actor_archetype: "actor",
@@ -1157,7 +1256,7 @@ export function createDocBench(options = {}) {
       const fieldControl = lockedRoadType
         ? el("div", { class: "wbdNote", text: "🛣️ Weg is een vast type en kan niet in een ander vlak worden veranderd." })
         : control(key, field, body, isNew, onChange);
-      const row = fieldRow(key, shown, fieldControl, ["loot", "refList", "assetList", "animationProfiles", "curve", "route"].includes(field.ui?.control) || field.ui?.multiline);
+      const row = fieldRow(key, shown, fieldControl, ["loot", "refList", "assetList", "animationProfiles", "attachPoints", "curve", "route"].includes(field.ui?.control) || field.ui?.multiline);
       if (field.ui?.group) groupBox(field.ui.group).fields.append(row);
       else (field.ui?.more && !bare ? more : visible).append(row);
     }
@@ -1179,6 +1278,8 @@ export function createDocBench(options = {}) {
         help: { waarvoor: "Maak het gebied een cirkel (straal in meter) of rechthoek (halve breedte in meter) op dezelfde plek.", goed: "10 tot 40 m voor een zoekgebied.", probleem: "Andere vorm nodig → sleep de punten in de 3D-view (F = punt erbij)." } },
         el("div", { class: "wbdInline" }, [size, circle, rect])));
     }
+    // Uitrusting U1a (25-11): 🧍 Passen bovenaan het blok 👕 Aan het lichaam.
+    if (kind === "item_definition" && !isNew && doc && groups.has(BODY_GROUP)) groups.get(BODY_GROUP).fields.prepend(bodyFitRow(doc));
     for (const [name, entry] of groups) entry.toggle.textContent = (entry.fields.hidden ? "▸ " : "▾ ") + name + " (" + entry.fields.childElementCount + ")";
     host.append(visible);
     if (bare) return;

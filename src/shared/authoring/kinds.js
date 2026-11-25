@@ -25,6 +25,7 @@ import { PORTAL_KINDS } from "./kinds/portal.js";
 import { DOORWAY_KINDS } from "./kinds/doorway.js";
 import { PROFESSION_KINDS, itemProfessionFields } from "./kinds/profession.js";
 import { effectFields } from "./kinds/effect-fields.js";
+import { ATTACH_POINTS, ATTACH_POINT_KEYS } from "../../../apps/web/public/shared/equipment-attach.js";
 import { AREA_SETTING_SPECS, AREA_SOORT_ORDER, AREA_SOORTEN, areaSettingsIssues, areaSoort } from "./kinds/area.js";
 import { questSpawnsShapeIssues, questStartShapeIssues, questStepsShapeIssues } from "../../../apps/web/public/shared/quest-graph.js";
 
@@ -56,6 +57,14 @@ const regionRef = { type: "ref", refKind: "region", required: true, audience: "c
   help: help("In welk gebied dit ligt.", "Wordt vanzelf gekozen als je het in de 3D-view tekent.", "Melding 'buiten gebied' → teken het binnen een gebied.") };
 
 const USE_GROUP = "✨ Gebruiken: eten, drinken en effect";
+// Uitrusting U1a (25-11): hoe een item aan het lichaam hangt. Afstellen met 🧍 Passen in de 3D-view (G/R/T).
+const BODY_GROUP = "👕 Aan het lichaam";
+const bodyMove = (label, icon, axis) => ({ type: "number", required: false, min: -2, max: 2, audience: "client", label,
+  ui: ui(icon, "slider", "werkbank", { step: 0.005, unit: "m", range: [-0.5, 0.5], group: BODY_GROUP }), default: 0,
+  help: help("Schuift het item " + axis + " ten opzichte van het punt op het lichaam (de " + axis + " pijl bij 🧍 Passen).", "Meestal een paar cm. Makkelijkst: 🧍 Passen en dan G.", "Item zweeft naast de hand → zet terug op 0 of pas opnieuw.") });
+const bodyTurn = (label, icon, axis) => ({ type: "number", required: false, min: 0, max: 360, audience: "client", label,
+  ui: ui(icon, "slider", "werkbank", { step: 1, unit: "°", group: BODY_GROUP }), default: 0,
+  help: help("Draait het item om de " + axis + " pijl van het punt op het lichaam.", "0, 90, 180 of 270 is vaak genoeg. Makkelijkst: 🧍 Passen en dan R.", "Item staat de verkeerde kant op → draai 90° of pas opnieuw.") });
 
 export const CANONICAL_KINDS = {
   project_settings: {
@@ -163,6 +172,25 @@ export const CANONICAL_KINDS = {
       requiredLevel: { type: "integer", required: false, min: 1, max: LEVEL_LIMIT, audience: "client", label: "Vanaf level",
         ui: ui("🎚️", "slider", "werkbank", { step: 1, range: [1, 100], more: true }), default: 1,
         help: help("Vanaf welk level je dit kunt aandoen. Staat schaling aan, dan telt de bonus tegen een vijand van een lager level maar voor een deel (een zwaard vanaf level 10 telt tegen een level-5 vijand voor de helft).", "1 voor de eerste spullen; daarna het level van het gebied waar je het vindt.", "Beginners lopen met het sterkste zwaard → zet hier een hoger level.") },
+      // Uitrusting U1a (25-11): het blok 👕 Aan het lichaam. Leeg model = het model op de grond. Het punt komt vanzelf
+      // uit de uitrustingsplek (wapenhand = rechterhand, andere hand = linkerhand). De game toont het vanaf U1b.
+      bodyModelAssetId: { type: "asset", assetType: "model", required: false, maxLength: 160, audience: "client", label: "Model in de hand",
+        ui: ui("🗡️", "asset", "werkbank", { group: BODY_GROUP }), default: null,
+        help: help("Het 3D-model als je het item draagt (in de hand of op de rug). Leeg = hetzelfde model als op de grond.", "Meestal leeg laten; alleen een ander model als de grondversie anders is (bijv. een opgerolde mantel).", "Je ziet het verkeerde model in de hand → sleep hier een ander model op.") },
+      bodyPoint: { type: "select", required: false, options: ["auto"].concat(ATTACH_POINT_KEYS),
+        optionIcons: Object.assign({ auto: "✨" }, Object.fromEntries(ATTACH_POINTS.map((point) => [point.key, point.icon]))),
+        optionLabels: Object.assign({ auto: "Vanzelf (uit de plek)" }, Object.fromEntries(ATTACH_POINTS.map((point) => [point.key, point.name]))),
+        audience: "client", label: "Waar op het lichaam", ui: ui("📍", "select", "werkbank", { group: BODY_GROUP }), default: "auto",
+        help: help("Aan welk punt van het lichaam het item hangt. Vanzelf: wapenhand = rechterhand, andere hand = linkerhand.", "Vanzelf, behalve voor iets op de rug of de heup.", "Item zit in de verkeerde hand → kies hier de andere hand.") },
+      bodyX: bodyMove("Schuiven (X)", "🔴", "rode"),
+      bodyY: bodyMove("Schuiven (Y)", "🟢", "groene"),
+      bodyZ: bodyMove("Schuiven (Z)", "🔵", "blauwe"),
+      bodyRotX: bodyTurn("Draaien (X)", "🔴", "rode"),
+      bodyRotY: bodyTurn("Draaien (Y)", "🟢", "groene"),
+      bodyRotZ: bodyTurn("Draaien (Z)", "🔵", "blauwe"),
+      bodyScaleBp: { type: "integer", required: false, min: 100, max: 100000, audience: "client", label: "Grootte aan het lichaam",
+        ui: ui("📏", "slider", "werkbank", { step: 100, unit: "%", scale: 100, range: [1000, 40000], group: BODY_GROUP }), default: 10000,
+        help: help("Hoe groot het item is als je het draagt. 100 % = zoals het model is gemaakt.", "Een zwaard is ongeveer 1 m, een schild 50-70 cm. Makkelijkst: 🧍 Passen en dan T.", "Wapen veel te groot of te klein in de hand → schuif hier of druk T bij 🧍 Passen.") },
       // Stap 4 (HUD): eten en drinken. Met een waarde boven 0 krijgt het item in de tas de knop Gebruiken.
       // Healing (2-11): alles over gebruiken staat samen in het uitklapblok "Gebruiken" onderaan het item.
       healAmount: { type: "integer", required: false, min: 0, max: 1000000, audience: "client", label: "Geneest meteen",
@@ -484,6 +512,25 @@ export function validateDocument(kind, body) {
         if (unknown.length) issues.push(issue(key, "FIELD_UNKNOWN", field.label + ": onbekende animatie " + unknown.join(", ") + "."));
         if (Object.values(profile).some((clip) => typeof clip !== "string" || !clip.trim() || clip.length > (field.maxLength || 120))) {
           issues.push(issue(key, "FIELD_ANIMATION_PROFILE", field.label + ": animatienamen moeten tekst van hooguit " + (field.maxLength || 120) + " tekens zijn."));
+        }
+      }
+      continue;
+    }
+    if (field.type === "attachPoints") {
+      // Uitrusting U1a (25-11): { [uiterlijk]: { [punt]: { bone?, x?, y?, z? (m), rx?, ry?, rz? (graden) } } }.
+      if (typeof value !== "object" || Array.isArray(value)) { issues.push(issue(key, "FIELD_TYPE", field.label + " moet een object zijn.")); continue; }
+      const entries = Object.entries(value);
+      if (entries.length > (field.maxItems || 40)) issues.push(issue(key, "FIELD_LIST_SIZE", field.label + ": hooguit " + (field.maxItems || 40) + " uiterlijken."));
+      const okNumber = (n, min, max) => typeof n === "number" && Number.isFinite(n) && n >= min && n <= max;
+      const badPoint = (point) => !point || typeof point !== "object" || Array.isArray(point)
+        || Object.keys(point).some((name) => !["bone", "x", "y", "z", "rx", "ry", "rz"].includes(name))
+        || (point.bone !== undefined && (typeof point.bone !== "string" || !point.bone.trim() || point.bone.length > 120))
+        || ["x", "y", "z"].some((name) => point[name] !== undefined && !okNumber(point[name], -2, 2))
+        || ["rx", "ry", "rz"].some((name) => point[name] !== undefined && !okNumber(point[name], 0, 360));
+      for (const [assetId, points] of entries) {
+        if (!ASSET_PATTERN.test(assetId) || assetId.length > 160 || !points || typeof points !== "object" || Array.isArray(points)
+          || Object.keys(points).some((name) => !ATTACH_POINT_KEYS.includes(name)) || Object.values(points).some(badPoint)) {
+          issues.push(issue(key, "FIELD_ATTACH_POINT", field.label + ": ongeldig punt bij uiterlijk " + assetId + "."));
         }
       }
       continue;

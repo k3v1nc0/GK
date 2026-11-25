@@ -354,3 +354,5 @@
 .edSearchSnip mark { background: rgba(255, 180, 84, .3); color: inherit; border-radius: 3px; padding: 0 1px; }
 .wbdFlash { animation: wbdFlash 2.4s ease-out; border-radius: 6px; }
 @keyframes wbdFlash { 0%, 40% { background: rgba(255, 180, 84, .28); box-shadow: 0 0 0 2px var(--wbd-accent); } 100% { background: transparent; box-shadow: 0 0 0 2px transparent; } }
+/* Uitrusting U1a (25-11): 🧍 Passen in het blok 👕 Aan het lichaam. */
+.wbdBodyFit { display: flex; flex-direction: column; gap: 6px; }

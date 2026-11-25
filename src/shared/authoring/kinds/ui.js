@@ -24,7 +24,7 @@ export const help = (waarvoor, goed, probleem) => Object.freeze({ waarvoor, goed
 
 export const ui = (icon, control, place, extra = {}) => Object.freeze(Object.assign({ icon, control, place }, extra));
 
-export const FIELD_CONTROLS = Object.freeze(["text", "id", "slider", "toggle", "select", "asset", "assetList", "ref", "refList", "tags", "loot", "points", "areaSettings", "animationProfiles", "color", "terrain", "terrainPaint", "questSteps", "questStart", "questSpawns", "curve", "route"]);
+export const FIELD_CONTROLS = Object.freeze(["text", "id", "slider", "toggle", "select", "asset", "assetList", "ref", "refList", "tags", "loot", "points", "areaSettings", "animationProfiles", "attachPoints", "color", "terrain", "terrainPaint", "questSteps", "questStart", "questSpawns", "curve", "route"]);
 export const FIELD_PLACES = Object.freeze(["werkbank", "instellingen", "terrein", "viewport", "relaties", "questbuilder"]);
 export const KIND_PLACES = Object.freeze(["werkbank", "instellingen", "terrein"]);
 
@@ -46,6 +46,7 @@ export const CONTROL_FOR_TYPE = Object.freeze({
   linkList: ["points"],
   areaSettings: ["areaSettings"],
   animationProfiles: ["animationProfiles"],
+  attachPoints: ["attachPoints"],
   color: ["color"],
   terrainChunks: ["terrain"],
   terrainPaint: ["terrainPaint"],

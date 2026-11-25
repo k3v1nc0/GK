@@ -36,6 +36,7 @@ import { createSkyLayer } from "./sky-render.js?v=20261120-sky2";
 import { wallDecos, wallJoins, wallPieces, wallWindows } from "./walls.js?v=20261123-muur14";
 import { INDOOR_ZONE } from "./indoor-zone.js?v=20261123-binnentab1";
 import { createSrgbTextureLoader } from "./srgb-texture-loader.js?v=20261123-muur7";
+import { attachToBone, boneNames, detachFromBone, findAttachBone, setAttachOffsets } from "./equipment-attach.js?v=20261125-u1a";
 export {
   effectiveGroundBounds,
   effectiveWorldGroundBounds,
@@ -4805,6 +4806,8 @@ export function createGkWorldRuntime(canvas, options = {}) {
   // Werkbank Fase 10 (Kevin 16-11): de route van één NPC of vlieger (editor), zie setRouteEditorOverlay.
   let routeEditorOverlay = null;
   let routeEditorState = null;
+  // Uitrusting U1a (25-11): 🧍 Passen (zie setBodyFitPreview).
+  let bodyFit = null;
   let routeEditorPositions = [];
   let scatterEditorOverlay = null;
   let scatterEditorOverlayState = null;
@@ -9942,6 +9945,202 @@ function resolveChunkDebugCenter(policy) {
     routeEditorState = state || null;
     buildRouteEditorOverlay();
   }
+  // Uitrusting U1a (25-11): 🧍 Passen. Een uiterlijk met het item in de hand, los in de 3D-view: niet in de wereld,
+  // niet in een chunk en niet opgeslagen. De editor stelt met G/R/T het item of het punt van het uiterlijk af
+  // (bodyFitDrag rekent de muis om naar een verschuiving; updateBodyFitPreview laat hem zien).
+  function clearBodyFitPreview() {
+    if (!bodyFit) return;
+    bodyFit.alive = false;
+    if (bodyFit.axes) { bodyFit.axes.geometry?.dispose?.(); bodyFit.axes.material?.dispose?.(); }
+    // De modellen delen geometrie en materiaal met de cache (SkeletonUtils.clone): alleen weghalen, niet opruimen.
+    if (bodyFit.group?.parent) bodyFit.group.parent.remove(bodyFit.group);
+    bodyFit = null;
+    requestRender("body-fit");
+  }
+
+  function bodyFitIdleClip(clips, wanted) {
+    const list = Array.isArray(clips) ? clips : [];
+    return list.find((clip) => wanted && clip.name === wanted) || list.find((clip) => /idle/i.test(clip.name || "")) || list[0] || null;
+  }
+
+  function rebuildBodyFitAttach() {
+    const state = bodyFit;
+    if (!state?.character) return;
+    if (state.attach) { detachFromBone(state.attach); state.attach = null; }
+    if (state.axes) { state.axes.geometry?.dispose?.(); state.axes.material?.dispose?.(); state.axes = null; }
+    const bone = findAttachBone(state.character, state.spec.pointKey, state.spec.boneName || "");
+    state.bone = bone;
+    // Geen bot (een model zonder skelet): dan hangt het item aan het model zelf.
+    state.attach = attachToBone(THREE, state.character, bone || state.character, state.model, state.spec.point, state.spec.item);
+    const axes = new THREE.AxesHelper(0.3);
+    axes.material.depthTest = false;
+    axes.material.depthWrite = false;
+    axes.material.transparent = true;
+    axes.material.toneMapped = false;
+    axes.renderOrder = 7003;
+    axes.frustumCulled = false;
+    axes.raycast = function () {};
+    axes.userData.debugOverlay = true;
+    axes.userData.bodyFitPreview = true;
+    state.attach.point.add(axes);
+    state.axes = axes;
+  }
+
+  function bodyFitInfo() {
+    const state = bodyFit;
+    if (!state) return null;
+    return { ready: Boolean(state.character), failed: state.failed === true, bones: state.bones.slice(), bone: state.bone?.name || "",
+      boneMissing: Boolean(state.character) && !state.bone };
+  }
+
+  // spec: { lookAssetId, itemAssetId, idleClip, pointKey, boneName, point: {x,y,z,rx,ry,rz}, item: {x,y,z,rx,ry,rz,s},
+  // position: {x,y,z}, facing (radialen), onReady(info) }.
+  function setBodyFitPreview(spec) {
+    clearBodyFitPreview();
+    if (!spec || mode !== "editor" || !scene) return false;
+    const look = assetById(world, spec.lookAssetId);
+    if (!look?.sourcePath) return false;
+    const itemAsset = spec.itemAssetId ? assetById(world, spec.itemAssetId) : null;
+    const group = new THREE.Group();
+    group.name = "GK editor body fit";
+    group.userData.runtimeAlive = true;
+    group.userData.bodyFitPreview = true;
+    group.position.set(num(spec.position?.x, 0), num(spec.position?.y, 0), num(spec.position?.z, 0));
+    group.rotation.y = num(spec.facing, 0);
+    scene.add(group);
+    const state = { alive: true, group, spec: Object.assign({}, spec), character: null, model: null, attach: null, axes: null, bones: [], bone: null, failed: false };
+    bodyFit = state;
+    const lookRecord = ensureModelRecord(look, world);
+    const itemRecord = itemAsset?.sourcePath ? ensureModelRecord(itemAsset, world) : null;
+    const whenReady = (record, fn) => {
+      if (!record || record.status === "error") fn(null);
+      else if (record.status === "ready") fn(record.gltf);
+      else record.waiters.push(fn);
+    };
+    whenReady(lookRecord, function (lookGltf) {
+      whenReady(itemRecord, function (itemGltf) {
+        if (!state.alive || bodyFit !== state) return;
+        if (!lookGltf?.scene) { state.failed = true; if (typeof spec.onReady === "function") spec.onReady(bodyFitInfo()); return; }
+        const character = SkeletonUtils.clone(lookGltf.scene);
+        // Stilstaan in de eerste beeld van de idle-animatie (geen mixer die blijft lopen: de hand staat stil bij het afstellen).
+        const idle = bodyFitIdleClip(lookGltf.animations, spec.idleClip);
+        if (idle) {
+          const mixer = new THREE.AnimationMixer(character);
+          mixer.clipAction(idle).play();
+          mixer.update(0);
+          mixer.stopAllAction();
+        }
+        character.traverse(function (child) {
+          child.userData = child.userData || {};
+          child.userData.runtimeAlive = true;
+          child.userData.bodyFitPreview = true;
+          if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; child.frustumCulled = false; }
+        });
+        group.add(character);
+        state.character = character;
+        state.bones = boneNames(character);
+        if (itemGltf?.scene) {
+          state.model = SkeletonUtils.clone(itemGltf.scene);
+          state.model.traverse(function (child) {
+            child.userData = child.userData || {};
+            child.userData.runtimeAlive = true;
+            child.userData.bodyFitPreview = true;
+            if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; child.frustumCulled = false; }
+          });
+        }
+        rebuildBodyFitAttach();
+        if (typeof spec.onReady === "function") spec.onReady(bodyFitInfo());
+        requestRender("body-fit");
+      });
+    });
+    return true;
+  }
+
+  // patch: { point, item } = alleen verschuiven; boneName of pointKey anders = opnieuw aan het (andere) bot hangen.
+  function updateBodyFitPreview(patch) {
+    const state = bodyFit;
+    if (!state || !patch) return null;
+    const rehang = (patch.boneName !== undefined && patch.boneName !== state.spec.boneName)
+      || (patch.pointKey !== undefined && patch.pointKey !== state.spec.pointKey);
+    Object.assign(state.spec, patch);
+    if (!state.character) return bodyFitInfo();
+    if (rehang) rebuildBodyFitAttach();
+    else setAttachOffsets(state.attach, state.spec.point, state.spec.item);
+    requestRender("body-fit");
+    return bodyFitInfo();
+  }
+
+  // De muis sinds het begin van G/R/T (dx, dy in pixels) als nieuwe verschuiving. input: { target: "item" | "point",
+  // mode: "move" | "rotate" | "scale", axis: null | "x" | "y" | "z" (de pijlen bij het punt), dx, dy, start }.
+  function bodyFitDrag(input) {
+    const state = bodyFit;
+    if (!state?.attach || !camera || !input) return null;
+    const isPoint = input.target === "point";
+    const start = Object.assign({ x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, s: 1 }, input.start || {});
+    const object = isPoint ? state.attach.point : state.attach.holder;
+    const frame = object.parent;
+    object.position.set(num(start.x, 0), num(start.y, 0), num(start.z, 0));
+    object.rotation.set(num(start.rx, 0) * DEG_TO_RAD, num(start.ry, 0) * DEG_TO_RAD, num(start.rz, 0) * DEG_TO_RAD, "XYZ");
+    if (!isPoint) object.scale.setScalar(num(start.s, 1));
+    state.group.updateMatrixWorld(true);
+    camera.updateMatrixWorld();
+    const dx = num(input.dx, 0);
+    const dy = num(input.dy, 0);
+    const out = Object.assign({}, start);
+    const axisWorld = (name) => new THREE.Vector3(name === "x" ? 1 : 0, name === "y" ? 1 : 0, name === "z" ? 1 : 0).transformDirection(state.attach.point.matrixWorld);
+    if (input.mode === "move") {
+      const origin = new THREE.Vector3();
+      object.getWorldPosition(origin);
+      const rect = canvas.getBoundingClientRect();
+      const metersPerPixel = (2 * Math.tan((camera.fov * DEG_TO_RAD) / 2) * camera.position.distanceTo(origin)) / Math.max(1, rect.height);
+      let delta;
+      if (input.axis) {
+        // Langs één pijl: de muis langs die pijl op het scherm (zo volgt het item de muis precies).
+        const dir = axisWorld(input.axis);
+        const a = worldToScreen(origin);
+        const b = worldToScreen(origin.clone().add(dir.clone().multiplyScalar(0.1)));
+        let meters = -dy * metersPerPixel;
+        if (a && b) {
+          const sx = b.x - a.x;
+          const sy = b.y - a.y;
+          const len2 = sx * sx + sy * sy;
+          if (len2 > 4) meters = ((dx * sx + dy * sy) / len2) * 0.1;
+        }
+        delta = dir.multiplyScalar(meters);
+      } else {
+        const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+        const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+        delta = right.multiplyScalar(dx * metersPerPixel).add(up.multiplyScalar(-dy * metersPerPixel));
+      }
+      const local0 = frame.worldToLocal(origin.clone());
+      const local1 = frame.worldToLocal(origin.clone().add(delta));
+      out.x = num(start.x, 0) + (local1.x - local0.x);
+      out.y = num(start.y, 0) + (local1.y - local0.y);
+      out.z = num(start.z, 0) + (local1.z - local0.z);
+    } else if (input.mode === "rotate") {
+      const axis = input.axis ? axisWorld(input.axis) : new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 2).normalize();
+      const turn = new THREE.Quaternion().setFromAxisAngle(axis, -dx * 0.01);
+      const worldQ = new THREE.Quaternion();
+      const parentQ = new THREE.Quaternion();
+      object.getWorldQuaternion(worldQ);
+      frame.getWorldQuaternion(parentQ);
+      const local = parentQ.invert().multiply(turn.multiply(worldQ));
+      const euler = new THREE.Euler().setFromQuaternion(local, "XYZ");
+      const deg = (rad) => ((rad / DEG_TO_RAD) % 360 + 360) % 360;
+      out.rx = deg(euler.x);
+      out.ry = deg(euler.y);
+      out.rz = deg(euler.z);
+    } else if (input.mode === "scale" && !isPoint) {
+      out.s = clamp(num(start.s, 1) * Math.exp(dx * 0.01), 0.01, 10);
+    }
+    return out;
+  }
+
+  function editorOrbitTarget() {
+    if (!orbitControls) return null;
+    return { x: orbitControls.target.x, y: orbitControls.target.y, z: orbitControls.target.z };
+  }
+
   // Welk routepunt ligt onder de muis (index), of -1.
   function pickRouteEditor(clientX, clientY, radiusPx = 14) {
     const points = Array.isArray(routeEditorState?.points) ? routeEditorState.points : [];
@@ -21137,6 +21336,7 @@ function resolveChunkDebugCenter(policy) {
       for (const child of Array.from(wallEditorOverlay.children)) disposeObject(child);
       wallEditorOverlay = null;
     }
+    clearBodyFitPreview();
     if (routeEditorOverlay) {
       scene.remove(routeEditorOverlay);
       for (const child of Array.from(routeEditorOverlay.children)) disposeObject(child);
@@ -21728,6 +21928,12 @@ function resolveChunkDebugCenter(policy) {
     pickRoadEditor: pickRoadEditor,
     pickWallDecoAt: pickWallDecoAt,
     setRouteEditorOverlay: setRouteEditorOverlay,
+    setBodyFitPreview: setBodyFitPreview,
+    updateBodyFitPreview: updateBodyFitPreview,
+    clearBodyFitPreview: clearBodyFitPreview,
+    bodyFitDrag: bodyFitDrag,
+    bodyFitInfo: bodyFitInfo,
+    editorOrbitTarget: editorOrbitTarget,
     flyerSounds: flyerSounds,
     flyerEvents: flyerEvents,
     pickRouteEditor: pickRouteEditor,

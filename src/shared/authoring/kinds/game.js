@@ -526,7 +526,12 @@ export const GAME_KINDS = {
         help: help("De modellen waaruit een speler van deze klasse zijn uiterlijk kiest.", "Sleep modellen uit de Bibliotheek hierop, bijv. 10 tovenaars voor DPS, elfen voor Healer, dwergen voor Tank. De eerste is de standaard.", "Speler ziet er standaard uit → sleep hier minstens één model op.") },
       animationProfiles: { type: "animationProfiles", required: false, maxItems: 40, maxLength: 120, states: PLAYER_ANIMATION_STATES,
         audience: "client", label: "Animaties per uiterlijk", ui: ui("🎞️", "animationProfiles", "instellingen", { group: PLAYER_LOOK_GROUP }), default: null,
-        help: help("Welke animatie ieder uiterlijk van deze klasse gebruikt voor bewegen en vechten.", "Kies per model Idle, Walk, Run, Attack, Cast/skill, Block, Roll, Hit, Stunned en Death uit de clips van dat model.", "Een uiterlijk gebruikt de verkeerde beweging → wijzig alleen de dropdowns van dat uiterlijk.") }
+        help: help("Welke animatie ieder uiterlijk van deze klasse gebruikt voor bewegen en vechten.", "Kies per model Idle, Walk, Run, Attack, Cast/skill, Block, Roll, Hit, Stunned en Death uit de clips van dat model.", "Een uiterlijk gebruikt de verkeerde beweging → wijzig alleen de dropdowns van dat uiterlijk.") },
+      // Uitrusting U1a (25-11): per uiterlijk waar een item hangt (rechterhand, linkerhand, rug, heup). Het bot wordt
+      // vanzelf gevonden op naam; afstellen doe je op een item met 👕 Aan het lichaam > 🧍 Passen.
+      attachPoints: { type: "attachPoints", required: false, maxItems: 40, audience: "client", label: "Bevestigpunten per uiterlijk",
+        ui: ui("✋", "attachPoints", "instellingen", { group: PLAYER_LOOK_GROUP }), default: null,
+        help: help("Waar een wapen, schild of fakkel aan het lichaam van ieder uiterlijk hangt. Het bot (bijv. RightHand) wordt vanzelf gevonden.", "Meestal niets doen. Zit een wapen bij één uiterlijk scheef, open dan een item, blok 👕 Aan het lichaam, kies dat uiterlijk bij 🧍 Passen en zet ✋ Punt aan.", "Wapen zit bij alle items van één uiterlijk scheef → pas het punt van dat uiterlijk aan (niet het item).") },
     }
   },
   // Healing (2-11): de regels voor regeneratie, effecten, doodgaan en level omhoog. Gelden voor alle klassen.

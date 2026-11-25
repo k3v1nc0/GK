@@ -1,4 +1,4 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261124-binnen3";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261125-u1a";
 import { edgeBetweenPoints, editClosedEdges } from "./walkable-edge-tools.js?v=20261031-randen1";
 import { createTerrainEditor } from "./terrain-editor.js?v=20261124-zoek1";
 import { createEditorSearch, TERRAIN_TOOL_FOR_KIND } from "./editor-search.js?v=20261124-zoek1";
@@ -12,12 +12,13 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261106-perf1";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261106-perf1";
-import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261124-binnen1";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261125-u1a";
 import { createAssetPicker } from "./mini-asset-picker.js?v=20261106-thumbs150";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
 import { createDocDrop, docKeyFromRuntimeId, docSideFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261122-doorgang1";
 import { createRoadEditor } from "./road-editor.js?v=20261123-muur14";
 import { createRouteEditor } from "./route-editor.js?v=20261116-herstel1";
+import { createBodyFitEditor } from "./body-fit-editor.js?v=20261125-u1a";
 import { AREA_EDITOR_PREFIX, AREA_SOORTEN, AREA_SOORT_ORDER, areaBodyFromNodePatch, areaCirclePointsMm, areaNodeValues, areaSoort } from "../shared/area-soorten.js?v=20261123-muur14";
 import { WALL_EDGE_KEYS, wallLinkWithKind, wallNetLinks } from "../shared/walls.js?v=20261123-muur14";
 import { INDOOR_ZONE, inIndoorZone } from "../shared/indoor-zone.js?v=20261123-binnentab1";
@@ -930,9 +931,11 @@ const docBench = createDocBench({
   onChanged: function () {
     updateDocPendingBadge();
     // 🛣️ De Weg staat niet in de 3D-wereld zelf (alleen de punten en lijnen erover): niet de hele wereld opnieuw laden.
-    if (roadSaving || routeSaving) roadEditor.sync(); else { refreshViewportForDocs(); roadEditor.sync(); }
+    // 🧍 Passen bewaart alleen hoe een item aan het lichaam hangt: dat staat niet in de wereld.
+    if (roadSaving || routeSaving || bodyFitEditor.isSaving()) roadEditor.sync(); else { refreshViewportForDocs(); roadEditor.sync(); }
     wallEditor.sync();
     routeEditor.sync();
+    bodyFitEditor.sync();
     if (state.editorMode === "workbench") renderWorkbenchLibrary(workbenchContext());
     if (state.editorMode === "settings" && el.settingsMenuPanel) docBench.renderSettingsMenu(el.settingsMenuPanel, renderSettingsCardOnly);
     if (state.editorMode === "terrain") terrainEditor.render();
@@ -1042,6 +1045,28 @@ const routeEditor = createRouteEditor({
 });
 // Een rij in het paneel aanklikken kiest dat punt in de 3D-view.
 docBench.onRoutePick = function (index) { routeEditor.selectPoint(index); };
+
+// Uitrusting U1a (25-11): 🧍 Passen op een item (blok 👕 Aan het lichaam): uiterlijk + item in de 3D-view, G/R/T.
+const bodyFitEditor = createBodyFitEditor({
+  runtime: function () { return runtime; },
+  bench: docBench,
+  getAssets: function () { return state.assets || []; },
+  setStatus: function (message, kind) { setStatus(message, kind); },
+  save: function (doc, body, label) { return docBench.saveDoc(doc.kind, doc, body, label); },
+  lastPointer: function () { return terrainLastPointer; },
+  canvasTarget: function (event) { return terrainCanvasTarget(event); },
+  suppressClick: function () { suppressNextViewportRuntimeClick(); },
+  rerender: function () {
+    if (state.editorMode === "workbench" && docBench.doc(docBench.selectedDocKey)?.kind === "item_definition" && docFocusActive()) renderDocFocusPanel();
+  }
+});
+docBench.onBodyFit = function (action, value) {
+  if (action === "start") bodyFitEditor.start(docBench.selectedDocKey, value);
+  else if (action === "stop") bodyFitEditor.stop();
+  else if (action === "target") bodyFitEditor.setTarget(value);
+  else if (action === "bone") void bodyFitEditor.setBone(value);
+};
+docBench.bodyFitLooks = function () { return bodyFitEditor.looks(); };
 
 // Wereld tekenen: de tab Terrein (hoogte, stempels, verf en grond; opslaan bij Opslaan of de tab verlaten).
 const terrainEditor = createTerrainEditor({
@@ -16841,6 +16866,7 @@ function clearDocFocus() {
   docBench.selectedDocKey = null;
   docBench.newKind = null;
   docBench.draft = null;
+  bodyFitEditor.sync();
 }
 
 function focusDoc(docKey, newKind = null) {
@@ -16852,6 +16878,7 @@ function focusDoc(docKey, newKind = null) {
   if (state.workbenchDefinitionId) workbenchSelectDefinition(null, { render: false, showOverview: false });
   state.workbenchCreateDraft = null;
   renderWorkbench();
+  bodyFitEditor.sync();
 }
 
 // Fase 7 (⚖️ Balans): naar de Werkbank, de kaart open en de camera naar de plek in de wereld.
@@ -33183,6 +33210,7 @@ function handleTerrainPointerDown(event) {
   terrainRememberPointer(event);
   // Kevin 16-11: bezig met een route (NPC, vijand of vlieger geselecteerd)? Dan is de hoofdweg even niet aan te klikken.
   const routeBusy = Boolean(routeTarget());
+  if (bodyFitEditor.handlePointerDown(event)) return;
   if (!routeBusy && wallEditor.handlePointerDown(event)) return;
   if (!routeBusy && roadEditor.handlePointerDown(event)) return;
   if (routeEditor.handlePointerDown(event)) return;
@@ -33723,6 +33751,7 @@ function handleTerrainPointerMove(event) {
     if (runtime && typeof runtime.previewTransformAt === "function") runtime.previewTransformAt(event.clientX, event.clientY);
     return;
   }
+  bodyFitEditor.handlePointerMove(event);
   if (wallEditor.handlePointerMove(event)) return;
   if (roadEditor.handlePointerMove(event)) return;
   if (routeEditor.handlePointerMove(event)) return;
@@ -33910,6 +33939,7 @@ function scatterKeyboardOwnsShortcuts(scatterNode, event) {
 function handleEditorKeyDown(event) {
   const meta = event.ctrlKey || event.metaKey;
   if (isEditableTarget(event.target)) return;
+  if (bodyFitEditor.handleKeyDown(event)) return;
   if (wallEditor.handleKeyDown(event)) return;
   if (roadEditor.handleKeyDown(event)) return;
   if (routeEditor.handleKeyDown(event)) return;
