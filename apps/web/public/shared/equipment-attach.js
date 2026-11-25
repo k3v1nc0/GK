@@ -150,3 +150,20 @@ export function setAttachOffsets(attach, point, item) {
 export function detachFromBone(attach) {
   attach?.level?.parent?.remove(attach.level);
 }
+
+// Uitrusting U1b (25-11): wat een speler draagt (item-ID's van de server) → wat er aan het lichaam hangt.
+// items = catalogs.items (de build), lookPoints = attachPoints van dit uiterlijk (Klasse > ✋). Alleen items met een
+// punt (wapenhand, andere hand of een eigen punt) en een model. Puur en gesorteerd, zodat een gelijke lijst gelijk blijft.
+export function gearFromItems(itemIds, items, lookPoints = null) {
+  const out = [];
+  for (const itemId of Array.isArray(itemIds) ? itemIds : []) {
+    const item = items && typeof items === "object" ? items[itemId] : null;
+    if (!item) continue;
+    const pointKey = attachPointForItem(item);
+    const assetId = bodyModelForItem(item);
+    if (!pointKey || !assetId) continue;
+    const entry = lookPoints && typeof lookPoints === "object" && lookPoints[pointKey] && typeof lookPoints[pointKey] === "object" ? lookPoints[pointKey] : {};
+    out.push({ itemId: String(itemId), assetId, pointKey, boneName: typeof entry.bone === "string" ? entry.bone : "", point: pointOffset(entry), item: itemBodyOffset(item) });
+  }
+  return out.sort((a, b) => (a.pointKey + a.itemId).localeCompare(b.pointKey + b.itemId));
+}

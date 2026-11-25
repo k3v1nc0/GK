@@ -64,7 +64,7 @@ export function compileCanonical(documents, options = {}) {
   }
   for (const item of items) {
     if (item.archived) continue;
-    for (const [field, expected] of [["iconAssetId", ["image", "texture"]], ["worldModelAssetId", ["model"]]]) {
+    for (const [field, expected] of [["iconAssetId", ["image", "texture"]], ["worldModelAssetId", ["model"]], ["bodyModelAssetId", ["model"]]]) {
       const assetId = item.body[field];
       if (!assetId || !assetTypes) continue;
       if (!assetTypes.has(assetId)) errors.push({ code: "ASSET_UNKNOWN", docKey: item.docKey, message: "Item " + item.body.itemId + " gebruikt onbekend asset " + assetId });

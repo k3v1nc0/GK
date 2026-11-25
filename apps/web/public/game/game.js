@@ -1,4 +1,5 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261124-binnen3";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261125-u1b";
+import { gearFromItems } from "../shared/equipment-attach.js?v=20261125-u1b";
 import { nextPlayerRouteWaypoint } from "../shared/player-path-client.js?v=20261123-deur1";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20261106-perf1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
@@ -7503,9 +7504,23 @@ function syncDebugActionButtons() {
   }
 }
 
+// Uitrusting U1b (25-11): wat je aan hebt (de server-snapshot beslist) hangt aan je eigen character: wapenhand =
+// rechterhand, andere hand = linkerhand, zoals afgesteld met 🧍 Passen in de editor. De runtime laadt alleen iets
+// opnieuw als de lijst echt verandert.
+function syncOwnGear() {
+  if (!state.runtime || typeof state.runtime.setPlayerGear !== "function") return;
+  const rows = Array.isArray(state.node03.snapshot?.equipment) ? state.node03.snapshot.equipment : [];
+  const project = state.gameProject || state.gameWorld?.gameProject || null;
+  const look = state.gameWorld?.player?.modelAssetId || "";
+  const classId = state.player?.selectedCharacterId || null;
+  const lookPoints = (classId && project?.catalogs?.playableCharacters?.[classId]?.attachPoints?.[look]) || null;
+  state.runtime.setPlayerGear(gearFromItems(rows.map((row) => row?.itemId).filter(Boolean), project?.catalogs?.items || {}, lookPoints));
+}
+
 function renderNode03Hud() {
   const modules = node03Modules();
   const snapshot = state.node03.snapshot;
+  syncOwnGear();
   refreshGameDefeatState();
   syncDebugActionButtons();
   // Stap 4: de nieuwe HUD tekent alles; de oude losse panelen komen niet meer.

@@ -36,7 +36,7 @@ import { createSkyLayer } from "./sky-render.js?v=20261120-sky2";
 import { wallDecos, wallJoins, wallPieces, wallWindows } from "./walls.js?v=20261123-muur14";
 import { INDOOR_ZONE } from "./indoor-zone.js?v=20261123-binnentab1";
 import { createSrgbTextureLoader } from "./srgb-texture-loader.js?v=20261123-muur7";
-import { attachToBone, boneNames, detachFromBone, findAttachBone, setAttachOffsets } from "./equipment-attach.js?v=20261125-u1a";
+import { attachToBone, boneNames, detachFromBone, findAttachBone, setAttachOffsets } from "./equipment-attach.js?v=20261125-u1b";
 export {
   effectiveGroundBounds,
   effectiveWorldGroundBounds,
@@ -4808,6 +4808,9 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let routeEditorState = null;
   // Uitrusting U1a (25-11): 🧍 Passen (zie setBodyFitPreview).
   let bodyFit = null;
+  // Uitrusting U1b (25-11): je eigen wapen en schild aan je hand (zie setPlayerGear).
+  let playerGear = { entries: [], sig: "[]" };
+  let playerGearApplied = null;
   let routeEditorPositions = [];
   let scatterEditorOverlay = null;
   let scatterEditorOverlayState = null;
@@ -9046,6 +9049,7 @@ function resolveChunkDebugCenter(policy) {
     activeSolids.length = 0;
     interactables.length = 0;
     activeInteractable = null;
+    clearPlayerGear();
     player.root = null;
     player.nameplateRoot = null;
     player.animationState = "idle";
@@ -10134,6 +10138,58 @@ function resolveChunkDebugCenter(policy) {
       out.s = clamp(num(start.s, 1) * Math.exp(dx * 0.01), 0.01, 10);
     }
     return out;
+  }
+
+  // Uitrusting U1b (25-11): wat je draagt hangt aan het bot van je eigen character. De game geeft de lijst (uit de
+  // server-snapshot: de server beslist wat je aan hebt); hier alleen tonen. Het model wordt 1 keer geladen en
+  // gedeeld (cache + SkeletonUtils.clone). Een stevig model aan een bot trilt binnen niet: alleen de botten van een
+  // vervormbaar lijf gaan als grote getallen naar de videokaart (zie Skeleton.update bovenaan).
+  function clearPlayerGear() {
+    if (!playerGearApplied) return;
+    playerGearApplied.alive = false;
+    for (const attach of playerGearApplied.attaches) detachFromBone(attach);
+    playerGearApplied = null;
+  }
+
+  function applyPlayerGear() {
+    const root = player.root;
+    const clone = root?.userData?.gkModelClone || null;
+    if (playerGearApplied && playerGearApplied.clone === clone && playerGearApplied.sig === playerGear.sig) return;
+    clearPlayerGear();
+    if (!root || !clone || !clone.parent) return;
+    const applied = { clone, sig: playerGear.sig, attaches: [], alive: true };
+    playerGearApplied = applied;
+    for (const entry of playerGear.entries) {
+      const asset = assetById(world, entry.assetId);
+      const record = asset?.sourcePath ? ensureModelRecord(asset, world) : null;
+      if (!record) continue;
+      const hang = function (gltf) {
+        if (!applied.alive || playerGearApplied !== applied || !gltf?.scene) return;
+        const model = SkeletonUtils.clone(gltf.scene);
+        model.traverse(function (child) {
+          child.userData = child.userData || {};
+          child.userData.runtimeAlive = true;
+          child.userData.runtimeResourcesShared = true;
+          child.userData.gkGear = true;
+          // Niet aanklikbaar en de camera botst er niet tegen: het hoort bij je character.
+          child.raycast = function () {};
+          if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; }
+        });
+        const bone = findAttachBone(clone, entry.pointKey, entry.boneName || "") || clone;
+        applied.attaches.push(attachToBone(THREE, clone, bone, model, entry.point, entry.item));
+        requestRender("player-gear");
+      };
+      if (record.status === "ready") hang(record.gltf);
+      else if (record.status === "loading") record.waiters.push(hang);
+    }
+  }
+
+  function setPlayerGear(entries) {
+    const list = (Array.isArray(entries) ? entries : []).filter(function (entry) { return entry && entry.assetId; });
+    const sig = JSON.stringify(list);
+    if (sig === playerGear.sig) { applyPlayerGear(); return; }
+    playerGear = { entries: list, sig };
+    applyPlayerGear();
   }
 
   function editorOrbitTarget() {
@@ -17225,6 +17281,9 @@ function resolveChunkDebugCenter(policy) {
       updateLocalPlayerNameplate(root, player.displayName);
       loadModelInto(root, def.modelAssetId, worldData, function (clone) {
         updateLocalPlayerNameplate(root, player.displayName, clone);
+        // Uitrusting U1b: je wapen en schild aan het (nieuwe) model hangen.
+        root.userData.gkModelClone = clone;
+        applyPlayerGear();
       });
     } else {
       const fallbackVisual = addPlayerFallbackVisual(root, {
@@ -21934,6 +21993,7 @@ function resolveChunkDebugCenter(policy) {
     bodyFitDrag: bodyFitDrag,
     bodyFitInfo: bodyFitInfo,
     editorOrbitTarget: editorOrbitTarget,
+    setPlayerGear: setPlayerGear,
     flyerSounds: flyerSounds,
     flyerEvents: flyerEvents,
     pickRouteEditor: pickRouteEditor,

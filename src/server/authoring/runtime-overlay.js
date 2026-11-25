@@ -30,7 +30,10 @@ const ITEM_FIELD_TO_RUNTIME = {
   tags: "tags",
   vendorValue: "vendorBaseValueMinor"
 };
-export const CANONICAL_ITEM_RUNTIME_KEYS = ["id", "worldModelScale", "visualStackable"].concat(Object.values(ITEM_FIELD_TO_RUNTIME));
+// Uitrusting U1b (25-11): hoe een item aan het lichaam hangt (blok 👕 Aan het lichaam); de game leest dezelfde namen.
+const ITEM_BODY_NUMBERS = ["bodyX", "bodyY", "bodyZ", "bodyRotX", "bodyRotY", "bodyRotZ"];
+const ITEM_BODY_KEYS = ["bodyModelAssetId", "bodyPoint", "bodyScaleBp"].concat(ITEM_BODY_NUMBERS);
+export const CANONICAL_ITEM_RUNTIME_KEYS = ["id", "worldModelScale", "visualStackable"].concat(Object.values(ITEM_FIELD_TO_RUNTIME), ITEM_BODY_KEYS);
 
 // Zet een canoniek item om naar de vorm die node03 uit catalogs.items leest. Velden die Canoniek kent
 // komen altijd uit Canoniek (leeg = weg). Legacy-velden die Canoniek niet kent blijven bevroren staan.
@@ -60,6 +63,12 @@ export function runtimeItemFromCanonical(item, legacy = null) {
   // Fase 6: uitrusting "vanaf level" (1 = altijd; dan sturen we niets mee).
   if (Number.isInteger(item.requiredLevel) && item.requiredLevel > 1) runtime.requiredLevel = item.requiredLevel;
   else delete runtime.requiredLevel;
+  // Uitrusting U1b: alleen wat afwijkt van vanzelf (punt uit de plek, model op de grond, 0, 100 %).
+  for (const key of ITEM_BODY_KEYS) delete runtime[key];
+  if (typeof item.bodyModelAssetId === "string" && item.bodyModelAssetId) runtime.bodyModelAssetId = item.bodyModelAssetId;
+  if (typeof item.bodyPoint === "string" && item.bodyPoint && item.bodyPoint !== "auto") runtime.bodyPoint = item.bodyPoint;
+  for (const key of ITEM_BODY_NUMBERS) if (Number.isFinite(item[key]) && item[key] !== 0) runtime[key] = item[key];
+  if (Number.isInteger(item.bodyScaleBp) && item.bodyScaleBp > 0 && item.bodyScaleBp !== 10000) runtime.bodyScaleBp = item.bodyScaleBp;
   // Fase 9 herstel 1 (keuze van Kevin 14-11): een item met een beroep geeft beroeps-XP bij oppakken en buit.
   const professionId = String(item.professionRef || "").startsWith("profession:") ? String(item.professionRef).slice("profession:".length) : "";
   if (professionId) {

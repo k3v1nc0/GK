@@ -885,7 +885,7 @@ function withGame(world, source, options) {
       catalogs.statBlocks[blockId] = statBlock(blockId, entry);
       catalogs.playableCharacters[entry.classId] = character(entry.classId, entry.displayName, blockId, entry,
         { classChoice: true, description: entry.description || "", sortOrder: index, modelAssetIds: (entry.models || []).slice(),
-          animationProfiles: clone(entry.animationProfiles || {}) });
+          animationProfiles: clone(entry.animationProfiles || {}), attachPoints: clone(entry.attachPoints || {}) });
     }
   } else {
     catalogs.playableCharacters = { [PLAYER_CHARACTER_ID]: character(PLAYER_CHARACTER_ID, "Speler", PLAYER_STAT_BLOCK_ID, player) };
@@ -1193,6 +1193,8 @@ function withGame(world, source, options) {
     .concat(flyers.map((flyer) => flyer.soundAssetId))
     .concat(flyers.flatMap((flyer) => (Array.isArray(flyer.route) ? flyer.route.map((point) => point.sound) : [])))
     .concat(Object.values(items).map((item) => item?.worldModelAssetId))
+    // Uitrusting U1b: het model in de hand (als dat anders is dan op de grond).
+    .concat(Object.values(items).map((item) => item?.bodyModelAssetId))
     // Stap 4 (HUD): eigen iconen van items en valuta (plaatjes in de tas).
     .concat(Object.values(items).map((item) => item?.iconAssetId))
     // Healing (2-11): icoontjes van effecten (items en aanvallen) in de HUD.

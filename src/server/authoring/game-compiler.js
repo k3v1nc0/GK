@@ -101,7 +101,10 @@ export function compileGameSection(documents, options = {}) {
       manaPerLevel: values.manaPerLevel, healPerLevel: values.healPerLevel,
       startGrants: grants(values.startItems), models: Array.isArray(values.models) ? values.models.slice() : [],
       animationProfiles: values.animationProfiles && typeof values.animationProfiles === "object"
-        ? JSON.parse(JSON.stringify(values.animationProfiles)) : {} };
+        ? JSON.parse(JSON.stringify(values.animationProfiles)) : {},
+      // Uitrusting U1b (25-11): bevestigpunten per uiterlijk (Klasse > ✋).
+      attachPoints: values.attachPoints && typeof values.attachPoints === "object"
+        ? JSON.parse(JSON.stringify(values.attachPoints)) : {} };
   };
   const classDocs = of("player_class").slice().sort((a, b) => String(a.body.displayName).localeCompare(String(b.body.displayName)) || a.docKey.localeCompare(b.docKey));
   const classes = classDocs.map((doc) => {
