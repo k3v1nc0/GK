@@ -333,7 +333,8 @@ function createBot(info, anchor) {
     epoch: 0, lastIgnored: "", attackedBy: null, assist: null, party: null, netOf: new Map(), seen: new Map(),
     flagsOn: new Set(), flagKey: "", badSpots: [], routeBudget: 2, questsTraced: false, parked: new Map(), unreachable: new Map(), giveUps: new Map(), talkedAt: new Map(), stalls: new Map(), questId: null,
     stuck: { x: 0, z: 0, at: Date.now(), tries: 0 },
-    downBytes: 0, upMsgs: 0, doing: "start", timers: [], stopped: false, busy: false, placedWaiter: null, reconnects: 0
+    downBytes: 0, upMsgs: 0, doing: "start", timers: [], stopped: false, busy: false, placedWaiter: null, reconnects: 0,
+    trades: new Map(), tradeBusy: false, tradeAgain: false, tradeCheckAt: 0
   });
 }
 
@@ -394,6 +395,8 @@ function onMessage(bot, data) {
     if (!bot.party) bot.seen.clear();
   } else if (type === "party:invite" && message.invite?.inviteId) {
     acceptInvite(bot, message.invite);
+  } else if (type === "node05:refresh") {
+    checkTrade(bot);
   } else if (type === "actor:snapshot") {
     if (message.full) {
       const keep = new Set((message.actors || []).map((entry) => entry.id));
@@ -439,6 +442,77 @@ async function acceptInvite(bot, invite) {
   trace(bot, "groep", "uitnodiging van " + (invite.fromName || invite.fromId));
   const result = await call(bot, "POST", "/api/game/party/invites/" + encodeURIComponent(invite.inviteId) + "/accept", {});
   if (!result.ok) trace(bot, "groep", "aannemen lukt niet (" + result.status + ")");
+}
+
+function act05(bot, action, extra = {}) {
+  return call(bot, "POST", "/api/game/node05/action", Object.assign({ action, operationId: operationId(bot) }, extra));
+}
+
+// Ruilen (26-11): een bot neemt elke ruil aan, legt zelf niets in en zegt ja zodra jij er iets in legt. Zo kun je een
+// bot een bijl geven. Tijdens de ruil blijft hij staan (anders is hij te ver weg of in gevecht).
+async function checkTrade(bot) {
+  if (bot.stopped) return;
+  if (bot.tradeBusy) { bot.tradeAgain = true; return; }
+  bot.tradeBusy = true;
+  try {
+    do {
+      bot.tradeAgain = false;
+      bot.tradeCheckAt = Date.now();
+      const state = await call(bot, "GET", "/api/game/node05/state");
+      if (state.status !== 200 || !state.json) break;
+      const sessions = Array.isArray(state.json.trade?.sessions) ? state.json.trade.sessions : [];
+      const open = new Set(sessions.map((entry) => entry.tradeId));
+      // Weg uit de lijst = klaar (of afgebroken/verlopen): trek aan wat hij kreeg.
+      const got = [];
+      for (const [tradeId, known] of Array.from(bot.trades)) {
+        if (open.has(tradeId)) continue;
+        bot.trades.delete(tradeId);
+        got.push(...known.get);
+      }
+      for (const entry of sessions) {
+        const get = (entry.get || []).filter((line) => line.kind === "item").map((line) => line.itemId);
+        bot.trades.set(entry.tradeId, { partner: entry.partnerName || "", get });
+        if (entry.waitingForMe) {
+          trace(bot, "ruil", "ruil gevraagd door " + (entry.partnerName || entry.partnerId));
+          await act05(bot, "trade_accept", { tradeId: entry.tradeId });
+        } else if (entry.state === "open" && !entry.iConfirmed && (entry.get || []).length && !(entry.give || []).length) {
+          const result = await act05(bot, "trade_confirm", { tradeId: entry.tradeId, revision: entry.revision });
+          if (result.json?.traded) {
+            bot.trades.delete(entry.tradeId);
+            got.push(...get);
+          }
+        }
+      }
+      if (got.length) {
+        trace(bot, "ruil", "gekregen: " + got.join(", "));
+        await equipFromBag(bot, got);
+      }
+    } while (bot.tradeAgain && !bot.stopped);
+  } catch (error) {
+    trace(bot, "fout", "ruil: " + String(error?.message || error));
+  } finally {
+    bot.tradeBusy = false;
+  }
+}
+
+// Uitrusting (26-11): wat hij net kreeg trekt hij aan (ook als die plek al bezet is); verder alleen lege plekken
+// vullen met wat in zijn tas zit. Zo dragen bots hun startwapen en wat jij ze geeft, en zien anderen het (U1c).
+async function equipFromBag(bot, prefer = []) {
+  const state = await call(bot, "GET", "/api/game/node03/state");
+  if (state.status !== 200 || !state.json) return;
+  const filled = new Set((Array.isArray(state.json.equipment) ? state.json.equipment : []).map((row) => row.slotId));
+  const want = new Set(prefer);
+  const items = (Array.isArray(state.json.inventory?.items) ? state.json.inventory.items : []).filter((entry) => entry?.equipSlot);
+  items.sort((a, b) => Number(want.has(b.itemId)) - Number(want.has(a.itemId)));
+  const done = new Set();
+  for (const entry of items) {
+    if (done.has(entry.equipSlot) || (filled.has(entry.equipSlot) && !want.has(entry.itemId))) continue;
+    const result = await act03(bot, "equip", null, entry.kind === "instance" ? { itemInstanceId: entry.instanceId } : { itemId: entry.itemId });
+    if (!result.ok) continue;
+    done.add(entry.equipSlot);
+    filled.add(entry.equipSlot);
+    trace(bot, "uitrusting", "trekt " + (entry.displayName || entry.itemId) + " aan");
+  }
 }
 
 // 20x per seconde: een stukje lopen naar het doel en dat als looppunt sturen (zoals de game).
@@ -914,6 +988,13 @@ async function think(bot) {
     }
     checkStuck(bot);
     if (defendAndHelp(bot)) return;
+    // Ruil bezig: blijven staan; af en toe kijken of hij nog loopt (een verlopen ruil geeft geen seintje).
+    if (bot.trades.size) {
+      bot.goal = null;
+      bot.doing = "ruilt";
+      if (now - bot.tradeCheckAt > 5000) checkTrade(bot);
+      return;
+    }
     if (await doQuest(bot)) return;
     if (fight(bot, SIGHT_M) || gather(bot, SIGHT_M)) return;
     wander(bot, bot.anchor, WANDER_M, "loopt rond");
@@ -1047,6 +1128,8 @@ async function startBot(bot) {
   if (placed?.anchor) bot.anchor = { x: Number(placed.anchor.x) || bot.x, z: Number(placed.anchor.z) || bot.z };
   bot.timers.push(setInterval(() => stepMovement(bot), INPUT_MS));
   bot.timers.push(setInterval(() => think(bot), THINK_MS + Math.round(Math.random() * 300)));
+  // Startwapen of ander spul in de tas dat nog niet gedragen wordt: aantrekken.
+  equipFromBag(bot).catch((error) => trace(bot, "fout", "uitrusting: " + String(error?.message || error)));
   let pingSeq = 1;
   bot.timers.push(setInterval(() => send(bot, { type: "ping", clientPingSeq: pingSeq++, clientSentAt: Date.now() }), 2000));
   bot.doing = "loopt rond";
