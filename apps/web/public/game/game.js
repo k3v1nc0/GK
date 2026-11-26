@@ -1,4 +1,4 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261126-l1b";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261126-l1c";
 import { gearFromItems } from "../shared/equipment-attach.js?v=20261125-u1c";
 import { nextPlayerRouteWaypoint } from "../shared/player-path-client.js?v=20261123-deur1";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20261106-perf1";

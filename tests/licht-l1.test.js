@@ -13,7 +13,7 @@ const LAMP = { placedModelId: "pm.lantaarn", displayName: "Lantaarn", modelAsset
 
 test("editor: blok 💡 Licht op een model, uit tot je het aanzet", () => {
   const fields = CANONICAL_KINDS.placed_model.fields;
-  for (const key of ["light", "lightColor", "lightStrength", "lightRange", "lightFlicker", "lightGlow", "lightHeight", "lightNightOnly"]) {
+  for (const key of ["light", "lightColor", "lightStrength", "lightRange", "lightFlicker", "lightGlow", "lightHeight", "lightX", "lightZ", "lightNightOnly"]) {
     assert.equal(fields[key].ui.group, LIGHT_GROUP, key + " staat in het blok Licht");
     assert.ok(fields[key].help?.waarvoor, key + " heeft uitleg");
   }
@@ -26,7 +26,7 @@ test("editor: blok 💡 Licht op een model, uit tot je het aanzet", () => {
 test("build: alleen een model met Geeft licht krijgt licht mee, netjes binnen de grenzen", () => {
   assert.equal(lightOf({ light: false, lightRange: 5 }), null);
   assert.deepEqual(lightOf({ light: true, lightColor: "#FF9900", lightRange: 99, lightFlicker: -1 }),
-    { color: "#ff9900", strength: 1, range: 20, flicker: 0, glow: 0.6, height: 1.5, nightOnly: false });
+    { color: "#ff9900", strength: 1, range: 20, flicker: 0, glow: 0.6, height: 1.5, x: 0, z: 0, nightOnly: false });
   const docs = [
     doc("placed_model", Object.assign({}, LAMP, { light: true, lightStrength: 1.5, lightNightOnly: true }), "placed_model:pm.lantaarn"),
     doc("placed_model", { placedModelId: "pm.steen", displayName: "Steen", modelAssetId: "asset.steen", x: 0, y: 0, z: 0 }, "placed_model:pm.steen")
@@ -45,4 +45,22 @@ test("game: gloed + lichtplek, volgt dag en nacht, telt niet als spookvlak", () 
   assert.match(src, /if \(lampRecords\.length\) updateLamps\(time\);/);
   assert.match(src, /lampNight = Number\.isFinite\(Number\(nightMix\)\)/, "setDaylight zet hoe donker het is");
   assert.ok(!/new THREE\.PointLight/.test(src), "nog geen echte lampen (L2)");
+});
+
+test("editor: ✋ Vlam verplaatsen zet de vlam ook opzij (Vlam X/Z, draait mee met het model)", () => {
+  assert.equal(lightOf({ light: true, lightX: 0.4, lightZ: -0.25, lightHeight: 2.1 }).x, 0.4);
+  assert.equal(lightOf({ light: true, lightX: 0.4, lightZ: -0.25, lightHeight: 2.1 }).z, -0.25);
+  const runtimeSrc = fs.readFileSync("apps/web/public/shared/world-runtime.js", "utf8");
+  for (const name of ["lampFitStart", "lampFitPreview", "lampFitDrag", "lampFitStop"]) assert.match(runtimeSrc, new RegExp(name + ": " + name), name + " zit in de runtime");
+  assert.match(runtimeSrc, /if \(lampFitId && record\.id === lampFitId\) attachLampFitHelper\(record\);/, "pijlen komen terug na opnieuw opbouwen");
+  const fitSrc = fs.readFileSync("apps/web/public/editor/lamp-fit-editor.js", "utf8");
+  assert.match(fitSrc, /lightX: done\.preview\.x, lightHeight: done\.preview\.y, lightZ: done\.preview\.z/);
+  assert.match(fs.readFileSync("apps/web/public/editor/editor.js", "utf8"), /if \(lampFitEditor\.handleKeyDown\(event\)\) return;/);
+});
+
+test("editor: Ctrl+C / Ctrl+V / Ctrl+D voor losse modellen (straatlantaarns dupliceren, licht gaat mee)", () => {
+  const src = fs.readFileSync("apps/web/public/editor/editor.js", "utf8");
+  assert.match(src, /if \(keyMatches\(event, "c"\) && copyPlacedModels\(\)\)/);
+  assert.match(src, /void pastePlacedModels\(placedModelClipboard, terrainLastPointerGroundPoint\(\)\)/);
+  assert.match(src, /const copy = Object\.assign\(\{\}, body, \{ placedModelId: base \+ "_" \+ n, x: round2\(x\), z: round2\(z\) \}\);/, "alles mee, nieuw id en plek");
 });

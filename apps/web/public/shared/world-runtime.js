@@ -4839,6 +4839,8 @@ export function createGkWorldRuntime(canvas, options = {}) {
   // L1 (26-11): 💡 Licht op een model (addLamp): gloed + lichtplek. lampNight = 0 overdag, 1 's nachts (uit setDaylight).
   const lampRecords = [];
   let lampNight = 0;
+  let lampFit = null; // editor: ✋ Vlam verplaatsen { record, helper }
+  let lampFitId = null; // welk model; na het opnieuw opbouwen van de wereld komen de pijlen vanzelf terug (addLamp)
   // Kevin 23-11 (8): de muurstukken voor "naam achter een muur?" (hiddenBehindWall) en het zichtveld, gevuld door addWalls.
   let wallSightPieces = [];
   let wallSightVersion = 0;
@@ -9004,6 +9006,7 @@ function resolveChunkDebugCenter(policy) {
   function clearContent() {
     windowLightRecords.length = 0;
     lampRecords.length = 0;
+    lampFit = null;
     clearTerrainEditorOverlay();
     clearScatterEditorOverlay();
     clearChunkDebugOverlay();
@@ -16802,6 +16805,8 @@ function resolveChunkDebugCenter(policy) {
       flicker: clamp(num(light.flicker, 0.35), 0, 1),
       glow: clamp(num(light.glow, 0.6), 0.05, 4),
       height: clamp(num(light.height, 1.5), -5, 30),
+      x: clamp(num(light.x, 0), -30, 30),
+      z: clamp(num(light.z, 0), -30, 30),
       nightOnly: light.nightOnly === true
     };
     root.updateMatrix();
@@ -16825,7 +16830,6 @@ function resolveChunkDebugCenter(policy) {
     });
     const glow = new THREE.Mesh(flat(new THREE.PlaneGeometry(1, 1), cfg.glow * 2), glowMaterial);
     glow.name = "lamp glow";
-    glow.position.set(0, cfg.height, 0);
     glow.renderOrder = 6;
     const spotGeometry = new THREE.PlaneGeometry(cfg.range * 2, cfg.range * 2);
     spotGeometry.rotateX(-Math.PI / 2);
@@ -16837,8 +16841,6 @@ function resolveChunkDebugCenter(policy) {
     });
     const spot = new THREE.Mesh(flat(spotGeometry, cfg.range * 1.5), spotMaterial);
     spot.name = "lamp spot";
-    const rootY = num(root.position?.y, 0);
-    spot.position.set(0, lampFloorY(worldData, root.position.x, root.position.z, rootY + cfg.height) - rootY, 0);
     spot.renderOrder = 3;
     for (const mesh of [glow, spot]) {
       mesh.castShadow = false;
@@ -16851,11 +16853,128 @@ function resolveChunkDebugCenter(policy) {
     root.add(group);
     runtimeStats.sceneObjects += 1;
     runtimeStats.meshes += 2;
-    const record = { id: root.userData.entityId, root, group, glow, spot, cfg, seed: (lampRecords.length * 7.13) % 6.28 };
+    const record = { id: root.userData.entityId, root, group, glow, spot, cfg, worldData, seed: (lampRecords.length * 7.13) % 6.28 };
+    placeLamp(record, { x: cfg.x, y: cfg.height, z: cfg.z });
     lampRecords.push(record);
+    if (lampFitId && record.id === lampFitId) attachLampFitHelper(record);
     updateLamp(record, performance.now(), lampLevel());
     requestRender("lamp");
     return record;
+  }
+
+  // De vlam op offset = { x, y (hoogte), z } in meters, in de richting van het model (draait mee); de lichtplek eronder.
+  function placeLamp(record, offset) {
+    const p = new THREE.Vector3(num(offset?.x, 0), num(offset?.y, 1.5), num(offset?.z, 0)).applyQuaternion(record.root.quaternion);
+    record.glow.position.copy(p);
+    const rootY = num(record.root.position?.y, 0);
+    record.spot.position.set(p.x, lampFloorY(record.worldData, record.root.position.x + p.x, record.root.position.z + p.z, rootY + p.y) - rootY, p.z);
+    if (lampFit?.record === record && lampFit.helper) lampFit.helper.position.copy(p);
+    requestRender("lamp");
+  }
+
+  // Kevin 26-11: ✋ Vlam verplaatsen (editor). De vlam met G schuiven, X/Y/Z = langs de rode/groene/blauwe pijl van het
+  // model (zoals G bij een model: groen = vooruit, blauw = omhoog). Alleen tonen; de editor slaat op (lamp-fit-editor.js).
+  function lampRecordFor(entityId) {
+    const root = entityRoots.get(String(entityId || ""));
+    return root ? lampRecords.find(function (record) { return record.root === root; }) || null : null;
+  }
+
+  function lampFitStart(entityId) {
+    lampFitStop();
+    lampFitId = String(entityId || "") || null;
+    const record = lampRecordFor(lampFitId);
+    if (!record) return null;
+    attachLampFitHelper(record);
+    return { x: record.cfg.x, y: record.cfg.height, z: record.cfg.z };
+  }
+
+  function attachLampFitHelper(record) {
+    if (lampFit?.helper) { lampFit.helper.parent?.remove(lampFit.helper); disposeObject(lampFit.helper); }
+    const helper = new THREE.Group();
+    helper.name = "gk-lamp-fit";
+    helper.userData.gkLamp = true;
+    helper.userData.runtimeAlive = true;
+    const axes = [[0xff5a5f, [1, 0, 0]], [0x78d87b, [0, 0, 1]], [0x66aaff, [0, 1, 0]]];
+    for (const [color, dir] of axes) {
+      const geometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(dir[0], dir[1], dir[2]).multiplyScalar(0.6)]);
+      geometry.boundingBox = new THREE.Box3();
+      const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color, depthTest: false, transparent: true }));
+      line.renderOrder = 999;
+      line.raycast = function () {};
+      line.userData.gkLamp = true;
+      line.userData.runtimeAlive = true;
+      helper.add(line);
+    }
+    helper.quaternion.copy(record.root.quaternion);
+    record.group.add(helper);
+    lampFit = { record, helper };
+    placeLamp(record, { x: record.cfg.x, y: record.cfg.height, z: record.cfg.z });
+  }
+
+  // De lamp waar de pijlen nu bij staan (na opnieuw opbouwen de nieuwe), of null.
+  function lampFitRecord() {
+    if (lampFit && entityRoots.get(lampFit.record.id) === lampFit.record.root) return lampFit.record;
+    const record = lampFitId ? lampRecordFor(lampFitId) : null;
+    if (record) attachLampFitHelper(record);
+    return record;
+  }
+
+  function lampFitPreview(offset) {
+    const record = lampFitRecord();
+    if (!record) return false;
+    placeLamp(record, offset);
+    return true;
+  }
+
+  function lampFitStop() {
+    lampFitId = null;
+    if (!lampFit) return;
+    const { record, helper } = lampFit;
+    lampFit = null;
+    helper.parent?.remove(helper);
+    disposeObject(helper);
+    if (entityRoots.get(record.id) === record.root) placeLamp(record, { x: record.cfg.x, y: record.cfg.height, z: record.cfg.z });
+  }
+
+  // Muis van (dx, dy) pixels sinds het begin → nieuwe { x, y, z } (start = waar de vlam stond).
+  function lampFitDrag(input) {
+    const record = camera && input ? lampFitRecord() : null;
+    if (!record) return null;
+    const start = { x: num(input.start?.x, 0), y: num(input.start?.y, 1.5), z: num(input.start?.z, 0) };
+    placeLamp(record, start);
+    record.root.updateMatrixWorld(true);
+    camera.updateMatrixWorld();
+    const origin = new THREE.Vector3();
+    record.glow.getWorldPosition(origin);
+    const modelQ = new THREE.Quaternion();
+    record.root.getWorldQuaternion(modelQ);
+    const dx = num(input.dx, 0);
+    const dy = num(input.dy, 0);
+    const rect = canvas.getBoundingClientRect();
+    const metersPerPixel = (2 * Math.tan((camera.fov * DEG_TO_RAD) / 2) * camera.position.distanceTo(origin)) / Math.max(1, rect.height);
+    let delta;
+    // Zoals G bij een model: X = rood (opzij), Y = groen (voor/achter), Z = blauw (omhoog).
+    const axisLocal = { x: [1, 0, 0], y: [0, 0, 1], z: [0, 1, 0] }[input.axis] || null;
+    if (axisLocal) {
+      const dir = new THREE.Vector3(axisLocal[0], axisLocal[1], axisLocal[2]).applyQuaternion(modelQ);
+      const a = worldToScreen(origin);
+      const b = worldToScreen(origin.clone().add(dir.clone().multiplyScalar(0.1)));
+      let meters = -dy * metersPerPixel;
+      if (a && b) {
+        const sx = b.x - a.x;
+        const sy = b.y - a.y;
+        const len2 = sx * sx + sy * sy;
+        if (len2 > 4) meters = ((dx * sx + dy * sy) / len2) * 0.1;
+      }
+      delta = dir.multiplyScalar(meters);
+    } else {
+      const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+      const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+      delta = right.multiplyScalar(dx * metersPerPixel).add(up.multiplyScalar(-dy * metersPerPixel));
+    }
+    const local = delta.applyQuaternion(modelQ.clone().invert());
+    const mm = function (value) { return Math.round(clamp(value, -30, 30) * 1000) / 1000; };
+    return { x: mm(start.x + local.x), y: mm(clamp(start.y + local.y, -5, 30)), z: mm(start.z + local.z) };
   }
 
   // 0-1: hoe donker het voor lampen is. Binnen en in de editor altijd donker (zo zie je wat je instelt).
@@ -22169,6 +22288,10 @@ function resolveChunkDebugCenter(policy) {
     clearBodyFitPreview: clearBodyFitPreview,
     bodyFitDrag: bodyFitDrag,
     bodyFitInfo: bodyFitInfo,
+    lampFitStart: lampFitStart,
+    lampFitPreview: lampFitPreview,
+    lampFitDrag: lampFitDrag,
+    lampFitStop: lampFitStop,
     editorOrbitTarget: editorOrbitTarget,
     setPlayerGear: setPlayerGear,
     flyerSounds: flyerSounds,

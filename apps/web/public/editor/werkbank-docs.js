@@ -589,6 +589,18 @@ export function createDocBench(options = {}) {
   }
 
   const BODY_GROUP = "👕 Aan het lichaam";
+  // Kevin 26-11: ✋ Vlam verplaatsen bovenaan het blok 💡 Licht van een model (zie lamp-fit-editor.js).
+  const LIGHT_GROUP = "💡 Licht";
+  const LAMP_FIT_FIELD = { label: "Vlam verplaatsen", ui: { icon: "✋" },
+    help: { waarvoor: "Zet de vlam (gloed en lichtplek) met de muis precies in de lantaarn of op de fakkel, net als een wapen bij 🧍 Passen.", goed: "Druk ✋ Vlam verplaatsen, dan in de 3D-view G en schuif. X/Y/Z = langs de rode/groene/blauwe pijl (blauw = omhoog). Klik of Enter = vast.", probleem: "Je ziet geen pijlen → wacht tot het model in de 3D-view staat, of zet Geeft licht aan." } };
+  function lampFitRow(doc) {
+    const active = bench.lampFit && bench.lampFit.docKey === doc.docKey;
+    const go = el("button", { type: "button", class: "wbdChoice" + (active ? " active" : ""), text: active ? "✓ Klaar" : "✋ Vlam verplaatsen" });
+    go.addEventListener("click", () => { if (typeof bench.onLampFit === "function") bench.onLampFit(active ? "stop" : "start"); });
+    const wrap = el("div", { class: "wbdBodyFit" }, [go]);
+    if (active) wrap.append(el("div", { class: "wbdNote", text: "In de 3D-view: G = schuiven, daarna X/Y/Z = langs de rode/groene/blauwe pijl (blauw = omhoog). Klik of Enter = vast, Esc = terug, nog eens Esc = klaar." }));
+    return fieldRow("lampFit", LAMP_FIT_FIELD, wrap, true);
+  }
   const BODY_FIT_FIELD = { label: "Passen", ui: { icon: "🧍" },
     help: { waarvoor: "Zet een uiterlijk met dit item aan zijn punt in de 3D-view, zodat je het goed kunt zetten.", goed: "Kies een uiterlijk, druk 🧍 Passen, en zet het item met G (schuiven), R (draaien) en T (grootte) goed in de hand. Zit het bij alle items van één uiterlijk scheef, kies dan ✋ Punt.", probleem: "Je ziet geen item in de hand → geef het item eerst een Model (of Model in de hand)." } };
 
@@ -1280,6 +1292,10 @@ export function createDocBench(options = {}) {
     }
     // Uitrusting U1a (25-11): 🧍 Passen bovenaan het blok 👕 Aan het lichaam.
     if (kind === "item_definition" && !isNew && doc && groups.has(BODY_GROUP)) groups.get(BODY_GROUP).fields.prepend(bodyFitRow(doc));
+    if (kind === "placed_model" && !isNew && doc?.body?.light === true && groups.has(LIGHT_GROUP)) {
+      const fields = groups.get(LIGHT_GROUP).fields;
+      fields.insertBefore(lampFitRow(doc), fields.children[1] || null);
+    }
     for (const [name, entry] of groups) entry.toggle.textContent = (entry.fields.hidden ? "▸ " : "▾ ") + name + " (" + entry.fields.childElementCount + ")";
     host.append(visible);
     if (bare) return;

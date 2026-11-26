@@ -1,4 +1,4 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261126-l1b";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261126-l1c";
 import { edgeBetweenPoints, editClosedEdges } from "./walkable-edge-tools.js?v=20261031-randen1";
 import { createTerrainEditor } from "./terrain-editor.js?v=20261124-zoek1";
 import { createEditorSearch, TERRAIN_TOOL_FOR_KIND } from "./editor-search.js?v=20261124-zoek1";
@@ -12,13 +12,14 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261106-perf1";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261106-perf1";
-import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261125-u1a";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261126-l1c";
 import { createAssetPicker } from "./mini-asset-picker.js?v=20261106-thumbs150";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
 import { createDocDrop, docKeyFromRuntimeId, docSideFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261122-doorgang1";
 import { createRoadEditor } from "./road-editor.js?v=20261123-muur14";
 import { createRouteEditor } from "./route-editor.js?v=20261116-herstel1";
 import { createBodyFitEditor } from "./body-fit-editor.js?v=20261125-u1a";
+import { createLampFitEditor } from "./lamp-fit-editor.js?v=20261126-l1c";
 import { AREA_EDITOR_PREFIX, AREA_SOORTEN, AREA_SOORT_ORDER, areaBodyFromNodePatch, areaCirclePointsMm, areaNodeValues, areaSoort } from "../shared/area-soorten.js?v=20261123-muur14";
 import { WALL_EDGE_KEYS, wallLinkWithKind, wallNetLinks } from "../shared/walls.js?v=20261123-muur14";
 import { INDOOR_ZONE, inIndoorZone } from "../shared/indoor-zone.js?v=20261123-binnentab1";
@@ -936,6 +937,7 @@ const docBench = createDocBench({
     wallEditor.sync();
     routeEditor.sync();
     bodyFitEditor.sync();
+    lampFitEditor.sync();
     if (state.editorMode === "workbench") renderWorkbenchLibrary(workbenchContext());
     if (state.editorMode === "settings" && el.settingsMenuPanel) docBench.renderSettingsMenu(el.settingsMenuPanel, renderSettingsCardOnly);
     if (state.editorMode === "terrain") terrainEditor.render();
@@ -1068,6 +1070,25 @@ docBench.onBodyFit = function (action, value) {
 };
 docBench.bodyFitLooks = function () { return bodyFitEditor.looks(); };
 
+// Kevin 26-11: ✋ Vlam verplaatsen op een model met 💡 Licht (G, X/Y/Z, klik = vast), zie lamp-fit-editor.js.
+const lampFitEditor = createLampFitEditor({
+  runtime: function () { return runtime; },
+  bench: docBench,
+  runtimeIdFor: function (docKey) { return runtimeIdForDocKey(docKey); },
+  setStatus: function (message, kind) { setStatus(message, kind); },
+  save: function (doc, body, label) { return docBench.saveDoc(doc.kind, doc, body, label); },
+  lastPointer: function () { return terrainLastPointer; },
+  canvasTarget: function (event) { return terrainCanvasTarget(event); },
+  suppressClick: function () { suppressNextViewportRuntimeClick(); },
+  rerender: function () {
+    if (state.editorMode === "workbench" && docBench.doc(docBench.selectedDocKey)?.kind === "placed_model" && docFocusActive()) renderDocFocusPanel();
+  }
+});
+docBench.onLampFit = function (action) {
+  if (action === "start") lampFitEditor.start(docBench.selectedDocKey);
+  else lampFitEditor.stop();
+};
+
 // Wereld tekenen: de tab Terrein (hoogte, stempels, verf en grond; opslaan bij Opslaan of de tab verlaten).
 const terrainEditor = createTerrainEditor({
   getRuntime: function () { return runtime; },
@@ -1167,6 +1188,49 @@ function viewportMarqueeDocKeys(rect) {
     }
   }
   return keys;
+}
+
+// Kevin 26-11: Ctrl+C / Ctrl+V / Ctrl+D voor losse modellen (bijv. straatlantaarns), met alles erop (ook 💡 Licht).
+// Plakken = onder de muis (meerdere houden hun plek ten opzichte van elkaar); Ctrl+D = een kopie 2 m ernaast.
+// De kopie wordt gekozen, zodat je meteen G kunt drukken.
+let placedModelClipboard = null;
+function copyablePlacedModelKeys() {
+  return selectedPlacedDocKeys().filter(function (key) { return docBench.doc(key)?.kind === "placed_model"; });
+}
+
+function copyPlacedModels() {
+  const keys = copyablePlacedModelKeys();
+  if (!keys.length) return false;
+  placedModelClipboard = keys.map(function (key) { return JSON.parse(JSON.stringify(docBench.doc(key).body)); });
+  setStatus("📋 " + keys.length + (keys.length === 1 ? " model" : " modellen") + " gekopieerd. Ctrl+V = plakken onder de muis.", "");
+  return true;
+}
+
+async function pastePlacedModels(bodies, target) {
+  const list = (bodies || []).filter(function (body) { return Number.isFinite(Number(body?.x)) && Number.isFinite(Number(body?.z)); });
+  if (!list.length) return;
+  const cx = list.reduce(function (sum, body) { return sum + Number(body.x); }, 0) / list.length;
+  const cz = list.reduce(function (sum, body) { return sum + Number(body.z); }, 0) / list.length;
+  const taken = new Set(docBench.docs("placed_model", true).map(function (doc) { return doc.body.placedModelId; }));
+  const round2 = function (value) { return Math.round(Number(value) * 100) / 100; };
+  const created = [];
+  for (const body of list) {
+    const base = String(body.placedModelId || "model.kopie").replace(/_\d+$/, "");
+    let n = 1;
+    while (taken.has(base + "_" + n)) n += 1;
+    taken.add(base + "_" + n);
+    // Hoogte blijft gelijk (boven de grond); alleen de plek verandert.
+    const x = target ? Number(target.x) + (Number(body.x) - cx) : Number(body.x) + 2;
+    const z = target ? Number(target.z) + (Number(body.z) - cz) : Number(body.z);
+    const copy = Object.assign({}, body, { placedModelId: base + "_" + n, x: round2(x), z: round2(z) });
+    try {
+      const result = await docBench.saveDoc("placed_model", null, copy, list.length === 1 ? "Model geplakt" : "Modellen geplakt");
+      created.push(result.docKey);
+    } catch {
+      break; // saveDoc meldt de fout in de statusregel.
+    }
+  }
+  if (created.length) selectPlacedDocs(created);
 }
 
 function selectPlacedDocs(docKeys) {
@@ -16867,6 +16931,7 @@ function clearDocFocus() {
   docBench.newKind = null;
   docBench.draft = null;
   bodyFitEditor.sync();
+  lampFitEditor.sync();
 }
 
 function focusDoc(docKey, newKind = null) {
@@ -16879,6 +16944,7 @@ function focusDoc(docKey, newKind = null) {
   state.workbenchCreateDraft = null;
   renderWorkbench();
   bodyFitEditor.sync();
+  lampFitEditor.sync();
 }
 
 // Fase 7 (⚖️ Balans): naar de Werkbank, de kaart open en de camera naar de plek in de wereld.
@@ -33211,6 +33277,7 @@ function handleTerrainPointerDown(event) {
   // Kevin 16-11: bezig met een route (NPC, vijand of vlieger geselecteerd)? Dan is de hoofdweg even niet aan te klikken.
   const routeBusy = Boolean(routeTarget());
   if (bodyFitEditor.handlePointerDown(event)) return;
+  if (lampFitEditor.handlePointerDown(event)) return;
   if (!routeBusy && wallEditor.handlePointerDown(event)) return;
   if (!routeBusy && roadEditor.handlePointerDown(event)) return;
   if (routeEditor.handlePointerDown(event)) return;
@@ -33752,6 +33819,7 @@ function handleTerrainPointerMove(event) {
     return;
   }
   bodyFitEditor.handlePointerMove(event);
+  lampFitEditor.handlePointerMove(event);
   if (wallEditor.handlePointerMove(event)) return;
   if (roadEditor.handlePointerMove(event)) return;
   if (routeEditor.handlePointerMove(event)) return;
@@ -33940,9 +34008,20 @@ function handleEditorKeyDown(event) {
   const meta = event.ctrlKey || event.metaKey;
   if (isEditableTarget(event.target)) return;
   if (bodyFitEditor.handleKeyDown(event)) return;
+  if (lampFitEditor.handleKeyDown(event)) return;
   if (wallEditor.handleKeyDown(event)) return;
   if (roadEditor.handleKeyDown(event)) return;
   if (routeEditor.handleKeyDown(event)) return;
+  // Kevin 26-11: kopiëren en plakken van losse modellen (niet als je tekst in het paneel geselecteerd hebt).
+  if (meta && !event.shiftKey && !event.altKey && state.editorMode === "workbench" && !String(window.getSelection?.() || "")) {
+    if (keyMatches(event, "c") && copyPlacedModels()) { consumeShortcutEvent(event); return; }
+    if (keyMatches(event, "v") && placedModelClipboard?.length) { consumeShortcutEvent(event); void pastePlacedModels(placedModelClipboard, terrainLastPointerGroundPoint()); return; }
+    if (keyMatches(event, "d") && copyablePlacedModelKeys().length) {
+      consumeShortcutEvent(event);
+      void pastePlacedModels(copyablePlacedModelKeys().map(function (key) { return JSON.parse(JSON.stringify(docBench.doc(key).body)); }), null);
+      return;
+    }
+  }
   const shortcutLabel = viewportShortcutDebugLabel(event);
   if (shortcutLabel) setViewportShortcutDebug(shortcutLabel);
   const scatterNode = selectedScatterNode();
