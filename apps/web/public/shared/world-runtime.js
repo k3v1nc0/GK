@@ -16858,19 +16858,32 @@ function resolveChunkDebugCenter(policy) {
   // met de assen van de wereld en zonder schaal: hoogte, gloed en reikwijdte zijn meters, hoe groot of scheef het model
   // ook staat. Beide tellen niet mee in de maat van het model (selectiekader, brug-hoogte): lege boundingBox.
   const LAMP_GLOW_VERTEX = [
-    "uniform float size; uniform float pull;",
+    "uniform float size; uniform float pull; uniform float floorY;",
     "varying vec2 vUv;",
     "void main() {",
     "  vUv = uv;",
     "  vec4 mv = modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0);",
+    "  vec2 off = position.xy * size;",
     "  vec4 quad = mv;",
-    "  quad.xy += position.xy * size;",
+    "  quad.xy += off;",
     "  gl_Position = projectionMatrix * quad;",
-    // Kevin 26-11: de gloed is een plat vlak naar de camera. Lag de grond (of het hoofd van wie de fakkel draagt) dichter bij
-    // de camera dan dat vlak, dan sneed het de gloed af met een rechte lijn. Daarom telt de gloed voor de diepte als
-    // pull meter dichter bij de camera (alleen de diepte; plek en grootte blijven gelijk).
+    // Diepte: de vlam pull meter (25 cm) naar de camera, zodat het glas van de lantaarn de gloed niet half afdekt. Een
+    // character of muur ervoor dekt de gloed dus gewoon af (fakkel achter je rug = gloed achter je).
     "  float len = max(length(mv.xyz), 0.001);",
-    "  vec4 near = projectionMatrix * vec4(mv.xyz * max(1.0 - pull / len, 0.05), 1.0);",
+    "  float z = mv.z * max(1.0 - pull / len, 0.05);",
+    // Kevin 26-11: de gloed is een plat vlak naar de camera; waar de grond dichter bij de camera lag dan dat vlak, sneed
+    // die de gloed af met een rechte lijn. Raakt de lijn van de camera naar deze hoek eerst de grond (floorY), dan telt
+    // deze hoek net vóór de grond. Alleen de diepte; plek en grootte blijven gelijk.
+    "  vec3 corner = (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz + transpose(mat3(viewMatrix)) * vec3(off, 0.0);",
+    "  float dy = corner.y - cameraPosition.y;",
+    "  if (dy < -0.0001) {",
+    "    float t = (floorY - cameraPosition.y) / dy;",
+    "    if (t > 0.0 && t < 1.0) {",
+    "      vec3 hit = cameraPosition + (corner - cameraPosition) * (t * 0.98);",
+    "      z = max(z, (viewMatrix * vec4(hit, 1.0)).z);",
+    "    }",
+    "  }",
+    "  vec4 near = projectionMatrix * vec4(mv.xy, z, 1.0);",
     "  gl_Position.z = near.z / near.w * gl_Position.w;",
     "}"
   ].join("\n");
@@ -16930,6 +16943,13 @@ function resolveChunkDebugCenter(policy) {
     pos.needsUpdate = true;
     geometry.computeBoundingSphere();
     geometry.boundingBox = new THREE.Box3();
+    // De hoogste grond binnen de gloed: daar mag de gloed niet achter wegvallen (LAMP_GLOW_VERTEX, floorY).
+    const fx = root.x + p.x;
+    const fz = root.z + p.z;
+    const reach = record.cfg.glow;
+    let floor = -Infinity;
+    for (const [ox, oz] of [[0, 0], [reach, 0], [-reach, 0], [0, reach], [0, -reach]]) floor = Math.max(floor, lampFloorY(record.worldData, fx + ox, fz + oz, rootY + p.y));
+    record.glow.material.uniforms.floorY.value = floor;
   }
 
   function addLamp(worldData, root, light) {
@@ -16960,7 +16980,7 @@ function resolveChunkDebugCenter(policy) {
       return geometry;
     };
     const glowMaterial = new THREE.ShaderMaterial({
-      uniforms: { color: { value: color.clone() }, opacity: { value: 0 }, size: { value: cfg.glow * 2 }, pull: { value: clamp(0.25 + cfg.glow, 0.25, 1.5) } },
+      uniforms: { color: { value: color.clone() }, opacity: { value: 0 }, size: { value: cfg.glow * 2 }, pull: { value: 0.25 }, floorY: { value: -1e6 } },
       vertexShader: LAMP_GLOW_VERTEX, fragmentShader: LAMP_GLOW_FRAGMENT,
       transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false
     });
@@ -17312,8 +17332,6 @@ function resolveChunkDebugCenter(policy) {
     record.lampOnly = true;
     record.follow = anchor;
     record.own = own === true;
-    // De gloed van een fakkel ligt ook over wie hem draagt (hoofd en schouders), niet erachter.
-    record.glow.material.uniforms.pull.value = Math.min(2, 0.9 + record.cfg.glow);
     lampPickAt = 0;
     return record;
   }

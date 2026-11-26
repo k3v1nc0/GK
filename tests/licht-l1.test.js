@@ -103,9 +103,10 @@ test("Kevin 26-11: lichtplek over heuvels, bergen en kuilen; echte lamp loopt za
   assert.match(src, /new THREE\.PointLight\(0xffb04a, 0, 10, 1\)/);
 });
 
-test("Kevin 26-11: gloed niet afgesneden door de grond of het hoofd (alleen de diepte dichter bij de camera)", () => {
+test("Kevin 26-11: gloed niet afgesneden door de grond, wel afgedekt door een character ervoor", () => {
   const src = fs.readFileSync("apps/web/public/shared/world-runtime.js", "utf8");
-  assert.match(src, /"  vec4 near = projectionMatrix \* vec4\(mv\.xyz \* max\(1\.0 - pull \/ len, 0\.05\), 1\.0\);",/);
-  assert.match(src, /pull: \{ value: clamp\(0\.25 \+ cfg\.glow, 0\.25, 1\.5\) \}/);
-  assert.match(src, /record\.glow\.material\.uniforms\.pull\.value = Math\.min\(2, 0\.9 \+ record\.cfg\.glow\);/, "fakkel: ook over wie hem draagt");
+  assert.match(src, /"      z = max\(z, \(viewMatrix \* vec4\(hit, 1\.0\)\)\.z\);",/, "hoek net voor de grond");
+  assert.match(src, /pull: \{ value: 0\.25 \}, floorY: \{ value: -1e6 \} \}/, "verder maar 25 cm naar de camera");
+  assert.match(src, /record\.glow\.material\.uniforms\.floorY\.value = floor;/);
+  assert.ok(!/uniforms\.pull\.value = /.test(src), "fakkel niet meer voor het character getekend");
 });
