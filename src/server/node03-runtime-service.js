@@ -827,6 +827,7 @@ export class Node03RuntimeService {
     const existingSlots = new Set(this.db.prepare("SELECT slot_id FROM player_equipment WHERE player_id = ?").all(ctx.profile.id).map(function (row) {
       return row.slot_id;
     }));
+    let equipped = false;
     for (const item of Object.values(items)) {
       const slotId = safeString(item?.equipmentSlotRef, "");
       if (!slotId || !slots[slotId] || existingSlots.has(slotId)) continue;
@@ -846,7 +847,10 @@ export class Node03RuntimeService {
         ON CONFLICT(player_id, slot_id) DO NOTHING
       `).run(ctx.profile.id, slotId, instance.id, stamp);
       existingSlots.add(slotId);
+      equipped = true;
     }
+    // Uitrusting U1c: start-spullen meteen zichtbaar voor anderen.
+    if (equipped) this.mmoService?.refreshPlayerGear?.(ctx.profile.id);
   }
 
   instanceFromStackForEquip(ctx, itemId, operationId) {
@@ -901,6 +905,8 @@ export class Node03RuntimeService {
     this.db.prepare("UPDATE player_item_instances SET location_type = 'equipment', location_ref = ?, revision = revision + 1, updated_at = ? WHERE id = ?")
       .run(slotId, stamp, instance.id);
     this.recordGameplayEvent(ctx, "item_equipped", "player", instance.id, { slotId, itemId: instance.item_id, replaced: current?.item_instance_id || null });
+    // Uitrusting U1c (25-11): andere spelers dichtbij zien het wisselen.
+    this.mmoService?.refreshPlayerGear?.(ctx.profile.id);
     return {
       action: "equip",
       message: (item.displayName || instance.item_id) + " aangedaan.",
@@ -923,6 +929,8 @@ export class Node03RuntimeService {
     }
     const itemId = instance?.item_id || null;
     this.recordGameplayEvent(ctx, "item_unequipped", "player", row.item_instance_id, { slotId, itemId });
+    // Uitrusting U1c (25-11): andere spelers dichtbij zien het wisselen.
+    this.mmoService?.refreshPlayerGear?.(ctx.profile.id);
     return {
       action: "unequip",
       message: (itemId ? displayForItem(ctx.catalogs, itemId) : "Item") + " uitgedaan.",

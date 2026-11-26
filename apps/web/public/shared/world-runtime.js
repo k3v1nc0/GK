@@ -36,7 +36,7 @@ import { createSkyLayer } from "./sky-render.js?v=20261120-sky2";
 import { wallDecos, wallJoins, wallPieces, wallWindows } from "./walls.js?v=20261123-muur14";
 import { INDOOR_ZONE } from "./indoor-zone.js?v=20261123-binnentab1";
 import { createSrgbTextureLoader } from "./srgb-texture-loader.js?v=20261123-muur7";
-import { attachToBone, boneNames, detachFromBone, findAttachBone, setAttachOffsets } from "./equipment-attach.js?v=20261125-u1b";
+import { attachToBone, boneNames, detachFromBone, findAttachBone, setAttachOffsets } from "./equipment-attach.js?v=20261125-u1c";
 export {
   effectiveGroundBounds,
   effectiveWorldGroundBounds,
@@ -10144,36 +10144,35 @@ function resolveChunkDebugCenter(policy) {
   // server-snapshot: de server beslist wat je aan hebt); hier alleen tonen. Het model wordt 1 keer geladen en
   // gedeeld (cache + SkeletonUtils.clone). Een stevig model aan een bot trilt binnen niet: alleen de botten van een
   // vervormbaar lijf gaan als grote getallen naar de videokaart (zie Skeleton.update bovenaan).
-  function clearPlayerGear() {
-    if (!playerGearApplied) return;
-    playerGearApplied.alive = false;
-    for (const attach of playerGearApplied.attaches) detachFromBone(attach);
-    playerGearApplied = null;
+  // Uitrusting U1c: hetzelfde voor andere spelers (setRemotePlayerVisualState). state = { clone, sig, attaches, alive }.
+  function releaseGear(state) {
+    if (!state) return;
+    state.alive = false;
+    for (const attach of state.attaches) detachFromBone(attach);
   }
 
-  function applyPlayerGear() {
-    const root = player.root;
-    const clone = root?.userData?.gkModelClone || null;
-    if (playerGearApplied && playerGearApplied.clone === clone && playerGearApplied.sig === playerGear.sig) return;
-    clearPlayerGear();
-    if (!root || !clone || !clone.parent) return;
-    const applied = { clone, sig: playerGear.sig, attaches: [], alive: true };
-    playerGearApplied = applied;
-    for (const entry of playerGear.entries) {
+  // Hangt de lijst aan clone (het geladen model van een speler). Niets veranderd = de oude toestand terug.
+  // castShadow: je eigen wapen wel (altijd dichtbij), dat van anderen niet (zuinig met 20+ spelers).
+  function hangGear(current, clone, entries, sig, castShadow) {
+    if (current && current.clone === clone && current.sig === sig) return current;
+    releaseGear(current);
+    const applied = { clone, sig, attaches: [], alive: Boolean(clone && clone.parent && entries.length) };
+    if (!applied.alive) return applied;
+    for (const entry of entries) {
       const asset = assetById(world, entry.assetId);
       const record = asset?.sourcePath ? ensureModelRecord(asset, world) : null;
       if (!record) continue;
       const hang = function (gltf) {
-        if (!applied.alive || playerGearApplied !== applied || !gltf?.scene) return;
+        if (!applied.alive || !gltf?.scene) return;
         const model = SkeletonUtils.clone(gltf.scene);
         model.traverse(function (child) {
           child.userData = child.userData || {};
           child.userData.runtimeAlive = true;
           child.userData.runtimeResourcesShared = true;
           child.userData.gkGear = true;
-          // Niet aanklikbaar en de camera botst er niet tegen: het hoort bij je character.
+          // Niet aanklikbaar en de camera botst er niet tegen: het hoort bij het character.
           child.raycast = function () {};
-          if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; }
+          if (child.isMesh) { child.castShadow = castShadow === true; child.receiveShadow = true; }
         });
         const bone = findAttachBone(clone, entry.pointKey, entry.boneName || "") || clone;
         applied.attaches.push(attachToBone(THREE, clone, bone, model, entry.point, entry.item));
@@ -10182,6 +10181,16 @@ function resolveChunkDebugCenter(policy) {
       if (record.status === "ready") hang(record.gltf);
       else if (record.status === "loading") record.waiters.push(hang);
     }
+    return applied;
+  }
+
+  function clearPlayerGear() {
+    releaseGear(playerGearApplied);
+    playerGearApplied = null;
+  }
+
+  function applyPlayerGear() {
+    playerGearApplied = hangGear(playerGearApplied, player.root?.userData?.gkModelClone || null, playerGear.entries, playerGear.sig, true);
   }
 
   function setPlayerGear(entries) {
@@ -17478,7 +17487,8 @@ function resolveChunkDebugCenter(policy) {
     updateRemotePlayerNameplate(root, remotePlayer?.displayName || remotePlayer?.playerId || "Player");
     // Klassen: elke speler zijn eigen uiterlijk; anders het standaard-spelermodel van de wereld.
     if (modelAssetId && assetById(worldData, modelAssetId)?.sourcePath) {
-      loadModelInto(root, modelAssetId, worldData, null, {
+      // Uitrusting U1c: het geladen model onthouden, zodat zijn wapen en schild eraan kunnen hangen.
+      loadModelInto(root, modelAssetId, worldData, function (clone) { root.userData.gkModelClone = clone; }, {
         castShadow: true,
         receiveShadow: true
       });
@@ -17723,6 +17733,9 @@ function resolveChunkDebugCenter(policy) {
       worldId: options.worldId || world?.world?.id || world?.world?.worldId || null
     }, options.remotePlayer || {}), world || null);
     if (!record) return null;
+    // Uitrusting U1c (25-11): wat deze speler draagt (de game rekent de lijst uit de server-gegevens).
+    const gear = options.remotePlayer?.gear;
+    if (gear && record.root) record.gearState = hangGear(record.gearState || null, record.root.userData?.gkModelClone || null, gear.entries || [], gear.sig || "", false);
     return applyRemotePlayerVisualState(record, nextState, options);
   }
 

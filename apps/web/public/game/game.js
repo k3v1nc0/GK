@@ -1,5 +1,5 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261125-u1b";
-import { gearFromItems } from "../shared/equipment-attach.js?v=20261125-u1b";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261125-u1c";
+import { gearFromItems } from "../shared/equipment-attach.js?v=20261125-u1c";
 import { nextPlayerRouteWaypoint } from "../shared/player-path-client.js?v=20261123-deur1";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20261106-perf1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
@@ -4321,6 +4321,8 @@ function normalizeRemotePlayerPayload(payload) {
     displayName: displayName,
     selectedCharacterId: selectedCharacterId,
     modelAssetId: modelAssetId,
+    // Uitrusting U1c: item-ID's die hij draagt; alleen in volledige records (compacte laten het weg).
+    gear: Array.isArray(raw.gear) ? raw.gear.filter((id) => typeof id === "string" && id).slice(0, 16) : undefined,
     position: position,
     revision: revision,
     updatedAt: raw.updatedAt || raw.updated_at || position.updatedAt || null,
@@ -4759,6 +4761,7 @@ function upsertRemotePlayerEntry(payload, options = {}) {
       displayName: sample.displayName || sample.playerId,
       selectedCharacterId: sample.selectedCharacterId || null,
       modelAssetId: sample.modelAssetId || null,
+      gearIds: Array.isArray(sample.gear) ? sample.gear.slice() : [],
       position: null,
       previousPosition: null,
       targetPosition: null,
@@ -4823,6 +4826,7 @@ function upsertRemotePlayerEntry(payload, options = {}) {
   }
   entry.selectedCharacterId = sample.selectedCharacterId !== undefined ? sample.selectedCharacterId : entry.selectedCharacterId || null;
   if (sample.modelAssetId) entry.modelAssetId = sample.modelAssetId;
+  if (Array.isArray(sample.gear)) entry.gearIds = sample.gear.slice();
   entry.connectedSessionCount = sample.connectedSessionCount || entry.connectedSessionCount || 0;
   entry.sourceSessionId = sample.sourceSessionId || entry.sourceSessionId || null;
   entry.sourceDevice = sample.sourceDevice || entry.sourceDevice || null;
@@ -5240,6 +5244,7 @@ function syncRemotePlayers(now = performance.now()) {
     const runtimeSetRemotePlayer = typeof state.runtime.setRemotePlayerVisualState === "function"
       ? state.runtime.setRemotePlayerVisualState.bind(state.runtime)
       : state.runtime.setRemotePlayerState.bind(state.runtime);
+    syncRemoteGear(entry);
     const runtimeEntry = runtimeSetRemotePlayer(entry.playerId, {
       x: entry.position?.x ?? 0,
       y: entry.position?.y ?? 0,
@@ -7515,6 +7520,22 @@ function syncOwnGear() {
   const classId = state.player?.selectedCharacterId || null;
   const lookPoints = (classId && project?.catalogs?.playableCharacters?.[classId]?.attachPoints?.[look]) || null;
   state.runtime.setPlayerGear(gearFromItems(rows.map((row) => row?.itemId).filter(Boolean), project?.catalogs?.items || {}, lookPoints));
+}
+
+// Uitrusting U1c (25-11): wat een andere speler (of bot) draagt, zoals de server het stuurt. Alleen opnieuw
+// uitrekenen als zijn lijst, uiterlijk of klasse verandert; de runtime hangt het aan zijn character.
+function syncRemoteGear(entry) {
+  const project = state.gameProject || state.gameWorld?.gameProject || null;
+  const ids = Array.isArray(entry.gearIds) ? entry.gearIds : [];
+  const key = ids.join(",") + "|" + (entry.modelAssetId || "") + "|" + (entry.selectedCharacterId || "");
+  if (entry.gear && entry.gearKey === key && entry.gearProject === project) return;
+  const base = state.gameWorld?.player?.defaultModelAssetId !== undefined ? state.gameWorld.player.defaultModelAssetId : state.gameWorld?.player?.modelAssetId;
+  const look = entry.modelAssetId || base || "";
+  const lookPoints = (entry.selectedCharacterId && project?.catalogs?.playableCharacters?.[entry.selectedCharacterId]?.attachPoints?.[look]) || null;
+  const list = ids.length ? gearFromItems(ids, project?.catalogs?.items || {}, lookPoints) : [];
+  entry.gearKey = key;
+  entry.gearProject = project;
+  entry.gear = { entries: list, sig: JSON.stringify(list) };
 }
 
 function renderNode03Hud() {

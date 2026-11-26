@@ -730,13 +730,15 @@ function publicPlayer(profile, world = null) {
   };
 }
 
-export function publicRemotePlayerSnapshot(profile, position, connectedSessionCount, worldId, modelAssetId = null) {
+export function publicRemotePlayerSnapshot(profile, position, connectedSessionCount, worldId, modelAssetId = null, gear = null) {
   if (!profile || !position) return null;
   return {
     playerId: profile.id,
     displayName: profile.display_name,
     selectedCharacterId: profile.selected_character_id || null,
     modelAssetId: modelAssetId || null,
+    // Uitrusting U1c (25-11): wat hij draagt (item-ID's); de game hangt wapen en schild aan zijn handen.
+    gear: Array.isArray(gear) ? gear.slice() : [],
     position: {
       x: round(position.x),
       y: round(position.y),
@@ -761,8 +763,8 @@ export function publicRemotePlayerSnapshot(profile, position, connectedSessionCo
   };
 }
 
-function publicRemotePlayerJoined(profile, position, connectedSessionCount, worldId, modelAssetId = null) {
-  const snapshot = publicRemotePlayerSnapshot(profile, position, connectedSessionCount, worldId, modelAssetId);
+function publicRemotePlayerJoined(profile, position, connectedSessionCount, worldId, modelAssetId = null, gear = null) {
+  const snapshot = publicRemotePlayerSnapshot(profile, position, connectedSessionCount, worldId, modelAssetId, gear);
   if (!snapshot) return null;
   return snapshot;
 }
@@ -931,6 +933,8 @@ export class MmoService {
     this.playerStateCache = new Map();
     this.playerIdsByWorldId = new Map();
     this.primaryPresenceByPlayerId = new Map();
+    // Uitrusting U1c (25-11): per speler de item-ID's die hij draagt (uit player_equipment), tot hij iets wisselt.
+    this.gearByPlayerId = new Map();
     this.pendingDisconnectByPlayerId = new Map();
     this.positionCheckpoint = createPositionCheckpointer({
       write: (rows) => this.writePositionRows(rows),
@@ -2114,6 +2118,7 @@ export class MmoService {
       displayName: profile.display_name,
       selectedCharacterId: profile.selected_character_id || null,
       modelAssetId: this.characterModel(profile),
+      gear: this.playerGear(playerId),
       worldId: worldId,
       position: {
         x: round(position.x),
@@ -2144,6 +2149,7 @@ export class MmoService {
 
   removePrimaryPresenceRecord(playerId, worldId = null) {
     if (playerId) this.primaryPresenceByPlayerId.delete(playerId);
+    if (playerId) this.gearByPlayerId.delete(playerId);
     if (!worldId) return;
     const playerSet = this.playerIdsByWorldId.get(worldId);
     if (playerSet) {
@@ -2181,7 +2187,7 @@ export class MmoService {
         teleport: position.teleport === true,
         client_sent_at: position.clientSentAt || position.client_sent_at || null,
         server_received_at: position.serverReceivedAt || position.server_received_at || null
-      }, this.countConnectedPlayerSessions(playerId), worldId, record?.modelAssetId || this.characterModel(profile)));
+      }, this.countConnectedPlayerSessions(playerId), worldId, record?.modelAssetId || this.characterModel(profile), record?.gear || this.playerGear(playerId)));
     }
     return {
       ok: true,
@@ -2271,7 +2277,7 @@ export class MmoService {
     if (!connection || !connection.worldId) return;
     const snapshot = this.getWorldPresenceSnapshot(connection.worldId, connection.player?.id || null);
     if (position && connection.player) {
-      const ownPlayer = publicRemotePlayerSnapshot(connection.player, position, this.countConnectedPlayerSessions(connection.player.id), connection.worldId, this.characterModel(connection.player));
+      const ownPlayer = publicRemotePlayerSnapshot(connection.player, position, this.countConnectedPlayerSessions(connection.player.id), connection.worldId, this.characterModel(connection.player), this.playerGear(connection.player.id));
       if (ownPlayer) {
         snapshot.players = snapshot.players.filter(function (entry) {
           return entry && entry.playerId !== ownPlayer.playerId;
@@ -2303,7 +2309,7 @@ export class MmoService {
   broadcastRemotePlayerJoined(connection, position) {
     if (!connection || !position || !connection.worldId || !connection.player) return;
     const connectedSessionCount = this.countConnectedPlayerSessions(connection.player.id);
-    const payload = publicRemotePlayerJoined(connection.player, position, connectedSessionCount, connection.worldId, this.characterModel(connection.player));
+    const payload = publicRemotePlayerJoined(connection.player, position, connectedSessionCount, connection.worldId, this.characterModel(connection.player), this.playerGear(connection.player.id));
     if (!payload) return;
     this.interestIndex.update(connection.player.id, num(position.x, 0), num(position.z, 0));
     this.broadcastToWorldNear(connection.worldId, connection.player.id, eventMessage("remote_player:joined", payload, this.stampServerPayload(connection.worldId, payload)), {
@@ -2320,6 +2326,37 @@ export class MmoService {
     this.broadcastToWorld(connection.worldId, eventMessage("remote_player:left", payload, this.stampServerPayload(connection.worldId, payload)), {
       excludeUserId: connection.user?.id || null
     });
+  }
+
+  // Uitrusting U1c (25-11): de item-ID's die een speler draagt. De database wordt pas weer gelezen als hij iets
+  // aan- of uittrekt (refreshPlayerGear vanuit node03). De game kiest zelf wat zichtbaar is (wapenhand, andere hand).
+  playerGear(playerId) {
+    if (!playerId) return [];
+    const cached = this.gearByPlayerId.get(playerId);
+    if (cached) return cached;
+    let gear = [];
+    try {
+      gear = this.db.prepare(`
+        SELECT i.item_id FROM player_equipment e JOIN player_item_instances i ON i.id = e.item_instance_id
+        WHERE e.player_id = ? ORDER BY e.slot_id ASC
+      `).all(playerId).map((row) => String(row.item_id || "")).filter(Boolean).slice(0, 16);
+    } catch {
+      gear = [];
+    }
+    this.gearByPlayerId.set(playerId, gear);
+    return gear;
+  }
+
+  // Na aan- of uittrekken: nieuwe lijst in het presence-record, en de speler gaat in de volgende update mee. Omdat de
+  // lijst in de vaste gegevens zit (snapshotStaticSignature), krijgt alleen wie hem ziet (AOI) één volledige record.
+  refreshPlayerGear(playerId) {
+    if (!playerId) return;
+    this.gearByPlayerId.delete(playerId);
+    const gear = this.playerGear(playerId);
+    const record = this.primaryPresenceByPlayerId.get(playerId) || null;
+    if (!record) return;
+    record.gear = gear;
+    if (record.worldId) this.markPlayerDirty(record.worldId, playerId);
   }
 
   markPlayerDirty(worldId, playerId) {
@@ -2341,6 +2378,7 @@ export class MmoService {
       n: this.netIdFor(state.player_id),
       displayName: presence?.displayName || null,
       modelAssetId: presence?.modelAssetId || null,
+      gear: Array.isArray(presence?.gear) ? presence.gear : [],
       selectedCharacterId: presence?.selectedCharacterId || null,
       connectedSessionCount: this.countConnectedPlayerSessions(state.player_id),
       worldId: state.world_id || null,
@@ -2427,7 +2465,7 @@ export class MmoService {
   // Wat alleen verandert bij inloggen, wisselen van character of zone: als dit gelijk blijft, gaat de kleine update.
   snapshotStaticSignature(record) {
     return [record.displayName, record.modelAssetId, record.selectedCharacterId, record.connectedSessionCount, record.worldId,
-      record.zoneId, record.spawnId, record.activeControllerSessionId, record.controllerEpoch].join("|");
+      record.zoneId, record.spawnId, record.activeControllerSessionId, record.controllerEpoch, (record.gear || []).join(",")].join("|");
   }
 
   // Kleine spelersupdate (~70 bytes i.p.v. ~520): i = kort nummer, r = draaiing, m = loopt, a = animatie (0 stil, 1 lopen,
@@ -2904,6 +2942,7 @@ export class MmoService {
       displayName: resolved ? resolved.display_name : fallbackRecord.displayName,
       selectedCharacterId: resolved ? (resolved.selected_character_id || null) : (fallbackRecord.selectedCharacterId || null),
       modelAssetId: resolved ? this.characterModel(resolved) : (fallbackRecord.modelAssetId || null),
+      gear: resolved ? this.playerGear(playerId) : (fallbackRecord.gear || []),
       worldId: worldId,
       position: {
         x: round(state.x),
