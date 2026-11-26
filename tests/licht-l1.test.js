@@ -94,3 +94,11 @@ test("L2: vaste set echte lampen (Echte lampen 0-4, standaard 3) bij de dichtstb
   assert.match(hud, /api\.setRealLamps\(realLampValue\(\)\)/);
   assert.match(fs.readFileSync("apps/web/public/game/game.js", "utf8"), /state\.runtime\.setRealLampCount\(gkHudRealLamps\)/);
 });
+
+test("Kevin 26-11: lichtplek over heuvels, bergen en kuilen; echte lamp loopt zachter af", () => {
+  const src = fs.readFileSync("apps/web/public/shared/world-runtime.js", "utf8");
+  assert.match(src, /new THREE\.PlaneGeometry\(cfg\.range \* 2, cfg\.range \* 2, spotSegments, spotSegments\)/, "plek is een net");
+  assert.match(src, /pos\.setY\(index, lampFloorY\(record\.worldData, root\.x \+ p\.x \+ gx, root\.z \+ p\.z \+ gz, rootY \+ p\.y\) - rootY\);/, "elk punt op de grond");
+  assert.match(src, /for \(const record of lampRecords\) placeLamp\(record, record\.offset\);/, "opnieuw als het terrein laadt");
+  assert.match(src, /new THREE\.PointLight\(0xffb04a, 0, 10, 1\)/);
+});

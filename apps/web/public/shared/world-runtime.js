@@ -4850,6 +4850,8 @@ export function createGkWorldRuntime(canvas, options = {}) {
   // springen. Het aantal verandert alleen met de schuif Echte lampen (0-4, standaard 3), dus de shaders worden niet
   // steeds opnieuw gebouwd. Pas als er ergens een lamp is komen ze er; zonder GPU (software) nooit.
   let realLampCount = 3;
+  let lampTerrainRevision = -1; // Kevin 26-11: terrein geladen of veranderd -> lichtplekken opnieuw over de grond leggen
+  let lampTerrainAt = 0;
   let realLampEver = false;
   const realLampSlots = []; // { light, record, level }
   const realLampSpot = new THREE.Vector3();
@@ -16803,15 +16805,35 @@ function resolveChunkDebugCenter(policy) {
     "}"
   ].join("\n");
 
-  // Waar de lichtplek ligt: 5 cm boven de grond onder de lamp (terrein of de vloer van een 🏠 Binnen-gebied), nooit
-  // boven de vlam zelf.
+  // Waar de lichtplek ligt: 5 cm boven de grond (terrein, of de vloer van een 🏠 Binnen-gebied die niet boven de vlam ligt).
+  // Kevin 26-11: per punt van de plek, zodat hij over heuvels, bergen en kuilen heen ligt (niet alleen op vlak land).
   function lampFloorY(worldData, x, z, top) {
     const groundY = num(worldData?.ground?.y, 0);
     let y = groundY + terrainLift(x, z);
     for (const floor of Array.isArray(worldData?.indoorFloors) ? worldData.indoorFloors : []) {
-      if (Array.isArray(floor?.outline) && floor.outline.length >= 3 && pointInOutline(floor.outline, x, z)) y = Math.max(y, groundY + num(floor.y, 0) + 0.02);
+      const floorY = groundY + num(floor?.y, 0) + 0.02;
+      if (floorY <= top && Array.isArray(floor?.outline) && floor.outline.length >= 3 && pointInOutline(floor.outline, x, z)) y = Math.max(y, floorY);
     }
-    return Math.min(y, top) + 0.05;
+    return y + 0.05;
+  }
+
+  // De lichtplek is een net (om de ±0,5 m een punt) dat de grond volgt. Opnieuw als de vlam verschuift of als er
+  // terrein bij komt (de stukken terrein laden na de lampen).
+  function drapeLampSpot(record, p) {
+    const root = record.root.position;
+    const rootY = num(root.y, 0);
+    const geometry = record.spot.geometry;
+    const pos = geometry.attributes.position;
+    if (!record.spotBase) record.spotBase = Float32Array.from(pos.array);
+    record.spot.position.set(p.x, 0, p.z);
+    for (let index = 0; index < pos.count; index += 1) {
+      const gx = record.spotBase[index * 3];
+      const gz = record.spotBase[index * 3 + 2];
+      pos.setY(index, lampFloorY(record.worldData, root.x + p.x + gx, root.z + p.z + gz, rootY + p.y) - rootY);
+    }
+    pos.needsUpdate = true;
+    geometry.computeBoundingSphere();
+    geometry.boundingBox = new THREE.Box3();
   }
 
   function addLamp(worldData, root, light) {
@@ -16849,7 +16871,8 @@ function resolveChunkDebugCenter(policy) {
     const glow = new THREE.Mesh(flat(new THREE.PlaneGeometry(1, 1), cfg.glow * 2), glowMaterial);
     glow.name = "lamp glow";
     glow.renderOrder = 6;
-    const spotGeometry = new THREE.PlaneGeometry(cfg.range * 2, cfg.range * 2);
+    const spotSegments = Math.max(8, Math.min(32, Math.ceil(cfg.range * 4)));
+    const spotGeometry = new THREE.PlaneGeometry(cfg.range * 2, cfg.range * 2, spotSegments, spotSegments);
     spotGeometry.rotateX(-Math.PI / 2);
     const spotMaterial = new THREE.ShaderMaterial({
       uniforms: { color: { value: color.clone() }, opacity: { value: 0 }, depthBias: { value: 0.15 }, depthBiasFar: { value: 0.6 } },
@@ -16885,10 +16908,10 @@ function resolveChunkDebugCenter(policy) {
 
   // De vlam op offset = { x, y (hoogte), z } in meters, in de richting van het model (draait mee); de lichtplek eronder.
   function placeLamp(record, offset) {
-    const p = new THREE.Vector3(num(offset?.x, 0), num(offset?.y, 1.5), num(offset?.z, 0)).applyQuaternion(record.root.quaternion);
+    record.offset = { x: num(offset?.x, 0), y: num(offset?.y, 1.5), z: num(offset?.z, 0) };
+    const p = new THREE.Vector3(record.offset.x, record.offset.y, record.offset.z).applyQuaternion(record.root.quaternion);
     record.glow.position.copy(p);
-    const rootY = num(record.root.position?.y, 0);
-    record.spot.position.set(p.x, lampFloorY(record.worldData, record.root.position.x + p.x, record.root.position.z + p.z, rootY + p.y) - rootY, p.z);
+    drapeLampSpot(record, p);
     if (lampFit?.record === record && lampFit.helper) lampFit.helper.position.copy(p);
     requestRender("lamp");
   }
@@ -17063,6 +17086,12 @@ function resolveChunkDebugCenter(policy) {
       if (!lampAlive(lampRecords[index])) { lampRecords[index].dead = true; lampRecords.splice(index, 1); }
     }
     // In de editor wordt niet steeds getekend: daar elk getekend beeld opnieuw kiezen (weinig lampen, goedkoop).
+    const terrainRevision = terrainLayer.active ? num(terrainLayer.heightfield?.revision, 0) : 0;
+    if (terrainRevision !== lampTerrainRevision && (time - lampTerrainAt > 500 || lampTerrainAt > time)) {
+      lampTerrainRevision = terrainRevision;
+      lampTerrainAt = time;
+      for (const record of lampRecords) placeLamp(record, record.offset);
+    }
     if (mode !== "game" || time - lampPickAt > 250 || lampPickAt > time) pickNearLamps(time, night);
     for (const record of lampRecords) {
       // Aan/uit in een halve seconde, zodat een lamp niet ineens verschijnt of verdwijnt.
@@ -17127,7 +17156,8 @@ function resolveChunkDebugCenter(policy) {
       slot.light.dispose?.();
     }
     while (realLampSlots.length < want) {
-      const light = new THREE.PointLight(0xffb04a, 0, 8, 2);
+      // Kevin 26-11: zachter aflopen (decay 1), zodat ook heuvels en kuilen wat verder weg licht krijgen.
+      const light = new THREE.PointLight(0xffb04a, 0, 10, 1);
       light.name = "gk-real-lamp";
       light.castShadow = false;
       light.userData.gkLamp = true;
@@ -17161,9 +17191,9 @@ function resolveChunkDebugCenter(policy) {
       record.glow.getWorldPosition(realLampSpot);
       slot.light.position.copy(realLampSpot);
       slot.light.color.copy(record.color);
-      slot.light.distance = record.cfg.range * 2;
-      // Sterkte 1 en reikwijdte 4 m: onder de lamp ongeveer zo licht als de zon, op 4 m nog een warme gloed.
-      slot.light.intensity = 1.2 * record.cfg.range * record.on * record.flick * slot.level;
+      slot.light.distance = record.cfg.range * 2.5;
+      // Sterkte 1 en reikwijdte 4 m: onder de lamp fel, op 4-6 m (ook tegen een heuvel op) nog een warme gloed.
+      slot.light.intensity = 0.6 * record.cfg.range * record.on * record.flick * slot.level;
     }
   }
 

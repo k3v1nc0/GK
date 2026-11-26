@@ -1,4 +1,4 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261126-l2";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261126-l2b";
 import { gearFromItems } from "../shared/equipment-attach.js?v=20261125-u1c";
 import { nextPlayerRouteWaypoint } from "../shared/player-path-client.js?v=20261123-deur1";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20261106-perf1";
@@ -8,7 +8,7 @@ import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolatio
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createWorldSounds } from "./world-sounds.js?v=20261116-herstel1";
 import { createActorPresentation } from "./actor-presentation.js?v=20261116-herstel1";
-import { createGkHud } from "./hud/gk-hud.js?v=20261126-l2";
+import { createGkHud } from "./hud/gk-hud.js?v=20261126-l2b";
 import { dayNightState, mixColor } from "../shared/day-night.js?v=20261115-fase10";
 import { node05ActionBody, node05OperationId } from "./node05-request.js?v=20261113-fase8d";
 import {
