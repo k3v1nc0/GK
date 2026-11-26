@@ -4850,6 +4850,10 @@ export function createGkWorldRuntime(canvas, options = {}) {
   // springen. Het aantal verandert alleen met de schuif Echte lampen (0-4, standaard 3), dus de shaders worden niet
   // steeds opnieuw gebouwd. Pas als er ergens een lamp is komen ze er; zonder GPU (software) nooit.
   let realLampCount = 3;
+  // L3 (26-11): een lamp in de hand (fakkel) volgt elk beeld de hand (followHandLamps, vlak voor het tekenen).
+  const handLampPos = new THREE.Vector3();
+  const handLampQuat = new THREE.Quaternion();
+  const handLampOffset = new THREE.Vector3();
   let lampTerrainRevision = -1; // Kevin 26-11: terrein geladen of veranderd -> lichtplekken opnieuw over de grond leggen
   let lampTerrainAt = 0;
   let realLampEver = false;
@@ -8990,6 +8994,7 @@ function resolveChunkDebugCenter(policy) {
     // Een pixelratio-wijziging kan het canvas wissen: voer die vóór het tekenen uit.
     maybeAdaptPixelRatio(time);
     if (mode === "game") updateVision();
+    if (lampRecords.length) followHandLamps();
     if (gpuFrameTimer) gpuFrameTimer.begin();
     renderer.render(scene, camera);
     if (gpuFrameTimer) gpuFrameTimer.end();
@@ -9019,7 +9024,8 @@ function resolveChunkDebugCenter(policy) {
 
   function clearContent() {
     windowLightRecords.length = 0;
-    lampRecords.length = 0;
+    // Lampen in de hand (fakkel) horen bij een character, niet bij de wereld: die blijven.
+    for (let index = lampRecords.length - 1; index >= 0; index -= 1) if (!lampRecords[index].follow) lampRecords.splice(index, 1);
     lampFit = null;
     for (const slot of realLampSlots) { slot.record = null; slot.level = 0; slot.light.intensity = 0; }
     clearTerrainEditorOverlay();
@@ -9980,6 +9986,7 @@ function resolveChunkDebugCenter(policy) {
   function clearBodyFitPreview() {
     if (!bodyFit) return;
     bodyFit.alive = false;
+    if (bodyFit.lamp) removeHandLamp(bodyFit.lamp);
     if (bodyFit.axes) { bodyFit.axes.geometry?.dispose?.(); bodyFit.axes.material?.dispose?.(); }
     // De modellen delen geometrie en materiaal met de cache (SkeletonUtils.clone): alleen weghalen, niet opruimen.
     if (bodyFit.group?.parent) bodyFit.group.parent.remove(bodyFit.group);
@@ -9996,11 +10003,14 @@ function resolveChunkDebugCenter(policy) {
     const state = bodyFit;
     if (!state?.character) return;
     if (state.attach) { detachFromBone(state.attach); state.attach = null; }
+    if (state.lamp) { removeHandLamp(state.lamp); state.lamp = null; }
     if (state.axes) { state.axes.geometry?.dispose?.(); state.axes.material?.dispose?.(); state.axes = null; }
     const bone = findAttachBone(state.character, state.spec.pointKey, state.spec.boneName || "");
     state.bone = bone;
     // Geen bot (een model zonder skelet): dan hangt het item aan het model zelf.
     state.attach = attachToBone(THREE, state.character, bone || state.character, state.model, state.spec.point, state.spec.item);
+    // L3: geeft het item licht, dan brandt de vlam ook bij 🧍 Passen (zo zet je Hoogte vlam goed).
+    if (state.spec.light) state.lamp = addHandLamp(state.attach, state.spec.light, true);
     const axes = new THREE.AxesHelper(0.3);
     axes.material.depthTest = false;
     axes.material.depthWrite = false;
@@ -10173,7 +10183,10 @@ function resolveChunkDebugCenter(policy) {
   function releaseGear(state) {
     if (!state) return;
     state.alive = false;
-    for (const attach of state.attaches) detachFromBone(attach);
+    for (const attach of state.attaches) {
+      if (attach.lamp) removeHandLamp(attach.lamp);
+      detachFromBone(attach);
+    }
   }
 
   // Hangt de lijst aan clone (het geladen model van een speler). Niets veranderd = de oude toestand terug.
@@ -10200,7 +10213,10 @@ function resolveChunkDebugCenter(policy) {
           if (child.isMesh) { child.castShadow = castShadow === true; child.receiveShadow = true; }
         });
         const bone = findAttachBone(clone, entry.pointKey, entry.boneName || "") || clone;
-        applied.attaches.push(attachToBone(THREE, clone, bone, model, entry.point, entry.item));
+        const attach = attachToBone(THREE, clone, bone, model, entry.point, entry.item);
+        // L3: een fakkel brandt in de hand (eigen speler: castShadow = true).
+        if (entry.light) attach.lamp = addHandLamp(attach, entry.light, castShadow === true);
+        applied.attaches.push(attach);
         requestRender("player-gear");
       };
       if (record.status === "ready") hang(record.gltf);
@@ -16826,6 +16842,7 @@ function resolveChunkDebugCenter(policy) {
     const pos = geometry.attributes.position;
     if (!record.spotBase) record.spotBase = Float32Array.from(pos.array);
     record.spot.position.set(p.x, 0, p.z);
+    record.drapeWorld = { x: root.x + p.x, y: rootY, z: root.z + p.z };
     for (let index = 0; index < pos.count; index += 1) {
       const gx = record.spotBase[index * 3];
       const gz = record.spotBase[index * 3 + 2];
@@ -17122,10 +17139,11 @@ function resolveChunkDebugCenter(policy) {
     const focus = mode === "game" && player.root ? player.pos : camera.position;
     const lit = [];
     for (const record of lampRecords) {
-      if (record.cfg.strength <= 0 || (record.cfg.nightOnly && night <= 0.01)) continue;
+      if (record.cfg.strength <= 0 || (record.cfg.nightOnly && night <= 0.01) || record.root.visible === false) continue;
       const dx = record.root.position.x + record.glow.position.x - focus.x;
       const dz = record.root.position.z + record.glow.position.z - focus.z;
-      lit.push({ record, d: dx * dx + dz * dz });
+      // L3: je eigen fakkel gaat altijd voor (telt mee bij Lampen tegelijk en krijgt een echte lamp).
+      lit.push({ record, d: record.own ? -1 : dx * dx + dz * dz });
     }
     if (limited) {
       lit.sort(function (a, b) { return a.d * (a.record.fade > 0.5 ? 0.8 : 1) - b.d * (b.record.fade > 0.5 ? 0.8 : 1); });
@@ -17195,6 +17213,70 @@ function resolveChunkDebugCenter(policy) {
       // Sterkte 1 en reikwijdte 4 m: onder de lamp fel, op 4-6 m (ook tegen een heuvel op) nog een warme gloed.
       slot.light.intensity = 0.6 * record.cfg.range * record.on * record.flick * slot.level;
     }
+  }
+
+  // L3 (26-11): een fakkel in de hand. Een eigen lamp in de wereld (aan de scène, wereld-uitgelijnd) die elk beeld naar
+  // het item in de hand springt; de vlam staat op Vlam X / Hoogte vlam / Vlam Z langs het item (draait mee).
+  function addHandLamp(attach, light, own) {
+    const anchor = attach?.holder;
+    if (!anchor || !light || !scene) return null;
+    const root = new THREE.Group();
+    root.name = "gk-hand-lamp";
+    root.userData.gkLamp = true;
+    root.userData.runtimeAlive = true;
+    root.userData.lampOnly = true;
+    anchor.getWorldPosition(root.position);
+    anchor.getWorldQuaternion(root.quaternion);
+    scene.add(root);
+    const record = addLamp(world, root, light);
+    if (!record) { scene.remove(root); return null; }
+    record.lampOnly = true;
+    record.follow = anchor;
+    record.own = own === true;
+    lampPickAt = 0;
+    return record;
+  }
+
+  function removeHandLamp(record) {
+    if (record?.root?.parent) record.root.parent.remove(record.root);
+    requestRender("lamp");
+  }
+
+  function followHandLamps() {
+    for (const record of lampRecords) if (record.follow) followHandLamp(record);
+  }
+
+  function followHandLamp(record) {
+    const anchor = record.follow;
+    let node = anchor;
+    let shown = true;
+    while (node) {
+      if (node.visible === false) shown = false;
+      if (!node.parent) break;
+      node = node.parent;
+    }
+    // Het item hangt niet meer aan een character in beeld: de lamp weg.
+    if (node !== scene) { removeHandLamp(record); return; }
+    record.root.visible = shown;
+    if (!shown) return;
+    const root = record.root;
+    anchor.getWorldPosition(handLampPos);
+    anchor.getWorldQuaternion(handLampQuat);
+    root.position.copy(handLampPos);
+    root.quaternion.copy(handLampQuat);
+    record.group.quaternion.copy(handLampQuat).invert();
+    const off = record.offset || { x: 0, y: 0, z: 0 };
+    handLampOffset.set(off.x, off.y, off.z).applyQuaternion(handLampQuat);
+    record.glow.position.copy(handLampOffset);
+    // De lichtplek pas opnieuw over de grond leggen als je een stukje verder bent (zuinig).
+    const d = record.drapeWorld;
+    if (!d || Math.hypot(root.position.x + handLampOffset.x - d.x, root.position.z + handLampOffset.z - d.z) > 0.35) {
+      record.worldData = world || record.worldData;
+      drapeLampSpot(record, handLampOffset);
+    } else {
+      record.spot.position.set(d.x - root.position.x, d.y - root.position.y, d.z - root.position.z);
+    }
+    if (record.realSlot?.record === record) record.realSlot.light.position.copy(root.position).add(handLampOffset);
   }
 
   // Kevin 23-11: de vloer van een 🏠 Binnen-deelgebied: één plat vlak in de vorm van het gebied, met een terreintextuur

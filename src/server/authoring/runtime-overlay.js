@@ -3,6 +3,7 @@
 import { colliderToBlocker } from "./world-compiler.js";
 import { areaShapeReadModels } from "../publish-service.js";
 import { AREA_EDITOR_PREFIX, AREA_RUNTIME_ID_FIELD } from "../../shared/authoring/kinds/area.js";
+import { ITEM_LIGHT_DEFAULTS, lightOf } from "../../shared/authoring/kinds/light-fields.js";
 import { wallBlockers, wallFromAreaValues } from "../../../apps/web/public/shared/walls.js";
 import { areaOutlineMeters } from "../../../apps/web/public/shared/spatial.js";
 import { inIndoorZone } from "../../../apps/web/public/shared/indoor-zone.js";
@@ -33,7 +34,7 @@ const ITEM_FIELD_TO_RUNTIME = {
 // Uitrusting U1b (25-11): hoe een item aan het lichaam hangt (blok 👕 Aan het lichaam); de game leest dezelfde namen.
 const ITEM_BODY_NUMBERS = ["bodyX", "bodyY", "bodyZ", "bodyRotX", "bodyRotY", "bodyRotZ"];
 const ITEM_BODY_KEYS = ["bodyModelAssetId", "bodyPoint", "bodyScaleBp"].concat(ITEM_BODY_NUMBERS);
-export const CANONICAL_ITEM_RUNTIME_KEYS = ["id", "worldModelScale", "visualStackable"].concat(Object.values(ITEM_FIELD_TO_RUNTIME), ITEM_BODY_KEYS);
+export const CANONICAL_ITEM_RUNTIME_KEYS = ["id", "worldModelScale", "visualStackable", "light"].concat(Object.values(ITEM_FIELD_TO_RUNTIME), ITEM_BODY_KEYS);
 
 // Zet een canoniek item om naar de vorm die node03 uit catalogs.items leest. Velden die Canoniek kent
 // komen altijd uit Canoniek (leeg = weg). Legacy-velden die Canoniek niet kent blijven bevroren staan.
@@ -69,6 +70,10 @@ export function runtimeItemFromCanonical(item, legacy = null) {
   if (typeof item.bodyPoint === "string" && item.bodyPoint && item.bodyPoint !== "auto") runtime.bodyPoint = item.bodyPoint;
   for (const key of ITEM_BODY_NUMBERS) if (Number.isFinite(item[key]) && item[key] !== 0) runtime[key] = item[key];
   if (Number.isInteger(item.bodyScaleBp) && item.bodyScaleBp > 0 && item.bodyScaleBp !== 10000) runtime.bodyScaleBp = item.bodyScaleBp;
+  // L3 (26-11): licht in de hand (fakkel). De game hangt de vlam aan het item als je het draagt.
+  const light = lightOf(item, ITEM_LIGHT_DEFAULTS);
+  if (light) runtime.light = light;
+  else delete runtime.light;
   // Fase 9 herstel 1 (keuze van Kevin 14-11): een item met een beroep geeft beroeps-XP bij oppakken en buit.
   const professionId = String(item.professionRef || "").startsWith("profession:") ? String(item.professionRef).slice("profession:".length) : "";
   if (professionId) {

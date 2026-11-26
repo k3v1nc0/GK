@@ -163,7 +163,10 @@ export function gearFromItems(itemIds, items, lookPoints = null) {
     const assetId = bodyModelForItem(item);
     if (!pointKey || !assetId) continue;
     const entry = lookPoints && typeof lookPoints === "object" && lookPoints[pointKey] && typeof lookPoints[pointKey] === "object" ? lookPoints[pointKey] : {};
-    out.push({ itemId: String(itemId), assetId, pointKey, boneName: typeof entry.bone === "string" ? entry.bone : "", point: pointOffset(entry), item: itemBodyOffset(item) });
+    const row = { itemId: String(itemId), assetId, pointKey, boneName: typeof entry.bone === "string" ? entry.bone : "", point: pointOffset(entry), item: itemBodyOffset(item) };
+    // L3 (26-11): geeft het item licht (fakkel), dan brandt de vlam in de hand.
+    if (item.light && typeof item.light === "object") row.light = Object.assign({}, item.light);
+    out.push(row);
   }
   return out.sort((a, b) => (a.pointKey + a.itemId).localeCompare(b.pointKey + b.itemId));
 }

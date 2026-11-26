@@ -8,6 +8,15 @@ import {
   attachPointDef, attachPointForItem, bodyModelForItem, cleanPointEntry, itemBodyOffset, itemOffsetFields, lookPointEntry, pointOffset
 } from "../shared/equipment-attach.js?v=20261125-u1a";
 
+// L3 (26-11): geeft het item licht (blok 💡 Licht), dan brandt de vlam ook bij Passen. Beginwaarden zoals een item
+// (ITEM_LIGHT_DEFAULTS op de server): vlam 0,4 m boven je hand.
+function lightSpec(body) {
+  if (body?.light !== true) return null;
+  const n = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
+  return { color: body.lightColor, strength: n(body.lightStrength, 1), range: n(body.lightRange, 5), flicker: n(body.lightFlicker, 0.6),
+    glow: n(body.lightGlow, 0.4), height: n(body.lightHeight, 0.4), x: n(body.lightX, 0), z: n(body.lightZ, 0), nightOnly: false };
+}
+
 const letter = (event) => (String(event.code || "").startsWith("Key") ? event.code.slice(3).toLowerCase() : String(event.key || "").toLowerCase());
 const MODE_TEXT = { move: "schuiven", rotate: "draaien", scale: "groter/kleiner" };
 const AXIS_TEXT = { x: "rode pijl", y: "groene pijl", z: "blauwe pijl" };
@@ -90,7 +99,7 @@ export function createBodyFitEditor(deps) {
     fit.shownItemModel = itemAssetId;
     const started = rt.setBodyFitPreview({
       lookAssetId: fit.lookAssetId, itemAssetId, idleClip: idleClipFor(fit.lookAssetId),
-      pointKey: now.pointKey, boneName: now.entry.bone || "", point: now.point, item: now.item, position,
+      pointKey: now.pointKey, boneName: now.entry.bone || "", point: now.point, item: now.item, position, light: lightSpec(doc.body),
       onReady: (info) => {
         if (!fit) return;
         fit.ready = Boolean(info?.ready);

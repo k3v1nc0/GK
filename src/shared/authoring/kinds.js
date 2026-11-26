@@ -11,6 +11,7 @@ import { ACTOR_KINDS } from "./kinds/actor.js";
 import { COMBAT_KINDS } from "./kinds/combat.js";
 import { LOOT_ENTRY_KEYS, LOOT_KINDS } from "./kinds/loot.js";
 import { HELP_ID, HELP_NAME, help, ui } from "./kinds/ui.js";
+import { ITEM_LIGHT_DEFAULTS, lightFields } from "./kinds/light-fields.js";
 import { WORLD_KINDS } from "./kinds/world.js";
 import { CAMERA_FIELDS } from "./kinds/camera.js";
 import { GAME_KINDS } from "./kinds/game.js";
@@ -191,6 +192,8 @@ export const CANONICAL_KINDS = {
       bodyScaleBp: { type: "integer", required: false, min: 100, max: 100000, audience: "client", label: "Grootte aan het lichaam",
         ui: ui("📏", "slider", "werkbank", { step: 100, unit: "%", scale: 100, range: [1000, 40000], group: BODY_GROUP }), default: 10000,
         help: help("Hoe groot het item is als je het draagt. 100 % = zoals het model is gemaakt.", "Een zwaard is ongeveer 1 m, een schild 50-70 cm. Makkelijkst: 🧍 Passen en dan T.", "Wapen veel te groot of te klein in de hand → schuif hier of druk T bij 🧍 Passen.") },
+      // L3 (26-11): een fakkel of lantaarn die licht geeft in de hand; dezelfde velden als 💡 Licht op een model.
+      ...lightFields("dit item", ITEM_LIGHT_DEFAULTS, true),
       // Stap 4 (HUD): eten en drinken. Met een waarde boven 0 krijgt het item in de tas de knop Gebruiken.
       // Healing (2-11): alles over gebruiken staat samen in het uitklapblok "Gebruiken" onderaan het item.
       healAmount: { type: "integer", required: false, min: 0, max: 1000000, audience: "client", label: "Geneest meteen",
