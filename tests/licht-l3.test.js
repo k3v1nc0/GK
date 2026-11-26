@@ -39,3 +39,14 @@ test("game: gear-regel draagt het licht mee", () => {
   assert.match(runtime, /if \(state\.spec\.light\) state\.lamp = addHandLamp\(state\.attach, state\.spec\.light, true\);/, "ook bij Passen");
   assert.match(fs.readFileSync("apps/web/public/editor/body-fit-editor.js", "utf8"), /light: lightSpec\(doc\.body\),/);
 });
+
+test("editor: bij 🧍 Passen ook 🔥 de vlam apart verschuiven (G, X/Y/Z), opslaan in Vlam X / Hoogte vlam / Vlam Z", () => {
+  const fit = fs.readFileSync("apps/web/public/editor/body-fit-editor.js", "utf8");
+  assert.match(fit, /const body = Object\.assign\(\{\}, doc\.body, \{ lightX: mm\(flame\.x\), lightHeight: mm\(flame\.y\), lightZ: mm\(flame\.z\) \}\);/);
+  assert.match(fit, /if \(mode !== "move" && fit\.target === "flame"\) \{ hint\("bij de vlam alleen G \(schuiven\)"\); return; \}/);
+  assert.match(fit, /item: now\.item, flame: now\.flame \}\);/, "schuif Hoogte vlam = vlam schuift ook in Passen");
+  const runtime = fs.readFileSync("apps/web/public/shared/world-runtime.js", "utf8");
+  assert.match(runtime, /if \(input\.target === "flame"\) return bodyFitFlameDrag\(state, input\);/);
+  assert.match(runtime, /if \(state\.lamp\) state\.lamp\.offset = \{ x: state\.spec\.light\.x, y: state\.spec\.light\.height, z: state\.spec\.light\.z \};/);
+  assert.match(fs.readFileSync("apps/web/public/editor/werkbank-docs.js", "utf8"), /doc\.body\?\.light === true \? \[target\("flame", "🔥 Vlam"\)\] : \[\]/);
+});

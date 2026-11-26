@@ -17,6 +17,19 @@ function lightSpec(body) {
     glow: n(body.lightGlow, 0.4), height: n(body.lightHeight, 0.4), x: n(body.lightX, 0), z: n(body.lightZ, 0), nightOnly: false };
 }
 
+// Kevin 26-11: 🔥 de vlam apart verschuiven. Waar hij nu zit (Vlam X, Hoogte vlam, Vlam Z) en de rest van het licht
+// (verandert die, dan het voorbeeld opnieuw opbouwen; alleen schuiven = alleen verplaatsen).
+function flameOf(body) {
+  const n = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
+  return { x: n(body?.lightX, 0), y: n(body?.lightHeight, 0.4), z: n(body?.lightZ, 0) };
+}
+function lightLook(body) {
+  const spec = lightSpec(body);
+  if (!spec) return "";
+  delete spec.x; delete spec.height; delete spec.z;
+  return JSON.stringify(spec);
+}
+
 const letter = (event) => (String(event.code || "").startsWith("Key") ? event.code.slice(3).toLowerCase() : String(event.key || "").toLowerCase());
 const MODE_TEXT = { move: "schuiven", rotate: "draaien", scale: "groter/kleiner" };
 const AXIS_TEXT = { x: "rode pijl", y: "groene pijl", z: "blauwe pijl" };
@@ -69,10 +82,11 @@ export function createBodyFitEditor(deps) {
     if (!fit) return;
     const doc = itemDoc();
     const def = attachPointDef(itemPoint(doc?.body));
-    const what = fit.target === "point" ? "✋ punt " + (def?.name || "") + " van dit uiterlijk (alle items)" : "🗡️ het item";
+    const what = fit.target === "point" ? "✋ punt " + (def?.name || "") + " van dit uiterlijk (alle items)" : fit.target === "flame" ? "🔥 de vlam" : "🗡️ het item";
     const text = "🧍 Passen · " + (prefix ? prefix + " · " : "") + what
       + (session ? " · " + MODE_TEXT[session.mode] + (session.axis ? " langs de " + AXIS_TEXT[session.axis] : "") + " · klik of Enter = vast, Esc = terug"
-        : " · G = schuiven, R = draaien" + (fit.target === "item" ? ", T = groter/kleiner" : "") + ", daarna X/Y/Z = langs een pijl · Esc = klaar");
+        : fit.target === "flame" ? " · G = schuiven, daarna X/Y/Z = langs een pijl bij de vlam · Esc = klaar"
+          : " · G = schuiven, R = draaien" + (fit.target === "item" ? ", T = groter/kleiner" : "") + ", daarna X/Y/Z = langs een pijl · Esc = klaar");
     deps.setStatus(text, "");
   }
 
@@ -80,7 +94,7 @@ export function createBodyFitEditor(deps) {
     const doc = itemDoc();
     const pointKey = itemPoint(doc?.body);
     const entry = lookEntry(fit.lookAssetId, pointKey);
-    return { pointKey, entry, point: pointOffset(entry), item: itemBodyOffset(doc?.body) };
+    return { pointKey, entry, point: pointOffset(entry), item: itemBodyOffset(doc?.body), flame: flameOf(doc?.body) };
   }
 
   function show() {
@@ -97,9 +111,12 @@ export function createBodyFitEditor(deps) {
     fit.ready = false;
     fit.failed = false;
     fit.shownItemModel = itemAssetId;
+    fit.shownLight = lightLook(doc.body);
+    if (fit.target === "flame" && doc.body?.light !== true) fit.target = "item";
     const started = rt.setBodyFitPreview({
       lookAssetId: fit.lookAssetId, itemAssetId, idleClip: idleClipFor(fit.lookAssetId),
       pointKey: now.pointKey, boneName: now.entry.bone || "", point: now.point, item: now.item, position, light: lightSpec(doc.body),
+      flameAxes: fit.target === "flame",
       onReady: (info) => {
         if (!fit) return;
         fit.ready = Boolean(info?.ready);
@@ -152,7 +169,8 @@ export function createBodyFitEditor(deps) {
   function setTarget(target) {
     if (!fit) return;
     cancelSession();
-    fit.target = target === "point" ? "point" : "item";
+    fit.target = target === "point" ? "point" : target === "flame" && itemDoc()?.body?.light === true ? "flame" : "item";
+    runtime()?.updateBodyFitPreview?.({ flameAxes: fit.target === "flame" });
     publish();
     deps.rerender();
     hint();
@@ -189,6 +207,15 @@ export function createBodyFitEditor(deps) {
     }
   }
 
+  async function saveFlame(flame, label) {
+    const doc = itemDoc();
+    if (!doc) return;
+    const mm = (value) => Math.round(Number(value) * 1000) / 1000;
+    const body = Object.assign({}, doc.body, { lightX: mm(flame.x), lightHeight: mm(flame.y), lightZ: mm(flame.z) });
+    saving = true;
+    try { await deps.save(doc, body, "Item · 🔥 vlam " + label); } finally { saving = false; shownRevision = revisionKey(); }
+  }
+
   async function saveItem(offset, label) {
     const doc = itemDoc();
     if (!doc) return;
@@ -207,18 +234,19 @@ export function createBodyFitEditor(deps) {
     if (revisionKey() === shownRevision) return;
     const now = currentOffsets();
     const doc = itemDoc();
-    // Een ander model in de hand: opnieuw laden; anders alleen verschuiven.
-    if (bodyModelForItem(doc.body) !== fit.shownItemModel) { show(); return; }
-    rt.updateBodyFitPreview?.({ pointKey: now.pointKey, boneName: now.entry.bone || "", point: now.point, item: now.item });
+    // Een ander model in de hand of ander licht (aan/uit, kleur, reikwijdte...): opnieuw laden; anders alleen verschuiven.
+    if (bodyModelForItem(doc.body) !== fit.shownItemModel || lightLook(doc.body) !== fit.shownLight) { show(); return; }
+    rt.updateBodyFitPreview?.({ pointKey: now.pointKey, boneName: now.entry.bone || "", point: now.point, item: now.item, flame: now.flame });
     shownRevision = revisionKey();
   }
 
   function beginSession(mode) {
     if (!fit?.ready) { hint("nog aan het laden"); return; }
     if (mode === "scale" && fit.target === "point") { hint("T werkt alleen voor het item"); return; }
+    if (mode !== "move" && fit.target === "flame") { hint("bij de vlam alleen G (schuiven)"); return; }
     const pointer = deps.lastPointer() || { clientX: 0, clientY: 0 };
     const now = currentOffsets();
-    session = { mode, axis: null, x: pointer.clientX, y: pointer.clientY, start: fit.target === "point" ? now.point : now.item, preview: null };
+    session = { mode, axis: null, x: pointer.clientX, y: pointer.clientY, start: fit.target === "point" ? now.point : fit.target === "flame" ? now.flame : now.item, preview: null };
     publish();
     hint();
   }
@@ -230,14 +258,15 @@ export function createBodyFitEditor(deps) {
     if (!next) return;
     session.preview = next;
     const now = currentOffsets();
-    rt.updateBodyFitPreview?.(fit.target === "point" ? { point: next, item: now.item } : { point: now.point, item: next });
+    rt.updateBodyFitPreview?.(fit.target === "point" ? { point: next, item: now.item } : fit.target === "flame" ? { point: now.point, item: now.item, flame: next }
+      : { point: now.point, item: next });
   }
 
   function cancelSession() {
     if (!session) return;
     const now = currentOffsets();
     session = null;
-    runtime()?.updateBodyFitPreview?.({ point: now.point, item: now.item });
+    runtime()?.updateBodyFitPreview?.({ point: now.point, item: now.item, flame: now.flame });
     publish();
   }
 
@@ -252,6 +281,8 @@ export function createBodyFitEditor(deps) {
       if (fit.target === "point") {
         const now = currentOffsets();
         await savePoint(now.pointKey, cleanPointEntry(done.preview, now.entry.bone || ""), label);
+      } else if (fit.target === "flame") {
+        await saveFlame(done.preview, label);
       } else {
         await saveItem(done.preview, label);
       }

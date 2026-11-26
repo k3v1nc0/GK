@@ -1,4 +1,4 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261126-l3";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261126-l3b";
 import { edgeBetweenPoints, editClosedEdges } from "./walkable-edge-tools.js?v=20261031-randen1";
 import { createTerrainEditor } from "./terrain-editor.js?v=20261124-zoek1";
 import { createEditorSearch, TERRAIN_TOOL_FOR_KIND } from "./editor-search.js?v=20261124-zoek1";
@@ -12,13 +12,13 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261106-perf1";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261106-perf1";
-import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261126-l1c";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261126-l3b";
 import { createAssetPicker } from "./mini-asset-picker.js?v=20261106-thumbs150";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
 import { createDocDrop, docKeyFromRuntimeId, docSideFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261122-doorgang1";
 import { createRoadEditor } from "./road-editor.js?v=20261123-muur14";
 import { createRouteEditor } from "./route-editor.js?v=20261116-herstel1";
-import { createBodyFitEditor } from "./body-fit-editor.js?v=20261126-l3";
+import { createBodyFitEditor } from "./body-fit-editor.js?v=20261126-l3b";
 import { createLampFitEditor } from "./lamp-fit-editor.js?v=20261126-l1c";
 import { AREA_EDITOR_PREFIX, AREA_SOORTEN, AREA_SOORT_ORDER, areaBodyFromNodePatch, areaCirclePointsMm, areaNodeValues, areaSoort } from "../shared/area-soorten.js?v=20261123-muur14";
 import { WALL_EDGE_KEYS, wallLinkWithKind, wallNetLinks } from "../shared/walls.js?v=20261123-muur14";

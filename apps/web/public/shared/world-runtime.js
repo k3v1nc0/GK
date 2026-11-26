@@ -10011,6 +10011,7 @@ function resolveChunkDebugCenter(policy) {
     state.attach = attachToBone(THREE, state.character, bone || state.character, state.model, state.spec.point, state.spec.item);
     // L3: geeft het item licht, dan brandt de vlam ook bij 🧍 Passen (zo zet je Hoogte vlam goed).
     if (state.spec.light) state.lamp = addHandLamp(state.attach, state.spec.light, true);
+    syncBodyFitFlameAxes();
     const axes = new THREE.AxesHelper(0.3);
     axes.material.depthTest = false;
     axes.material.depthWrite = false;
@@ -10102,11 +10103,84 @@ function resolveChunkDebugCenter(policy) {
     const rehang = (patch.boneName !== undefined && patch.boneName !== state.spec.boneName)
       || (patch.pointKey !== undefined && patch.pointKey !== state.spec.pointKey);
     Object.assign(state.spec, patch);
+    // Kevin 26-11: 🔥 de vlam apart verschuiven (Vlam X, Hoogte vlam, Vlam Z langs het item).
+    if (patch.flame && state.spec.light) {
+      state.spec.light = Object.assign({}, state.spec.light, { x: num(patch.flame.x, 0), height: num(patch.flame.y, 0.4), z: num(patch.flame.z, 0) });
+      if (state.lamp) state.lamp.offset = { x: state.spec.light.x, y: state.spec.light.height, z: state.spec.light.z };
+    }
     if (!state.character) return bodyFitInfo();
     if (rehang) rebuildBodyFitAttach();
     else setAttachOffsets(state.attach, state.spec.point, state.spec.item);
+    syncBodyFitFlameAxes();
     requestRender("body-fit");
     return bodyFitInfo();
+  }
+
+  // De vlam met G: start = { x, y (hoogte), z } in meters langs het item (het frame van de hand-lamp). Alleen schuiven.
+  function bodyFitFlameDrag(state, input) {
+    const lamp = state.lamp;
+    if (!lamp || input.mode !== "move") return null;
+    followHandLamp(lamp);
+    const frame = lamp.root;
+    frame.updateMatrixWorld(true);
+    camera.updateMatrixWorld();
+    const start = { x: num(input.start?.x, 0), y: num(input.start?.y, 0.4), z: num(input.start?.z, 0) };
+    const origin = frame.localToWorld(new THREE.Vector3(start.x, start.y, start.z));
+    const dx = num(input.dx, 0);
+    const dy = num(input.dy, 0);
+    const rect = canvas.getBoundingClientRect();
+    const metersPerPixel = (2 * Math.tan((camera.fov * DEG_TO_RAD) / 2) * camera.position.distanceTo(origin)) / Math.max(1, rect.height);
+    let delta;
+    if (input.axis) {
+      const dir = new THREE.Vector3(input.axis === "x" ? 1 : 0, input.axis === "y" ? 1 : 0, input.axis === "z" ? 1 : 0).applyQuaternion(frame.quaternion);
+      const a = worldToScreen(origin);
+      const b = worldToScreen(origin.clone().add(dir.clone().multiplyScalar(0.1)));
+      let meters = -dy * metersPerPixel;
+      if (a && b) {
+        const sx = b.x - a.x;
+        const sy = b.y - a.y;
+        const len2 = sx * sx + sy * sy;
+        if (len2 > 4) meters = ((dx * sx + dy * sy) / len2) * 0.1;
+      }
+      delta = dir.multiplyScalar(meters);
+    } else {
+      const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+      const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+      delta = right.multiplyScalar(dx * metersPerPixel).add(up.multiplyScalar(-dy * metersPerPixel));
+    }
+    const local = frame.worldToLocal(origin.add(delta));
+    const mm = (value) => Math.round(value * 1000) / 1000;
+    return { x: mm(local.x), y: mm(local.y), z: mm(local.z) };
+  }
+
+  // Pijlen bij de vlam (alleen als je de vlam verschuift): rood/groen/blauw langs het item, zoals Vlam X / Hoogte / Vlam Z.
+  function syncBodyFitFlameAxes() {
+    const state = bodyFit;
+    if (!state) return;
+    const lamp = state.lamp;
+    if (state.flameAxes && (!lamp || !state.spec.flameAxes || state.flameAxes.parent !== lamp.root)) {
+      state.flameAxes.parent?.remove(state.flameAxes);
+      state.flameAxes.geometry?.dispose?.();
+      state.flameAxes.material?.dispose?.();
+      state.flameAxes = null;
+    }
+    if (!lamp || !state.spec.flameAxes) return;
+    if (!state.flameAxes) {
+      const axes = new THREE.AxesHelper(0.25);
+      axes.material.depthTest = false;
+      axes.material.depthWrite = false;
+      axes.material.transparent = true;
+      axes.material.toneMapped = false;
+      axes.renderOrder = 7003;
+      axes.frustumCulled = false;
+      axes.raycast = function () {};
+      axes.userData.debugOverlay = true;
+      axes.userData.bodyFitPreview = true;
+      lamp.root.add(axes);
+      state.flameAxes = axes;
+    }
+    const off = lamp.offset || { x: 0, y: 0, z: 0 };
+    state.flameAxes.position.set(off.x, off.y, off.z);
   }
 
   // De muis sinds het begin van G/R/T (dx, dy in pixels) als nieuwe verschuiving. input: { target: "item" | "point",
@@ -10114,6 +10188,7 @@ function resolveChunkDebugCenter(policy) {
   function bodyFitDrag(input) {
     const state = bodyFit;
     if (!state?.attach || !camera || !input) return null;
+    if (input.target === "flame") return bodyFitFlameDrag(state, input);
     const isPoint = input.target === "point";
     const start = Object.assign({ x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, s: 1 }, input.start || {});
     const object = isPoint ? state.attach.point : state.attach.holder;

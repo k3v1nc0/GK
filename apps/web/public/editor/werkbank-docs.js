@@ -714,7 +714,9 @@ export function createDocBench(options = {}) {
         return button;
       };
       const pointName = attachPointDef(attachPointForItem(doc.body) || "right_hand")?.name || "";
-      wrap.append(el("div", { class: "wbdInline", title: "Wat G/R/T verschuift" }, [target("item", "🗡️ Item"), target("point", "✋ Punt " + pointName.toLowerCase() + " (alle items)")]));
+      // Kevin 26-11: geeft het item licht, dan kun je ook 🔥 de vlam apart verschuiven (G).
+      wrap.append(el("div", { class: "wbdInline", title: "Wat G/R/T verschuift" }, [target("item", "🗡️ Item"), target("point", "✋ Punt " + pointName.toLowerCase() + " (alle items)")]
+        .concat(doc.body?.light === true ? [target("flame", "🔥 Vlam")] : [])));
       if (fit.failed) wrap.append(el("div", { class: "wbdNote", text: "⚠️ Dit uiterlijk kon niet laden." }));
       else if (!fit.ready) wrap.append(el("div", { class: "wbdNote", text: "Laden…" }));
       else {
