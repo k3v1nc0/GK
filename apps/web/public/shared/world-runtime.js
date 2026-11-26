@@ -16864,9 +16864,10 @@ function resolveChunkDebugCenter(policy) {
     return lampNight;
   }
 
+  // Kevin 26-11: in de game even fel als in de editor, ook overdag. Alleen 's nachts = overdag uit.
   function updateLamp(record, time, night) {
     const cfg = record.cfg;
-    const level = cfg.nightOnly ? night : 0.15 + 0.85 * night;
+    const level = cfg.nightOnly ? night : 1;
     const on = cfg.strength * level;
     record.group.visible = on > 0.01;
     if (!record.group.visible) return;
