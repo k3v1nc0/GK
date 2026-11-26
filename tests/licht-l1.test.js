@@ -64,3 +64,20 @@ test("editor: Ctrl+C / Ctrl+V / Ctrl+D voor losse modellen (straatlantaarns dupl
   assert.match(src, /void pastePlacedModels\(placedModelClipboard, terrainLastPointerGroundPoint\(\)\)/);
   assert.match(src, /const copy = Object\.assign\(\{\}, body, \{ placedModelId: base \+ "_" \+ n, x: round2\(x\), z: round2\(z\) \}\);/, "alles mee, nieuw id en plek");
 });
+
+test("game: ook gebundelde modellen (10x dezelfde straatlantaarn) geven licht", () => {
+  const src = fs.readFileSync("apps/web/public/shared/world-runtime.js", "utf8");
+  assert.match(src, /if \(entity\.light\) addLampOnlyRoot\(worldData, entity, chunkKeyValue\);/);
+  assert.match(src, /return record\.lampOnly \? Boolean\(record\.root\.parent\) : entityRoots\.get\(record\.id\) === record\.root;/);
+});
+
+test("game: Instellingen > Lampen tegelijk (0 = alle), de dichtstbijzijnde branden", () => {
+  const src = fs.readFileSync("apps/web/public/shared/world-runtime.js", "utf8");
+  assert.match(src, /setLampLimit: setLampLimit,/);
+  assert.match(src, /if \(time - lampPickAt > 250 \|\| lampPickAt > time\) pickNearLamps\(time, night\);/, "4x per seconde opnieuw kiezen");
+  assert.match(src, /const on = cfg\.strength \* level \* record\.fade;/, "rustig aan en uit");
+  const hud = fs.readFileSync("apps/web/public/game/hud/gk-hud.js", "utf8");
+  assert.match(hud, /"data-lamp-limit": ""/);
+  assert.match(hud, /if \(typeof api\.setLampLimit === "function"\) api\.setLampLimit\(lampLimitValue\(\)\);/);
+  assert.match(fs.readFileSync("apps/web/public/game/game.js", "utf8"), /state\.runtime\.setLampLimit\(gkHudLamps\)/);
+});

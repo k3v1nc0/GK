@@ -4841,6 +4841,11 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let lampNight = 0;
   let lampFit = null; // editor: ✋ Vlam verplaatsen { record, helper }
   let lampFitId = null; // welk model; na het opnieuw opbouwen van de wereld komen de pijlen vanzelf terug (addLamp)
+  // Kevin 26-11: Instellingen > Spelbeeld > Lampen tegelijk (game, per speler). 0 = alle; anders alleen de dichtstbijzijnde,
+  // die rustig aan- en uitgaan als je loopt. Lichter voor een oude laptop.
+  let lampLimit = 0;
+  let lampPickAt = 0;
+  let lampLastTime = 0;
   // Kevin 23-11 (8): de muurstukken voor "naam achter een muur?" (hiddenBehindWall) en het zichtveld, gevuld door addWalls.
   let wallSightPieces = [];
   let wallSightVersion = 0;
@@ -16078,7 +16083,12 @@ function resolveChunkDebugCenter(policy) {
         hasVisual: false
       });
     }
-    if (options.skipVisual === true) return;
+    if (options.skipVisual === true) {
+      // Kevin 26-11: in de game wordt hetzelfde model (bijv. 10 straatlantaarns) samen getekend (gebundeld); dan is er
+      // geen eigen root per model. De lamp krijgt er dan een eigen (alleen gloed + lichtplek), anders valt het licht weg.
+      if (entity.light) addLampOnlyRoot(worldData, entity, chunkKeyValue);
+      return;
+    }
     const root = new THREE.Group();
     root.userData.entityId = entity.id;
     root.userData.chunkRuntimeType = "entity";
@@ -16853,9 +16863,11 @@ function resolveChunkDebugCenter(policy) {
     root.add(group);
     runtimeStats.sceneObjects += 1;
     runtimeStats.meshes += 2;
-    const record = { id: root.userData.entityId, root, group, glow, spot, cfg, worldData, seed: (lampRecords.length * 7.13) % 6.28 };
+    const record = { id: root.userData.entityId || root.name, root, group, glow, spot, cfg, worldData, seed: (lampRecords.length * 7.13) % 6.28,
+      fade: lampLimit > 0 ? 0 : 1, near: lampLimit <= 0 };
     placeLamp(record, { x: cfg.x, y: cfg.height, z: cfg.z });
     lampRecords.push(record);
+    lampPickAt = 0;
     if (lampFitId && record.id === lampFitId) attachLampFitHelper(record);
     updateLamp(record, performance.now(), lampLevel());
     requestRender("lamp");
@@ -16977,6 +16989,33 @@ function resolveChunkDebugCenter(policy) {
     return { x: mm(start.x + local.x), y: mm(clamp(start.y + local.y, -5, 30)), z: mm(start.z + local.z) };
   }
 
+  function addLampOnlyRoot(worldData, entity, chunkKeyValue) {
+    const root = new THREE.Group();
+    root.name = String(entity.id || entity.nodeId || "entity") + "::lamp";
+    root.userData.runtimeAlive = true;
+    root.userData.gkLamp = true;
+    root.userData.lampOnly = true;
+    transformObject(root, entity.transform);
+    content.add(root);
+    runtimeStats.sceneObjects += 1;
+    registerChunkRuntimeEntry({
+      id: root.name,
+      type: "lamp",
+      object: root,
+      chunkKey: chunkKeyValue || null,
+      chunkKeys: chunkKeyValue ? [chunkKeyValue] : [],
+      hasVisual: true
+    });
+    const record = addLamp(worldData, root, entity.light);
+    if (record) record.lampOnly = true;
+    return record;
+  }
+
+  // Bestaat de lamp nog? Een gewone hangt aan het model (entityRoots), een losse (gebundeld model) aan de wereld.
+  function lampAlive(record) {
+    return record.lampOnly ? Boolean(record.root.parent) : entityRoots.get(record.id) === record.root;
+  }
+
   // 0-1: hoe donker het voor lampen is. Binnen en in de editor altijd donker (zo zie je wat je instelt).
   function lampLevel() {
     if (mode !== "game" || indoorCfg) return 1;
@@ -16987,7 +17026,7 @@ function resolveChunkDebugCenter(policy) {
   function updateLamp(record, time, night) {
     const cfg = record.cfg;
     const level = cfg.nightOnly ? night : 1;
-    const on = cfg.strength * level;
+    const on = cfg.strength * level * record.fade;
     record.group.visible = on > 0.01;
     if (!record.group.visible) return;
     let flick = 1;
@@ -17003,12 +17042,49 @@ function resolveChunkDebugCenter(policy) {
 
   function updateLamps(time) {
     const night = lampLevel();
+    const dt = Math.max(0, Math.min(0.1, (time - lampLastTime) / 1000));
+    lampLastTime = time;
     for (let index = lampRecords.length - 1; index >= 0; index -= 1) {
-      const record = lampRecords[index];
       // Het model is weg (opnieuw opgebouwd of uit de wereld gehaald): de lamp ook.
-      if (entityRoots.get(record.id) !== record.root) { lampRecords.splice(index, 1); continue; }
+      if (!lampAlive(lampRecords[index])) lampRecords.splice(index, 1);
+    }
+    if (time - lampPickAt > 250 || lampPickAt > time) pickNearLamps(time, night);
+    for (const record of lampRecords) {
+      // Aan/uit in een halve seconde, zodat een lamp niet ineens verschijnt of verdwijnt.
+      const want = record.near ? 1 : 0;
+      if (record.fade !== want) record.fade = want > record.fade ? Math.min(1, record.fade + dt * 2) : Math.max(0, record.fade - dt * 2);
       updateLamp(record, time, night);
     }
+  }
+
+  // Lampen tegelijk: welke mogen branden. De dichtstbijzijnde bij de speler (of de camera), 4x per seconde opnieuw.
+  // Een lamp die al brandt telt iets dichterbij, zodat hij op de grens niet steeds aan en uit gaat. Lampen die nu toch
+  // uit zijn (Alleen 's nachts, overdag) tellen niet mee.
+  function setLampLimit(value) {
+    const next = Math.max(0, Math.min(64, Math.round(num(value, 0))));
+    if (next === lampLimit) return;
+    lampLimit = next;
+    lampPickAt = 0;
+    requestRender("lamp");
+  }
+
+  function pickNearLamps(time, night) {
+    lampPickAt = time;
+    if (lampLimit <= 0 || lampRecords.length <= lampLimit) {
+      for (const record of lampRecords) record.near = true;
+      return;
+    }
+    const focus = mode === "game" && player.root ? player.pos : camera.position;
+    const lit = [];
+    for (const record of lampRecords) {
+      record.near = false;
+      if (record.cfg.nightOnly && night <= 0.01) continue;
+      const dx = record.root.position.x + record.glow.position.x - focus.x;
+      const dz = record.root.position.z + record.glow.position.z - focus.z;
+      lit.push({ record, d: (dx * dx + dz * dz) * (record.fade > 0.5 ? 0.8 : 1) });
+    }
+    lit.sort(function (a, b) { return a.d - b.d; });
+    for (let index = 0; index < lit.length && index < lampLimit; index += 1) lit[index].record.near = true;
   }
 
   // Kevin 23-11: de vloer van een 🏠 Binnen-deelgebied: één plat vlak in de vorm van het gebied, met een terreintextuur
@@ -22225,6 +22301,7 @@ function resolveChunkDebugCenter(policy) {
     worldToScreen: worldToScreen,
     setViewInset: setViewInset,
     setPlayerPixelRatio: setPlayerPixelRatio,
+    setLampLimit: setLampLimit,
     getPlayerState: getPlayerState,
     getCameraGroundBasis: getCameraGroundBasis,
     orbitGameCamera: orbitGameCamera,

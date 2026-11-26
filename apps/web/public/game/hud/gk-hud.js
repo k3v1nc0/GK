@@ -95,6 +95,8 @@ const DEFAULTS = { panel: null, tab: "bag", filter: "all", scroll: {}, item: nul
   dockSplit: 0.5,
   // Scherpte van de game: pixels per schermpunt (1 = standaard; hoger = scherper maar zwaarder).
   pixels: 1,
+  // Kevin 26-11: hoeveel lampen (💡 Licht op modellen) tegelijk branden; de dichtstbijzijnde. 0 = alle.
+  lamps: 0,
   // Camera-keuze (19-11): "" = zoals de game is ingesteld, of "top-down" / "third-person" (alleen als de maker dat toestaat).
   camera: "",
   // Healing (2-11): kleine zwevende getallen boven spelers en vijanden (aan/uit in Instellingen).
@@ -1967,6 +1969,17 @@ export function createGkHud(api) {
       h("input", { type: "range", min: 65, max: 130, step: 5, value: Math.round(interfaceScale() * 100),
         "data-interface-scale": "", "aria-label": "Grootte interface" }),
       h("output", { text: Math.round(interfaceScale() * 100) + "%" })
+    ]);
+  }
+  // Kevin 26-11: Lampen tegelijk (0-32, 0 = alle).
+  function lampLimitValue() {
+    return Math.max(0, Math.min(32, Math.round(num(store.lamps, 0))));
+  }
+  function lampLimitControl() {
+    const value = lampLimitValue();
+    return h("label", { class: "gkScaleControl", title: "Lampen tegelijk" }, [
+      h("input", { type: "range", min: 0, max: 32, step: 1, value, "data-lamp-limit": "", "aria-label": "Lampen tegelijk" }),
+      h("output", { text: value ? String(value) : "Alle" })
     ]);
   }
   function applyInterfaceScale() {
@@ -4022,6 +4035,8 @@ export function createGkHud(api) {
         h("div", { class: "gkSeg" }, PIXEL_STEPS.map(function (step) {
           return h("button", { type: "button", class: Number(store.pixels) === step ? "gkOn" : null, "data-act": "pixels", "data-id": String(step) }, [String(step)]);
         }))]),
+      h("div", { class: "gkRow" }, [ico("sparkles"), h("span", null, ["Lampen tegelijk", h("small", { text: "Alleen de dichtstbijzijnde lampen branden; ze gaan aan en uit als je loopt. Lager is lichter voor de computer. 0 = alle." })]),
+        lampLimitControl()]),
       h("div", { class: "gkRow" }, [ico("knapsack"), h("span", { text: "Grootte interface" }), interfaceScaleControl()]),
       h("div", { class: "gkRow" }, [ico("palette"), h("span", null, ["Kleur van de iconen", h("small", { text: "Kleur = elk icoon zijn eigen kleur." })]),
         h("div", { class: "gkSeg" }, ICON_COLORS.map(function (pair) {
@@ -4383,7 +4398,7 @@ export function createGkHud(api) {
   }
 
   function syncSettings() {
-    const signature = JSON.stringify([store.pixels, store.camera, data().cameraChoice, store.music, store.debug && data().isAdmin, has("hotbar_hud"), has("interaction_hud"), store.icoSize, store.panelScale, store.icoAnim, store.icoColor,
+    const signature = JSON.stringify([store.pixels, store.lamps, store.camera, data().cameraChoice, store.music, store.debug && data().isAdmin, has("hotbar_hud"), has("interaction_hud"), store.icoSize, store.panelScale, store.icoAnim, store.icoColor,
       store.healthPing, store.healthTps, store.healthMspt, store.healthCpu, store.healthGpu, store.healthPacketLoss, data().healthDefaults]);
     if (ui.sig.settings === signature) return;
     ui.sig.settings = signature;
@@ -4394,6 +4409,7 @@ export function createGkHud(api) {
     root.dataset.hotbar = has("hotbar_hud") ? "on" : "off";
     root.dataset.dobtn = has("interaction_hud") ? "on" : "off";
     if (typeof api.setPixels === "function") api.setPixels(PIXEL_STEPS.includes(Number(store.pixels)) ? Number(store.pixels) : 1);
+    if (typeof api.setLampLimit === "function") api.setLampLimit(lampLimitValue());
     if (typeof api.setCameraMode === "function") api.setCameraMode(data().cameraChoice ? (store.camera || null) : null);
     api.setMusic(store.music);
     api.setDebug(Boolean(store.debug && data().isAdmin), debugSlot);
@@ -6365,6 +6381,13 @@ export function createGkHud(api) {
 
   root.addEventListener("click", onClick);
   root.addEventListener("input", function (event) {
+    if (event.target.matches("[data-lamp-limit]")) {
+      store.lamps = Math.max(0, Math.min(32, Math.round(Number(event.target.value) || 0)));
+      event.target.nextElementSibling.textContent = store.lamps ? String(store.lamps) : "Alle";
+      if (typeof api.setLampLimit === "function") api.setLampLimit(store.lamps);
+      save();
+      return;
+    }
     if (event.target.matches("[data-interface-scale]")) {
       store.panelScale = Number(event.target.value) / 100;
       applyInterfaceScale();
