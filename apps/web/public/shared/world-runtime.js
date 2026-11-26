@@ -16858,16 +16858,20 @@ function resolveChunkDebugCenter(policy) {
   // met de assen van de wereld en zonder schaal: hoogte, gloed en reikwijdte zijn meters, hoe groot of scheef het model
   // ook staat. Beide tellen niet mee in de maat van het model (selectiekader, brug-hoogte): lege boundingBox.
   const LAMP_GLOW_VERTEX = [
-    "uniform float size;",
+    "uniform float size; uniform float pull;",
     "varying vec2 vUv;",
     "void main() {",
     "  vUv = uv;",
     "  vec4 mv = modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0);",
-    // 25 cm naar de camera toe, zodat het glas van de lantaarn de gloed niet half afdekt (minder dan een muurdikte).
+    "  vec4 quad = mv;",
+    "  quad.xy += position.xy * size;",
+    "  gl_Position = projectionMatrix * quad;",
+    // Kevin 26-11: de gloed is een plat vlak naar de camera. Lag de grond (of het hoofd van wie de fakkel draagt) dichter bij
+    // de camera dan dat vlak, dan sneed het de gloed af met een rechte lijn. Daarom telt de gloed voor de diepte als
+    // pull meter dichter bij de camera (alleen de diepte; plek en grootte blijven gelijk).
     "  float len = max(length(mv.xyz), 0.001);",
-    "  mv.xyz *= max(1.0 - 0.25 / len, 0.5);",
-    "  mv.xy += position.xy * size;",
-    "  gl_Position = projectionMatrix * mv;",
+    "  vec4 near = projectionMatrix * vec4(mv.xyz * max(1.0 - pull / len, 0.05), 1.0);",
+    "  gl_Position.z = near.z / near.w * gl_Position.w;",
     "}"
   ].join("\n");
   const LAMP_GLOW_FRAGMENT = [
@@ -16956,7 +16960,7 @@ function resolveChunkDebugCenter(policy) {
       return geometry;
     };
     const glowMaterial = new THREE.ShaderMaterial({
-      uniforms: { color: { value: color.clone() }, opacity: { value: 0 }, size: { value: cfg.glow * 2 } },
+      uniforms: { color: { value: color.clone() }, opacity: { value: 0 }, size: { value: cfg.glow * 2 }, pull: { value: clamp(0.25 + cfg.glow, 0.25, 1.5) } },
       vertexShader: LAMP_GLOW_VERTEX, fragmentShader: LAMP_GLOW_FRAGMENT,
       transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false
     });
@@ -17308,6 +17312,8 @@ function resolveChunkDebugCenter(policy) {
     record.lampOnly = true;
     record.follow = anchor;
     record.own = own === true;
+    // De gloed van een fakkel ligt ook over wie hem draagt (hoofd en schouders), niet erachter.
+    record.glow.material.uniforms.pull.value = Math.min(2, 0.9 + record.cfg.glow);
     lampPickAt = 0;
     return record;
   }

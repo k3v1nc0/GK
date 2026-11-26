@@ -102,3 +102,10 @@ test("Kevin 26-11: lichtplek over heuvels, bergen en kuilen; echte lamp loopt za
   assert.match(src, /for \(const record of lampRecords\) placeLamp\(record, record\.offset\);/, "opnieuw als het terrein laadt");
   assert.match(src, /new THREE\.PointLight\(0xffb04a, 0, 10, 1\)/);
 });
+
+test("Kevin 26-11: gloed niet afgesneden door de grond of het hoofd (alleen de diepte dichter bij de camera)", () => {
+  const src = fs.readFileSync("apps/web/public/shared/world-runtime.js", "utf8");
+  assert.match(src, /"  vec4 near = projectionMatrix \* vec4\(mv\.xyz \* max\(1\.0 - pull \/ len, 0\.05\), 1\.0\);",/);
+  assert.match(src, /pull: \{ value: clamp\(0\.25 \+ cfg\.glow, 0\.25, 1\.5\) \}/);
+  assert.match(src, /record\.glow\.material\.uniforms\.pull\.value = Math\.min\(2, 0\.9 \+ record\.cfg\.glow\);/, "fakkel: ook over wie hem draagt");
+});
