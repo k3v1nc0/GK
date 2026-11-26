@@ -10010,7 +10010,7 @@ function resolveChunkDebugCenter(policy) {
     // Geen bot (een model zonder skelet): dan hangt het item aan het model zelf.
     state.attach = attachToBone(THREE, state.character, bone || state.character, state.model, state.spec.point, state.spec.item);
     // L3: geeft het item licht, dan brandt de vlam ook bij 🧍 Passen (zo zet je Hoogte vlam goed).
-    if (state.spec.light) state.lamp = addHandLamp(state.attach, state.spec.light, true);
+    if (state.spec.light) state.lamp = addHandLamp(state.attach, state.spec.light, true, state.character);
     syncBodyFitFlameAxes();
     const axes = new THREE.AxesHelper(0.3);
     axes.material.depthTest = false;
@@ -10290,7 +10290,7 @@ function resolveChunkDebugCenter(policy) {
         const bone = findAttachBone(clone, entry.pointKey, entry.boneName || "") || clone;
         const attach = attachToBone(THREE, clone, bone, model, entry.point, entry.item);
         // L3: een fakkel brandt in de hand (eigen speler: castShadow = true).
-        if (entry.light) attach.lamp = addHandLamp(attach, entry.light, castShadow === true);
+        if (entry.light) attach.lamp = addHandLamp(attach, entry.light, castShadow === true, clone);
         applied.attaches.push(attach);
         requestRender("player-gear");
       };
@@ -16858,32 +16858,19 @@ function resolveChunkDebugCenter(policy) {
   // met de assen van de wereld en zonder schaal: hoogte, gloed en reikwijdte zijn meters, hoe groot of scheef het model
   // ook staat. Beide tellen niet mee in de maat van het model (selectiekader, brug-hoogte): lege boundingBox.
   const LAMP_GLOW_VERTEX = [
-    "uniform float size; uniform float pull; uniform float floorY;",
+    "uniform float size; uniform float pull;",
     "varying vec2 vUv;",
     "void main() {",
     "  vUv = uv;",
     "  vec4 mv = modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0);",
-    "  vec2 off = position.xy * size;",
     "  vec4 quad = mv;",
-    "  quad.xy += off;",
+    "  quad.xy += position.xy * size;",
     "  gl_Position = projectionMatrix * quad;",
-    // Diepte: de vlam pull meter (25 cm) naar de camera, zodat het glas van de lantaarn de gloed niet half afdekt. Een
-    // character of muur ervoor dekt de gloed dus gewoon af (fakkel achter je rug = gloed achter je).
+    // Kevin 26-11: de gloed is een plat vlak naar de camera. Lag de grond (of het hoofd van wie de fakkel draagt) dichter bij
+    // de camera dan dat vlak, dan sneed het de gloed af met een rechte lijn. Daarom telt de gloed voor de diepte als
+    // pull meter dichter bij de camera (alleen de diepte; plek en grootte blijven gelijk).
     "  float len = max(length(mv.xyz), 0.001);",
-    "  float z = mv.z * max(1.0 - pull / len, 0.05);",
-    // Kevin 26-11: de gloed is een plat vlak naar de camera; waar de grond dichter bij de camera lag dan dat vlak, sneed
-    // die de gloed af met een rechte lijn. Raakt de lijn van de camera naar deze hoek eerst de grond (floorY), dan telt
-    // deze hoek net vóór de grond. Alleen de diepte; plek en grootte blijven gelijk.
-    "  vec3 corner = (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz + transpose(mat3(viewMatrix)) * vec3(off, 0.0);",
-    "  float dy = corner.y - cameraPosition.y;",
-    "  if (dy < -0.0001) {",
-    "    float t = (floorY - cameraPosition.y) / dy;",
-    "    if (t > 0.0 && t < 1.0) {",
-    "      vec3 hit = cameraPosition + (corner - cameraPosition) * (t * 0.98);",
-    "      z = max(z, (viewMatrix * vec4(hit, 1.0)).z);",
-    "    }",
-    "  }",
-    "  vec4 near = projectionMatrix * vec4(mv.xy, z, 1.0);",
+    "  vec4 near = projectionMatrix * vec4(mv.xyz * max(1.0 - pull / len, 0.05), 1.0);",
     "  gl_Position.z = near.z / near.w * gl_Position.w;",
     "}"
   ].join("\n");
@@ -16943,13 +16930,6 @@ function resolveChunkDebugCenter(policy) {
     pos.needsUpdate = true;
     geometry.computeBoundingSphere();
     geometry.boundingBox = new THREE.Box3();
-    // De hoogste grond binnen de gloed: daar mag de gloed niet achter wegvallen (LAMP_GLOW_VERTEX, floorY).
-    const fx = root.x + p.x;
-    const fz = root.z + p.z;
-    const reach = record.cfg.glow;
-    let floor = -Infinity;
-    for (const [ox, oz] of [[0, 0], [reach, 0], [-reach, 0], [0, reach], [0, -reach]]) floor = Math.max(floor, lampFloorY(record.worldData, fx + ox, fz + oz, rootY + p.y));
-    record.glow.material.uniforms.floorY.value = floor;
   }
 
   function addLamp(worldData, root, light) {
@@ -16980,7 +16960,7 @@ function resolveChunkDebugCenter(policy) {
       return geometry;
     };
     const glowMaterial = new THREE.ShaderMaterial({
-      uniforms: { color: { value: color.clone() }, opacity: { value: 0 }, size: { value: cfg.glow * 2 }, pull: { value: 0.25 }, floorY: { value: -1e6 } },
+      uniforms: { color: { value: color.clone() }, opacity: { value: 0 }, size: { value: cfg.glow * 2 }, pull: { value: clamp(0.25 + cfg.glow, 0.25, 1.5) } },
       vertexShader: LAMP_GLOW_VERTEX, fragmentShader: LAMP_GLOW_FRAGMENT,
       transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false
     });
@@ -17316,7 +17296,7 @@ function resolveChunkDebugCenter(policy) {
 
   // L3 (26-11): een fakkel in de hand. Een eigen lamp in de wereld (aan de scène, wereld-uitgelijnd) die elk beeld naar
   // het item in de hand springt; de vlam staat op Vlam X / Hoogte vlam / Vlam Z langs het item (draait mee).
-  function addHandLamp(attach, light, own) {
+  function addHandLamp(attach, light, own, carrier = null) {
     const anchor = attach?.holder;
     if (!anchor || !light || !scene) return null;
     const root = new THREE.Group();
@@ -17332,6 +17312,12 @@ function resolveChunkDebugCenter(policy) {
     record.lampOnly = true;
     record.follow = anchor;
     record.own = own === true;
+    // De gloed van een fakkel ligt over wie hem draagt (geen rechte lijn in de grond, L3c); zit de fakkel achter het lijf
+    // (vanaf de camera), dan wordt de gloed zwak (handLampBehindBody).
+    record.glow.material.uniforms.pull.value = Math.min(2, 0.9 + record.cfg.glow);
+    record.carrier = carrier;
+    record.occl = 1;
+    record.body = null;
     lampPickAt = 0;
     return record;
   }
@@ -17341,11 +17327,44 @@ function resolveChunkDebugCenter(policy) {
     requestRender("lamp");
   }
 
+  let handLampTime = 0;
   function followHandLamps() {
-    for (const record of lampRecords) if (record.follow) followHandLamp(record);
+    const now = performance.now();
+    const dt = Math.max(0, Math.min(0.1, (now - handLampTime) / 1000));
+    handLampTime = now;
+    for (const record of lampRecords) if (record.follow) followHandLamp(record, dt);
   }
 
-  function followHandLamp(record) {
+  // Kevin 26-11: zit de vlam (vanaf de camera gezien) achter het lijf van wie hem draagt? Het lijf als een staande buis
+  // (voeten tot kruin, ±26 cm dik, hoofd smaller). Alleen de laatste 2,5 m van de lijn camera → vlam: 10 punten. Goedkoop.
+  const handLampFeet = new THREE.Vector3();
+  function handLampBehindBody(record, fx, fy, fz) {
+    const carrier = record.carrier;
+    if (!carrier || !carrier.parent || !camera) return false;
+    if (!record.body) {
+      const box = new THREE.Box3().setFromObject(carrier);
+      const height = box.isEmpty() ? 1.8 : box.max.y - box.min.y;
+      record.body = { height: Math.max(1, Math.min(2.4, height)) };
+    }
+    carrier.getWorldPosition(handLampFeet);
+    const cam = camera.position;
+    const dx = fx - cam.x, dy = fy - cam.y, dz = fz - cam.z;
+    const len = Math.hypot(dx, dy, dz);
+    if (len < 0.5) return false;
+    const top = handLampFeet.y + record.body.height;
+    for (let step = 0; step < 10; step += 1) {
+      const back = 0.12 + step * 0.25;
+      if (back >= len) break;
+      const t = 1 - back / len;
+      const py = cam.y + dy * t;
+      if (py < handLampFeet.y + 0.1 || py > top) continue;
+      const radius = py > top - 0.3 ? 0.15 : 0.26;
+      if (Math.hypot(cam.x + dx * t - handLampFeet.x, cam.z + dz * t - handLampFeet.z) < radius) return true;
+    }
+    return false;
+  }
+
+  function followHandLamp(record, dt = 0) {
     const anchor = record.follow;
     let node = anchor;
     let shown = true;
@@ -17376,6 +17395,11 @@ function resolveChunkDebugCenter(policy) {
       record.spot.position.set(d.x - root.position.x, d.y - root.position.y, d.z - root.position.z);
     }
     if (record.realSlot?.record === record) record.realSlot.light.position.copy(root.position).add(handLampOffset);
+    // Achter het lijf: de gloed zacht weg (tot 12 %), ervoor of ernaast: vol. Het echte licht blijft gewoon.
+    const behind = handLampBehindBody(record, root.position.x + handLampOffset.x, root.position.y + handLampOffset.y, root.position.z + handLampOffset.z);
+    const want = behind ? 0.12 : 1;
+    record.occl = dt > 0 ? (want > record.occl ? Math.min(want, record.occl + dt * 8) : Math.max(want, record.occl - dt * 8)) : want;
+    record.glow.material.uniforms.opacity.value *= record.occl;
   }
 
   // Kevin 23-11: de vloer van een 🏠 Binnen-deelgebied: één plat vlak in de vorm van het gebied, met een terreintextuur

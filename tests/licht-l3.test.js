@@ -32,11 +32,11 @@ test("game: gear-regel draagt het licht mee", () => {
   const [row] = gearFromItems(["item.fakkel"], items);
   assert.equal(row.light.height, 0.6);
   const runtime = fs.readFileSync("apps/web/public/shared/world-runtime.js", "utf8");
-  assert.match(runtime, /if \(entry\.light\) attach\.lamp = addHandLamp\(attach, entry\.light, castShadow === true\);/);
+  assert.match(runtime, /if \(entry\.light\) attach\.lamp = addHandLamp\(attach, entry\.light, castShadow === true, clone\);/);
   assert.match(runtime, /if \(attach\.lamp\) removeHandLamp\(attach\.lamp\);/, "uittrekken = lamp weg");
   assert.match(runtime, /if \(lampRecords\.length\) followHandLamps\(\);\n {4}if \(gpuFrameTimer\) gpuFrameTimer\.begin\(\);/, "vlak voor het tekenen de hand volgen");
   assert.match(runtime, /lit\.push\(\{ record, d: record\.own \? -1 : dx \* dx \+ dz \* dz \}\);/, "eigen fakkel gaat voor");
-  assert.match(runtime, /if \(state\.spec\.light\) state\.lamp = addHandLamp\(state\.attach, state\.spec\.light, true\);/, "ook bij Passen");
+  assert.match(runtime, /if \(state\.spec\.light\) state\.lamp = addHandLamp\(state\.attach, state\.spec\.light, true, state\.character\);/, "ook bij Passen");
   assert.match(fs.readFileSync("apps/web/public/editor/body-fit-editor.js", "utf8"), /light: lightSpec\(doc\.body\),/);
 });
 
