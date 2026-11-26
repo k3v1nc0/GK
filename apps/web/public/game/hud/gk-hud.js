@@ -97,6 +97,8 @@ const DEFAULTS = { panel: null, tab: "bag", filter: "all", scroll: {}, item: nul
   pixels: 1,
   // Kevin 26-11: hoeveel lampen (💡 Licht op modellen) tegelijk branden; de dichtstbijzijnde. 0 = alle.
   lamps: 0,
+  // L2 (26-11): echte lampen (licht op muren en grond) bij de dichtstbijzijnde lampen, 0-4.
+  realLamps: 3,
   // Camera-keuze (19-11): "" = zoals de game is ingesteld, of "top-down" / "third-person" (alleen als de maker dat toestaat).
   camera: "",
   // Healing (2-11): kleine zwevende getallen boven spelers en vijanden (aan/uit in Instellingen).
@@ -1980,6 +1982,16 @@ export function createGkHud(api) {
     return h("label", { class: "gkScaleControl", title: "Lampen tegelijk" }, [
       h("input", { type: "range", min: 0, max: 32, step: 1, value, "data-lamp-limit": "", "aria-label": "Lampen tegelijk" }),
       h("output", { text: value ? String(value) : "Alle" })
+    ]);
+  }
+  function realLampValue() {
+    return Math.max(0, Math.min(4, Math.round(num(store.realLamps, 3))));
+  }
+  function realLampControl() {
+    const value = realLampValue();
+    return h("label", { class: "gkScaleControl", title: "Echte lampen" }, [
+      h("input", { type: "range", min: 0, max: 4, step: 1, value, "data-real-lamps": "", "aria-label": "Echte lampen" }),
+      h("output", { text: String(value) })
     ]);
   }
   function applyInterfaceScale() {
@@ -4037,6 +4049,8 @@ export function createGkHud(api) {
         }))]),
       h("div", { class: "gkRow" }, [ico("sparkles"), h("span", null, ["Lampen tegelijk", h("small", { text: "Alleen de dichtstbijzijnde lampen branden; ze gaan aan en uit als je loopt. Lager is lichter voor de computer. 0 = alle." })]),
         lampLimitControl()]),
+      h("div", { class: "gkRow" }, [ico("sparkles"), h("span", null, ["Echte lampen", h("small", { text: "Zoveel lampen dichtbij kleuren muren, grond en characters echt. Zwaar voor een oude laptop: 0 = alleen de gloed. Bij het schuiven hapert het beeld heel even." })]),
+        realLampControl()]),
       h("div", { class: "gkRow" }, [ico("knapsack"), h("span", { text: "Grootte interface" }), interfaceScaleControl()]),
       h("div", { class: "gkRow" }, [ico("palette"), h("span", null, ["Kleur van de iconen", h("small", { text: "Kleur = elk icoon zijn eigen kleur." })]),
         h("div", { class: "gkSeg" }, ICON_COLORS.map(function (pair) {
@@ -4398,7 +4412,7 @@ export function createGkHud(api) {
   }
 
   function syncSettings() {
-    const signature = JSON.stringify([store.pixels, store.lamps, store.camera, data().cameraChoice, store.music, store.debug && data().isAdmin, has("hotbar_hud"), has("interaction_hud"), store.icoSize, store.panelScale, store.icoAnim, store.icoColor,
+    const signature = JSON.stringify([store.pixels, store.lamps, store.realLamps, store.camera, data().cameraChoice, store.music, store.debug && data().isAdmin, has("hotbar_hud"), has("interaction_hud"), store.icoSize, store.panelScale, store.icoAnim, store.icoColor,
       store.healthPing, store.healthTps, store.healthMspt, store.healthCpu, store.healthGpu, store.healthPacketLoss, data().healthDefaults]);
     if (ui.sig.settings === signature) return;
     ui.sig.settings = signature;
@@ -4410,6 +4424,7 @@ export function createGkHud(api) {
     root.dataset.dobtn = has("interaction_hud") ? "on" : "off";
     if (typeof api.setPixels === "function") api.setPixels(PIXEL_STEPS.includes(Number(store.pixels)) ? Number(store.pixels) : 1);
     if (typeof api.setLampLimit === "function") api.setLampLimit(lampLimitValue());
+    if (typeof api.setRealLamps === "function") api.setRealLamps(realLampValue());
     if (typeof api.setCameraMode === "function") api.setCameraMode(data().cameraChoice ? (store.camera || null) : null);
     api.setMusic(store.music);
     api.setDebug(Boolean(store.debug && data().isAdmin), debugSlot);
@@ -6385,6 +6400,13 @@ export function createGkHud(api) {
       store.lamps = Math.max(0, Math.min(32, Math.round(Number(event.target.value) || 0)));
       event.target.nextElementSibling.textContent = store.lamps ? String(store.lamps) : "Alle";
       if (typeof api.setLampLimit === "function") api.setLampLimit(store.lamps);
+      save();
+      return;
+    }
+    if (event.target.matches("[data-real-lamps]")) {
+      store.realLamps = Math.max(0, Math.min(4, Math.round(Number(event.target.value) || 0)));
+      event.target.nextElementSibling.textContent = String(store.realLamps);
+      if (typeof api.setRealLamps === "function") api.setRealLamps(store.realLamps);
       save();
       return;
     }

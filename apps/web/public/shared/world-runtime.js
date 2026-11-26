@@ -4846,6 +4846,13 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let lampLimit = 0;
   let lampPickAt = 0;
   let lampLastTime = 0;
+  // L2 (26-11): een vaste set echte lampen (PointLight, geen schaduw) die naar de dichtstbijzijnde brandende lampen
+  // springen. Het aantal verandert alleen met de schuif Echte lampen (0-4, standaard 3), dus de shaders worden niet
+  // steeds opnieuw gebouwd. Pas als er ergens een lamp is komen ze er; zonder GPU (software) nooit.
+  let realLampCount = 3;
+  let realLampEver = false;
+  const realLampSlots = []; // { light, record, level }
+  const realLampSpot = new THREE.Vector3();
   // Kevin 23-11 (8): de muurstukken voor "naam achter een muur?" (hiddenBehindWall) en het zichtveld, gevuld door addWalls.
   let wallSightPieces = [];
   let wallSightVersion = 0;
@@ -8910,7 +8917,7 @@ function resolveChunkDebugCenter(policy) {
     if (editorIndoorView) clampEditorCameraToIndoorZone();
     waterLayer.update(time);
     skyLayer.update(time);
-    if (lampRecords.length) updateLamps(time);
+    if (lampRecords.length || realLampSlots.length) updateLamps(time);
     perfHudFrameMs = perfHudWarmup ? perfHudFrameMs * 0.85 + frameMs * 0.15 : frameMs;
     perfHudWarmup = true;
     collisionPerfState.checksLastFrame = 0;
@@ -9012,6 +9019,7 @@ function resolveChunkDebugCenter(policy) {
     windowLightRecords.length = 0;
     lampRecords.length = 0;
     lampFit = null;
+    for (const slot of realLampSlots) { slot.record = null; slot.level = 0; slot.light.intensity = 0; }
     clearTerrainEditorOverlay();
     clearScatterEditorOverlay();
     clearChunkDebugOverlay();
@@ -16864,10 +16872,11 @@ function resolveChunkDebugCenter(policy) {
     runtimeStats.sceneObjects += 1;
     runtimeStats.meshes += 2;
     const record = { id: root.userData.entityId || root.name, root, group, glow, spot, cfg, worldData, seed: (lampRecords.length * 7.13) % 6.28,
-      fade: lampLimit > 0 ? 0 : 1, near: lampLimit <= 0 };
+      fade: lampLimit > 0 ? 0 : 1, near: lampLimit <= 0, color, on: 0, flick: 1, realWant: false, realSlot: null, dead: false };
     placeLamp(record, { x: cfg.x, y: cfg.height, z: cfg.z });
     lampRecords.push(record);
     lampPickAt = 0;
+    if (!realLampEver) { realLampEver = true; syncRealLampPool(); }
     if (lampFitId && record.id === lampFitId) attachLampFitHelper(record);
     updateLamp(record, performance.now(), lampLevel());
     requestRender("lamp");
@@ -17027,6 +17036,8 @@ function resolveChunkDebugCenter(policy) {
     const cfg = record.cfg;
     const level = cfg.nightOnly ? night : 1;
     const on = cfg.strength * level * record.fade;
+    record.on = on;
+    record.flick = 1;
     record.group.visible = on > 0.01;
     if (!record.group.visible) return;
     let flick = 1;
@@ -17035,9 +17046,12 @@ function resolveChunkDebugCenter(policy) {
       const wave = 0.5 + 0.25 * Math.sin(t * 7.3) + 0.15 * Math.sin(t * 13.1 + 1.7) + 0.1 * Math.sin(t * 23.7 + 0.4);
       flick = 1 - cfg.flicker * 0.45 * wave;
     }
+    record.flick = flick;
     record.glow.material.uniforms.opacity.value = Math.min(1.2, 0.9 * on * flick);
     record.glow.material.uniforms.size.value = cfg.glow * 2 * (0.94 + 0.06 * flick);
-    record.spot.material.uniforms.opacity.value = Math.min(1, 0.5 * on * flick);
+    // L2: met een echte lamp erbij wordt de nep-lichtplek zachter, anders wordt de grond een witte vlek.
+    const real = record.realSlot ? record.realSlot.level : 0;
+    record.spot.material.uniforms.opacity.value = Math.min(1, 0.5 * on * flick * (1 - 0.5 * real));
   }
 
   function updateLamps(time) {
@@ -17046,15 +17060,17 @@ function resolveChunkDebugCenter(policy) {
     lampLastTime = time;
     for (let index = lampRecords.length - 1; index >= 0; index -= 1) {
       // Het model is weg (opnieuw opgebouwd of uit de wereld gehaald): de lamp ook.
-      if (!lampAlive(lampRecords[index])) lampRecords.splice(index, 1);
+      if (!lampAlive(lampRecords[index])) { lampRecords[index].dead = true; lampRecords.splice(index, 1); }
     }
-    if (time - lampPickAt > 250 || lampPickAt > time) pickNearLamps(time, night);
+    // In de editor wordt niet steeds getekend: daar elk getekend beeld opnieuw kiezen (weinig lampen, goedkoop).
+    if (mode !== "game" || time - lampPickAt > 250 || lampPickAt > time) pickNearLamps(time, night);
     for (const record of lampRecords) {
       // Aan/uit in een halve seconde, zodat een lamp niet ineens verschijnt of verdwijnt.
       const want = record.near ? 1 : 0;
       if (record.fade !== want) record.fade = want > record.fade ? Math.min(1, record.fade + dt * 2) : Math.max(0, record.fade - dt * 2);
       updateLamp(record, time, night);
     }
+    if (realLampSlots.length) updateRealLamps(dt);
   }
 
   // Lampen tegelijk: welke mogen branden. De dichtstbijzijnde bij de speler (of de camera), 4x per seconde opnieuw.
@@ -17070,21 +17086,85 @@ function resolveChunkDebugCenter(policy) {
 
   function pickNearLamps(time, night) {
     lampPickAt = time;
-    if (lampLimit <= 0 || lampRecords.length <= lampLimit) {
-      for (const record of lampRecords) record.near = true;
-      return;
-    }
+    const limited = lampLimit > 0 && lampRecords.length > lampLimit;
+    const pool = realLampSlots.length;
+    for (const record of lampRecords) { record.near = !limited; record.realWant = false; }
+    if (!limited && !pool) return;
     const focus = mode === "game" && player.root ? player.pos : camera.position;
     const lit = [];
     for (const record of lampRecords) {
-      record.near = false;
-      if (record.cfg.nightOnly && night <= 0.01) continue;
+      if (record.cfg.strength <= 0 || (record.cfg.nightOnly && night <= 0.01)) continue;
       const dx = record.root.position.x + record.glow.position.x - focus.x;
       const dz = record.root.position.z + record.glow.position.z - focus.z;
-      lit.push({ record, d: (dx * dx + dz * dz) * (record.fade > 0.5 ? 0.8 : 1) });
+      lit.push({ record, d: dx * dx + dz * dz });
     }
-    lit.sort(function (a, b) { return a.d - b.d; });
-    for (let index = 0; index < lit.length && index < lampLimit; index += 1) lit[index].record.near = true;
+    if (limited) {
+      lit.sort(function (a, b) { return a.d * (a.record.fade > 0.5 ? 0.8 : 1) - b.d * (b.record.fade > 0.5 ? 0.8 : 1); });
+      for (let index = 0; index < lit.length && index < lampLimit; index += 1) lit[index].record.near = true;
+    }
+    if (pool) {
+      // Echte lampen: de dichtstbijzijnde van de lampen die branden; een lamp die er al een heeft telt iets dichterbij.
+      const near = lit.filter(function (entry) { return entry.record.near; });
+      near.sort(function (a, b) { return a.d * (a.record.realSlot ? 0.8 : 1) - b.d * (b.record.realSlot ? 0.8 : 1); });
+      for (let index = 0; index < near.length && index < pool; index += 1) near[index].record.realWant = true;
+    }
+  }
+
+  // L2: Instellingen > Spelbeeld > Echte lampen (0-4). Alleen bij het schuiven verandert het aantal (dan 1x opnieuw opbouwen).
+  function setRealLampCount(value) {
+    const next = Math.max(0, Math.min(4, Math.round(num(value, 3))));
+    if (next === realLampCount) return;
+    realLampCount = next;
+    syncRealLampPool();
+  }
+
+  function syncRealLampPool() {
+    const want = rendererProfile.software === true || !realLampEver ? 0 : realLampCount;
+    while (realLampSlots.length > want) {
+      const slot = realLampSlots.pop();
+      if (slot.record) slot.record.realSlot = null;
+      scene.remove(slot.light);
+      slot.light.dispose?.();
+    }
+    while (realLampSlots.length < want) {
+      const light = new THREE.PointLight(0xffb04a, 0, 8, 2);
+      light.name = "gk-real-lamp";
+      light.castShadow = false;
+      light.userData.gkLamp = true;
+      scene.add(light);
+      realLampSlots.push({ light, record: null, level: 0 });
+    }
+    lampPickAt = 0;
+    requestRender("lamp");
+  }
+
+  // Elke echte lamp hangt aan één lamp. Wisselen gaat zacht: eerst uit (0,3 s), dan springt hij en gaat hij weer aan.
+  function updateRealLamps(dt) {
+    const step = mode === "game" ? dt * 3 : 1; // editor: meteen (daar wordt niet doorlopend getekend)
+    for (const slot of realLampSlots) {
+      const record = slot.record;
+      const keep = Boolean(record && !record.dead && record.realWant);
+      slot.level = keep ? Math.min(1, slot.level + step) : Math.max(0, slot.level - step);
+      if (record && !keep && slot.level <= 0) { record.realSlot = null; slot.record = null; }
+    }
+    for (const record of lampRecords) {
+      if (!record.realWant || record.realSlot) continue;
+      const free = realLampSlots.find(function (slot) { return !slot.record; });
+      if (!free) break;
+      free.record = record;
+      free.level = 0;
+      record.realSlot = free;
+    }
+    for (const slot of realLampSlots) {
+      const record = slot.record;
+      if (!record || slot.level <= 0) { slot.light.intensity = 0; continue; }
+      record.glow.getWorldPosition(realLampSpot);
+      slot.light.position.copy(realLampSpot);
+      slot.light.color.copy(record.color);
+      slot.light.distance = record.cfg.range * 2;
+      // Sterkte 1 en reikwijdte 4 m: onder de lamp ongeveer zo licht als de zon, op 4 m nog een warme gloed.
+      slot.light.intensity = 1.2 * record.cfg.range * record.on * record.flick * slot.level;
+    }
   }
 
   // Kevin 23-11: de vloer van een 🏠 Binnen-deelgebied: één plat vlak in de vorm van het gebied, met een terreintextuur
@@ -22302,6 +22382,7 @@ function resolveChunkDebugCenter(policy) {
     setViewInset: setViewInset,
     setPlayerPixelRatio: setPlayerPixelRatio,
     setLampLimit: setLampLimit,
+    setRealLampCount: setRealLampCount,
     getPlayerState: getPlayerState,
     getCameraGroundBasis: getCameraGroundBasis,
     orbitGameCamera: orbitGameCamera,

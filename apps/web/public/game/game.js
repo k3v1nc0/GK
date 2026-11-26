@@ -1,4 +1,4 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261126-l1e";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261126-l2";
 import { gearFromItems } from "../shared/equipment-attach.js?v=20261125-u1c";
 import { nextPlayerRouteWaypoint } from "../shared/player-path-client.js?v=20261123-deur1";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20261106-perf1";
@@ -8,7 +8,7 @@ import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolatio
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createWorldSounds } from "./world-sounds.js?v=20261116-herstel1";
 import { createActorPresentation } from "./actor-presentation.js?v=20261116-herstel1";
-import { createGkHud } from "./hud/gk-hud.js?v=20261126-l1e";
+import { createGkHud } from "./hud/gk-hud.js?v=20261126-l2";
 import { dayNightState, mixColor } from "../shared/day-night.js?v=20261115-fase10";
 import { node05ActionBody, node05OperationId } from "./node05-request.js?v=20261113-fase8d";
 import {
@@ -41,6 +41,7 @@ const overlayText = document.querySelector("#overlayText");
 let gkHud = null;
 let gkHudPixels = 1; // Instellingen > Scherpte (0.7 / 1 / 1.5 / 2)
 let gkHudLamps = 0; // Instellingen > Lampen tegelijk (0 = alle)
+let gkHudRealLamps = 3; // Instellingen > Echte lampen (0-4)
 const gkHudDebug = { on: false, slot: null };
 const gkHudCache = { assets: null, assetMap: new Map(), modulesSource: null, modules: null, targetsAt: 0, targets: [] };
 
@@ -12355,6 +12356,7 @@ function ensureRuntime(world) {
     if (gkHudDebug.on && typeof state.runtime.setPerformanceHud === "function") state.runtime.setPerformanceHud(gkHudDebug.slot);
     if (typeof state.runtime.setPlayerPixelRatio === "function") state.runtime.setPlayerPixelRatio(gkHudPixels);
     if (typeof state.runtime.setLampLimit === "function") state.runtime.setLampLimit(gkHudLamps);
+    if (typeof state.runtime.setRealLampCount === "function") state.runtime.setRealLampCount(gkHudRealLamps);
   }
   return state.runtime;
 }
@@ -15475,6 +15477,10 @@ function ensureGkHud() {
     setLampLimit: function (value) {
       gkHudLamps = Math.max(0, Math.round(Number(value) || 0));
       if (state.runtime && typeof state.runtime.setLampLimit === "function") state.runtime.setLampLimit(gkHudLamps);
+    },
+    setRealLamps: function (value) {
+      gkHudRealLamps = Math.max(0, Math.min(4, Math.round(Number(value) || 0)));
+      if (state.runtime && typeof state.runtime.setRealLampCount === "function") state.runtime.setRealLampCount(gkHudRealLamps);
     },
     setMusic: function (on) {
       worldSpatial.musicMuted = on === false;

@@ -42,9 +42,8 @@ test("game: gloed + lichtplek, volgt dag en nacht, telt niet als spookvlak", () 
   const src = fs.readFileSync("apps/web/public/shared/world-runtime.js", "utf8");
   assert.match(src, /if \(entity\.light\) addLamp\(worldData, root, entity\.light\);/);
   assert.match(src, /\|\| object\.userData\?\.gkLamp/, "vrijstelling bij de spookvlak-opruimer");
-  assert.match(src, /if \(lampRecords\.length\) updateLamps\(time\);/);
+  assert.match(src, /if \(lampRecords\.length \|\| realLampSlots\.length\) updateLamps\(time\);/);
   assert.match(src, /lampNight = Number\.isFinite\(Number\(nightMix\)\)/, "setDaylight zet hoe donker het is");
-  assert.ok(!/new THREE\.PointLight/.test(src), "nog geen echte lampen (L2)");
 });
 
 test("editor: ✋ Vlam verplaatsen zet de vlam ook opzij (Vlam X/Z, draait mee met het model)", () => {
@@ -74,10 +73,24 @@ test("game: ook gebundelde modellen (10x dezelfde straatlantaarn) geven licht", 
 test("game: Instellingen > Lampen tegelijk (0 = alle), de dichtstbijzijnde branden", () => {
   const src = fs.readFileSync("apps/web/public/shared/world-runtime.js", "utf8");
   assert.match(src, /setLampLimit: setLampLimit,/);
-  assert.match(src, /if \(time - lampPickAt > 250 \|\| lampPickAt > time\) pickNearLamps\(time, night\);/, "4x per seconde opnieuw kiezen");
+  assert.match(src, /if \(mode !== "game" \|\| time - lampPickAt > 250 \|\| lampPickAt > time\) pickNearLamps\(time, night\);/, "4x per seconde opnieuw kiezen");
   assert.match(src, /const on = cfg\.strength \* level \* record\.fade;/, "rustig aan en uit");
   const hud = fs.readFileSync("apps/web/public/game/hud/gk-hud.js", "utf8");
   assert.match(hud, /"data-lamp-limit": ""/);
   assert.match(hud, /if \(typeof api\.setLampLimit === "function"\) api\.setLampLimit\(lampLimitValue\(\)\);/);
   assert.match(fs.readFileSync("apps/web/public/game/game.js", "utf8"), /state\.runtime\.setLampLimit\(gkHudLamps\)/);
+});
+
+test("L2: vaste set echte lampen (Echte lampen 0-4, standaard 3) bij de dichtstbijzijnde brandende lampen", () => {
+  const src = fs.readFileSync("apps/web/public/shared/world-runtime.js", "utf8");
+  assert.equal((src.match(/new THREE\.PointLight\(/g) || []).length, 1, "maar op één plek, in de vaste set");
+  assert.match(src, /let realLampCount = 3;/);
+  assert.match(src, /const want = rendererProfile\.software === true \|\| !realLampEver \? 0 : realLampCount;/, "zonder GPU geen echte lampen");
+  assert.match(src, /light\.castShadow = false;/);
+  assert.match(src, /for \(let index = 0; index < near\.length && index < pool; index \+= 1\) near\[index\]\.record\.realWant = true;/);
+  assert.match(src, /setRealLampCount: setRealLampCount,/);
+  const hud = fs.readFileSync("apps/web/public/game/hud/gk-hud.js", "utf8");
+  assert.match(hud, /"data-real-lamps": ""/);
+  assert.match(hud, /api\.setRealLamps\(realLampValue\(\)\)/);
+  assert.match(fs.readFileSync("apps/web/public/game/game.js", "utf8"), /state\.runtime\.setRealLampCount\(gkHudRealLamps\)/);
 });
