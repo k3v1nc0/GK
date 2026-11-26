@@ -5,6 +5,7 @@
 import { HELP_ID, HELP_MODEL, HELP_NAME, HELP_SCALE, help, routeEndField, routeField, ui } from "./ui.js";
 import { FLAG_SCOPES, QUEST_LIMITS, QUEST_SPAWN_LIMITS } from "../../../../apps/web/public/shared/quest-graph.js";
 import { professionFields, recipeLearnFields, workstationProfessionField } from "./profession.js";
+import { lightFields } from "./light-fields.js";
 
 const idField = (label, wat) => ({ type: "id", required: true, maxLength: 120, audience: "client", label,
   ui: ui("🔖", "id", "werkbank", { more: true }), default: null, help: HELP_ID(wat) });
@@ -455,6 +456,8 @@ export const GAME_KINDS = {
       flySound: { type: "asset", assetType: "audio", required: false, maxLength: 160, audience: "client", label: "Geluid",
         ui: ui("🔊", "asset", "werkbank", { group: FLY_GROUP, when: FLY_ON }), default: null,
         help: help("Een geluid dat je hoort als ze in de buurt vliegen (gekwetter, vleugels, gebrul). Hoe dichterbij, hoe harder.", "Sleep een geluid (mp3, ogg of wav) dat mooi rondloopt. Leeg = stil.", "Het is te hard of te druk → kies een zachter geluid; spelers zetten het uit met Muziek en geluid.") },
+      // L1 (26-11): een lantaarn, fakkel of kampvuur geeft licht (gloed + lichtplek op de grond), zie light-fields.js.
+      ...lightFields("dit model"),
       ...flagGate("dit model"),
       x: pos("X", "↔️"),
       y: Object.assign({}, height, { ui: ui("↕️", "slider", "werkbank", { step: 0.1, unit: "m", range: [-20, 20] }) }),

@@ -11,6 +11,7 @@ import { tradeValues } from "../../shared/authoring/kinds/trade.js";
 import { portalSettingsValues } from "../../shared/authoring/kinds/portal.js";
 import { doorwaySideB } from "../../shared/authoring/kinds/doorway.js";
 import { chatValues } from "../../shared/authoring/kinds/chat.js";
+import { lightOf } from "../../shared/authoring/kinds/light-fields.js";
 import { hasOwnSteps, questGraphIssues, questStartIssues, questRepeatOf, questStartMode, questSteps, worldEventEvery, worldEventLasts } from "../../../apps/web/public/shared/quest-graph.js";
 import { areaPointsMeters, areaSoort } from "../../shared/authoring/kinds/area.js";
 import { routePointsOf } from "../../shared/authoring/route-points.js";
@@ -337,7 +338,9 @@ export function compileGameSection(documents, options = {}) {
       // Werkbank Fase 10: vliegt rondjes (vogels, draak). Alleen om naar te kijken.
       ...(doc.body.fly === true ? { fly: flyOf(doc.body) } : {}),
       // Werkbank Fase 10 (10b): een verhaal om te lezen (een vliegend model lees je niet).
-      ...(loreOf(doc) ? { loreId: loreOf(doc) } : {})
+      ...(loreOf(doc) ? { loreId: loreOf(doc) } : {}),
+      // L1 (26-11): 💡 Licht (gloed + lichtplek); een vliegend model geeft geen licht.
+      ...(doc.body.fly !== true && lightOf(doc.body) ? { light: lightOf(doc.body) } : {})
     };
   });
   // Werkbank Fase 10 (10b): verhalen (📚 kennisboek). De tekst gaat naar de game; de server kent ze om het lezen te bewaren.

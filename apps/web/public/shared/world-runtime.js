@@ -1877,6 +1877,8 @@ function collectGhostPlaneCandidateRecord(object, context = {}) {
     || object.userData?.gkWater
     // Kevin 20-11: de lucht-koepel (sky-render.js) schrijft geen diepte; geen spookvlak.
     || object.userData?.gkSky
+    // L1 (26-11): gloed en lichtplek van een lamp (addLamp) zijn platte, doorzichtige vlakken, maar horen erbij.
+    || object.userData?.gkLamp
   );
   const suspiciousFlags = [];
   if (isCameraChild) suspiciousFlags.push("cameraChild");
@@ -4834,6 +4836,9 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let daylightLevel = 1;
   // Kevin 23-11 (2): ramen op muren (addWallWindow); hun licht volgt dag en nacht.
   const windowLightRecords = [];
+  // L1 (26-11): 💡 Licht op een model (addLamp): gloed + lichtplek. lampNight = 0 overdag, 1 's nachts (uit setDaylight).
+  const lampRecords = [];
+  let lampNight = 0;
   // Kevin 23-11 (8): de muurstukken voor "naam achter een muur?" (hiddenBehindWall) en het zichtveld, gevuld door addWalls.
   let wallSightPieces = [];
   let wallSightVersion = 0;
@@ -8898,6 +8903,7 @@ function resolveChunkDebugCenter(policy) {
     if (editorIndoorView) clampEditorCameraToIndoorZone();
     waterLayer.update(time);
     skyLayer.update(time);
+    if (lampRecords.length) updateLamps(time);
     perfHudFrameMs = perfHudWarmup ? perfHudFrameMs * 0.85 + frameMs * 0.15 : frameMs;
     perfHudWarmup = true;
     collisionPerfState.checksLastFrame = 0;
@@ -8997,6 +9003,7 @@ function resolveChunkDebugCenter(policy) {
 
   function clearContent() {
     windowLightRecords.length = 0;
+    lampRecords.length = 0;
     clearTerrainEditorOverlay();
     clearScatterEditorOverlay();
     clearChunkDebugOverlay();
@@ -16108,6 +16115,7 @@ function resolveChunkDebugCenter(policy) {
     // anders een klein plat pijltje op de grond: zonder model midden in de deur, met model vóór het model (aan de kant
     // waar je aankomt en waar je erin loopt), anders valt hij eronder weg.
     const doorwayArrowMesh = entity.doorwayArrow ? addDoorwayArrow(root, entity.doorwayArrow, entity.doorwayArrowBig === true) : null;
+    if (entity.light) addLamp(worldData, root, entity.light);
     // Kevin 23-11 (9): in de game staat op de plek van het pijl-vlak uit de editor een onzichtbaar vlak (zelfde maat en
     // draaiing). Het klikvak van de doorgang meet dit vlak: klikken of tikken daar is als op de deur klikken.
     if (mode === "game" && entity.doorwayArrow && !entity.modelAssetId) addDoorwayClickPlane(root);
@@ -16728,6 +16736,159 @@ function resolveChunkDebugCenter(policy) {
       record.panelUniforms.gkGlow.value = Math.min(1.5, 0.8 * strength);
     }
     requestRender("window-light");
+  }
+
+  // L1 (26-11): 💡 Licht op een model. Twee platte vlakken, geen echte lamp (die komt in L2): een gloed die altijd naar de
+  // camera kijkt (licht optellen, zachte bol met een witte kern) en een zachte lichtplek op de grond eronder (zoals de
+  // raamvlek). Ze hangen aan het model (verplaatsen met G gaat mee, verborgen door een vlag = ook weg), maar in een groep
+  // met de assen van de wereld en zonder schaal: hoogte, gloed en reikwijdte zijn meters, hoe groot of scheef het model
+  // ook staat. Beide tellen niet mee in de maat van het model (selectiekader, brug-hoogte): lege boundingBox.
+  const LAMP_GLOW_VERTEX = [
+    "uniform float size;",
+    "varying vec2 vUv;",
+    "void main() {",
+    "  vUv = uv;",
+    "  vec4 mv = modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0);",
+    // 25 cm naar de camera toe, zodat het glas van de lantaarn de gloed niet half afdekt (minder dan een muurdikte).
+    "  float len = max(length(mv.xyz), 0.001);",
+    "  mv.xyz *= max(1.0 - 0.25 / len, 0.5);",
+    "  mv.xy += position.xy * size;",
+    "  gl_Position = projectionMatrix * mv;",
+    "}"
+  ].join("\n");
+  const LAMP_GLOW_FRAGMENT = [
+    "uniform vec3 color; uniform float opacity;",
+    "varying vec2 vUv;",
+    "void main() {",
+    "  float r = length(vUv - 0.5) * 2.0;",
+    "  if (r >= 1.0) discard;",
+    "  float core = exp(-r * r * 14.0);",
+    "  float halo = pow(1.0 - r, 2.2);",
+    "  float alpha = clamp(opacity * (core + 0.55 * halo), 0.0, 1.0);",
+    "  if (alpha < 0.004) discard;",
+    "  gl_FragColor = vec4(mix(color, vec3(1.0), core * 0.65), alpha);",
+    "  #include <colorspace_fragment>",
+    "}"
+  ].join("\n");
+  const LAMP_SPOT_FRAGMENT = [
+    "uniform vec3 color; uniform float opacity;",
+    "varying vec2 vUv;",
+    "void main() {",
+    "  float r = length(vUv - 0.5) * 2.0;",
+    "  float alpha = clamp(opacity * pow(clamp(1.0 - r, 0.0, 1.0), 1.7), 0.0, 1.0);",
+    "  if (alpha < 0.004) discard;",
+    "  gl_FragColor = vec4(color, alpha);",
+    "  #include <colorspace_fragment>",
+    "}"
+  ].join("\n");
+
+  // Waar de lichtplek ligt: 5 cm boven de grond onder de lamp (terrein of de vloer van een 🏠 Binnen-gebied), nooit
+  // boven de vlam zelf.
+  function lampFloorY(worldData, x, z, top) {
+    const groundY = num(worldData?.ground?.y, 0);
+    let y = groundY + terrainLift(x, z);
+    for (const floor of Array.isArray(worldData?.indoorFloors) ? worldData.indoorFloors : []) {
+      if (Array.isArray(floor?.outline) && floor.outline.length >= 3 && pointInOutline(floor.outline, x, z)) y = Math.max(y, groundY + num(floor.y, 0) + 0.02);
+    }
+    return Math.min(y, top) + 0.05;
+  }
+
+  function addLamp(worldData, root, light) {
+    if (!root || !light) return null;
+    const cfg = {
+      color: colorOrDefault(light.color, "#ffb04a"),
+      strength: clamp(num(light.strength, 1), 0, 3),
+      range: clamp(num(light.range, 4), 0.5, 20),
+      flicker: clamp(num(light.flicker, 0.35), 0, 1),
+      glow: clamp(num(light.glow, 0.6), 0.05, 4),
+      height: clamp(num(light.height, 1.5), -5, 30),
+      nightOnly: light.nightOnly === true
+    };
+    root.updateMatrix();
+    const group = new THREE.Group();
+    group.name = "gk-lamp";
+    group.userData.gkLamp = true;
+    group.userData.runtimeAlive = true;
+    const scale = Math.abs(num(root.scale?.x, 1)) || 1;
+    group.quaternion.copy(root.quaternion).invert();
+    group.scale.setScalar(1 / scale);
+    const color = new THREE.Color(cfg.color);
+    const flat = function (geometry, radius) {
+      geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), radius);
+      geometry.boundingBox = new THREE.Box3();
+      return geometry;
+    };
+    const glowMaterial = new THREE.ShaderMaterial({
+      uniforms: { color: { value: color.clone() }, opacity: { value: 0 }, size: { value: cfg.glow * 2 } },
+      vertexShader: LAMP_GLOW_VERTEX, fragmentShader: LAMP_GLOW_FRAGMENT,
+      transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false
+    });
+    const glow = new THREE.Mesh(flat(new THREE.PlaneGeometry(1, 1), cfg.glow * 2), glowMaterial);
+    glow.name = "lamp glow";
+    glow.position.set(0, cfg.height, 0);
+    glow.renderOrder = 6;
+    const spotGeometry = new THREE.PlaneGeometry(cfg.range * 2, cfg.range * 2);
+    spotGeometry.rotateX(-Math.PI / 2);
+    const spotMaterial = new THREE.ShaderMaterial({
+      uniforms: { color: { value: color.clone() }, opacity: { value: 0 }, depthBias: { value: 0.15 }, depthBiasFar: { value: 0.6 } },
+      vertexShader: windowLightVertexShader(false), fragmentShader: LAMP_SPOT_FRAGMENT,
+      transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+      polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4
+    });
+    const spot = new THREE.Mesh(flat(spotGeometry, cfg.range * 1.5), spotMaterial);
+    spot.name = "lamp spot";
+    const rootY = num(root.position?.y, 0);
+    spot.position.set(0, lampFloorY(worldData, root.position.x, root.position.z, rootY + cfg.height) - rootY, 0);
+    spot.renderOrder = 3;
+    for (const mesh of [glow, spot]) {
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
+      mesh.userData.gkLamp = true;
+      mesh.userData.runtimeAlive = true;
+      mesh.raycast = function () {};
+      group.add(mesh);
+    }
+    root.add(group);
+    runtimeStats.sceneObjects += 1;
+    runtimeStats.meshes += 2;
+    const record = { id: root.userData.entityId, root, group, glow, spot, cfg, seed: (lampRecords.length * 7.13) % 6.28 };
+    lampRecords.push(record);
+    updateLamp(record, performance.now(), lampLevel());
+    requestRender("lamp");
+    return record;
+  }
+
+  // 0-1: hoe donker het voor lampen is. Binnen en in de editor altijd donker (zo zie je wat je instelt).
+  function lampLevel() {
+    if (mode !== "game" || indoorCfg) return 1;
+    return lampNight;
+  }
+
+  function updateLamp(record, time, night) {
+    const cfg = record.cfg;
+    const level = cfg.nightOnly ? night : 0.15 + 0.85 * night;
+    const on = cfg.strength * level;
+    record.group.visible = on > 0.01;
+    if (!record.group.visible) return;
+    let flick = 1;
+    if (cfg.flicker > 0) {
+      const t = time * 0.001 + record.seed;
+      const wave = 0.5 + 0.25 * Math.sin(t * 7.3) + 0.15 * Math.sin(t * 13.1 + 1.7) + 0.1 * Math.sin(t * 23.7 + 0.4);
+      flick = 1 - cfg.flicker * 0.45 * wave;
+    }
+    record.glow.material.uniforms.opacity.value = Math.min(1.2, 0.9 * on * flick);
+    record.glow.material.uniforms.size.value = cfg.glow * 2 * (0.94 + 0.06 * flick);
+    record.spot.material.uniforms.opacity.value = Math.min(1, 0.5 * on * flick);
+  }
+
+  function updateLamps(time) {
+    const night = lampLevel();
+    for (let index = lampRecords.length - 1; index >= 0; index -= 1) {
+      const record = lampRecords[index];
+      // Het model is weg (opnieuw opgebouwd of uit de wereld gehaald): de lamp ook.
+      if (entityRoots.get(record.id) !== record.root) { lampRecords.splice(index, 1); continue; }
+      updateLamp(record, time, night);
+    }
   }
 
   // Kevin 23-11: de vloer van een 🏠 Binnen-deelgebied: één plat vlak in de vorm van het gebied, met een terreintextuur
@@ -21655,6 +21816,8 @@ function resolveChunkDebugCenter(policy) {
     const next = Math.max(0.02, Math.min(1, Number(level) || 0));
     const sky = colorOrDefault(skyColor, "");
     if (skyLayer.setNight(nightMix)) requestRender("sky-night");
+    // L1: lampen branden 's nachts fel en overdag zwak (updateLamps leest dit elk frame).
+    lampNight = Number.isFinite(Number(nightMix)) ? Math.max(0, Math.min(1, Number(nightMix))) : Math.max(0, Math.min(1, 1 - next));
     if (Math.abs(next - daylightLevel) < 0.005 && (!sky || scene.background?.getHexString?.() === String(sky).replace("#", "").toLowerCase())) return;
     daylightLevel = next;
     applyLightLevels();

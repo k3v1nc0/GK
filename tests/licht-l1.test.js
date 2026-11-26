@@ -1,0 +1,48 @@
+// L1 (26-11): 💡 Licht op een model (lantaarn, fakkel aan de muur, kampvuur): velden in de editor, door de build naar
+// de game, en in de game een gloed + lichtplek (geen echte lamp; dat is L2).
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import { CANONICAL_KINDS, validateDocument } from "../src/shared/authoring/kinds.js";
+import { LIGHT_GROUP, lightOf } from "../src/shared/authoring/kinds/light-fields.js";
+import { compileGameSection } from "../src/server/authoring/game-compiler.js";
+import { buildRuntimeWorld } from "../src/server/authoring/world-builder.js";
+
+const doc = (kind, body, key) => ({ docKey: key, kind, archived: false, body });
+const LAMP = { placedModelId: "pm.lantaarn", displayName: "Lantaarn", modelAssetId: "asset.lantaarn", x: 3, y: 0, z: 4 };
+
+test("editor: blok 💡 Licht op een model, uit tot je het aanzet", () => {
+  const fields = CANONICAL_KINDS.placed_model.fields;
+  for (const key of ["light", "lightColor", "lightStrength", "lightRange", "lightFlicker", "lightGlow", "lightHeight", "lightNightOnly"]) {
+    assert.equal(fields[key].ui.group, LIGHT_GROUP, key + " staat in het blok Licht");
+    assert.ok(fields[key].help?.waarvoor, key + " heeft uitleg");
+  }
+  assert.equal(fields.light.default, false);
+  assert.deepEqual(fields.lightRange.ui.when, { key: "light", is: [true] }, "de rest verschijnt pas als Geeft licht aan staat");
+  assert.equal(validateDocument("placed_model", Object.assign({}, LAMP, { light: true, lightColor: "#ff9900", lightRange: 5 })).issues.length, 0);
+  assert.ok(validateDocument("placed_model", Object.assign({}, LAMP, { light: true, lightColor: "oranje" })).issues.some((entry) => entry.field === "lightColor"));
+});
+
+test("build: alleen een model met Geeft licht krijgt licht mee, netjes binnen de grenzen", () => {
+  assert.equal(lightOf({ light: false, lightRange: 5 }), null);
+  assert.deepEqual(lightOf({ light: true, lightColor: "#FF9900", lightRange: 99, lightFlicker: -1 }),
+    { color: "#ff9900", strength: 1, range: 20, flicker: 0, glow: 0.6, height: 1.5, nightOnly: false });
+  const docs = [
+    doc("placed_model", Object.assign({}, LAMP, { light: true, lightStrength: 1.5, lightNightOnly: true }), "placed_model:pm.lantaarn"),
+    doc("placed_model", { placedModelId: "pm.steen", displayName: "Steen", modelAssetId: "asset.steen", x: 0, y: 0, z: 0 }, "placed_model:pm.steen")
+  ];
+  const world = buildRuntimeWorld({ game: compileGameSection(docs, {}).server });
+  const lamp = world.entities.find((entity) => entity.id === "placed.pm.lantaarn");
+  assert.equal(lamp.light.strength, 1.5);
+  assert.equal(lamp.light.nightOnly, true);
+  assert.ok(!("light" in world.entities.find((entity) => entity.id === "placed.pm.steen")));
+});
+
+test("game: gloed + lichtplek, volgt dag en nacht, telt niet als spookvlak", () => {
+  const src = fs.readFileSync("apps/web/public/shared/world-runtime.js", "utf8");
+  assert.match(src, /if \(entity\.light\) addLamp\(worldData, root, entity\.light\);/);
+  assert.match(src, /\|\| object\.userData\?\.gkLamp/, "vrijstelling bij de spookvlak-opruimer");
+  assert.match(src, /if \(lampRecords\.length\) updateLamps\(time\);/);
+  assert.match(src, /lampNight = Number\.isFinite\(Number\(nightMix\)\)/, "setDaylight zet hoe donker het is");
+  assert.ok(!/new THREE\.PointLight/.test(src), "nog geen echte lampen (L2)");
+});
